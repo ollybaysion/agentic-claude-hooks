@@ -9,6 +9,7 @@ hook lives as a self-contained module under `core/`.
 | Module | Event | Status | Purpose |
 | --- | --- | --- | --- |
 | [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh) |
+| [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Deny dangerous shell commands before they run (rm -rf, disk destruction, secret leaks) |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
 
 ## Layout
