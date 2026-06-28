@@ -8,7 +8,7 @@ hook lives as a self-contained module under `core/`.
 
 | Module | Event | Status | Purpose |
 | --- | --- | --- | --- |
-| [`markdown-lint`](core/markdown-lint/README.md) | PostToolUse | ✅ active | Enforce a Markdown rule set on every `.md` Claude writes |
+| [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh) |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
 
 ## Layout
@@ -33,7 +33,7 @@ touch the user's project config.
 
 - **Node.js** on `PATH` (hooks are written as `.mjs`).
 - Per-module tools — see each module's README. Currently:
-  - `markdown-lint` → `npm i -g markdownlint-cli2`
+  - `lint` → `npm i -g markdownlint-cli2 prettier eslint` (+ `shellcheck` system pkg)
 
 Missing per-module tools cause that hook to **fail open** (it logs a note and
 does nothing), so a partial install never breaks your session.

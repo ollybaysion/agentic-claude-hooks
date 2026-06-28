@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/markdown-lint/lint-markdown.mjs\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/lint/lint.mjs\"",
             "timeout": 60
           }
         ]

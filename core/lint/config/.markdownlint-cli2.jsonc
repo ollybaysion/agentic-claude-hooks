@@ -1,6 +1,6 @@
 {
-  // Bundled rule set for the markdown-lint hook. Applied explicitly via
-  // `--config`, so it does NOT depend on any config in the user's project.
+  // Bundled rule set for Markdown linting. Applied explicitly via `--config`,
+  // so it does NOT depend on any config in the user's project.
   "config": {
     "default": true,
 
