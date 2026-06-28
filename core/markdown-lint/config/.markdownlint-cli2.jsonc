@@ -1,0 +1,27 @@
+{
+  // Bundled rule set for the markdown-lint hook. Applied explicitly via
+  // `--config`, so it does NOT depend on any config in the user's project.
+  "config": {
+    "default": true,
+
+    // Off: line length is noise for generated/LLM-authored docs.
+    "MD013": false,
+
+    // Duplicate headings only forbidden among siblings (changelogs, etc.).
+    "MD024": { "siblings_only": true },
+
+    // Allow a few inline HTML elements commonly needed in Markdown.
+    "MD033": { "allowed_elements": ["br", "details", "summary"] },
+
+    // Enforced (these are the high-value rules):
+    "MD003": { "style": "atx" },        // headings use `#`, not underline
+    "MD004": { "style": "dash" },       // unordered lists use `-`
+    "MD040": true,                       // code fences must declare a language
+    "MD041": true,                       // first line must be a top-level heading
+    "MD022": true,                       // blank lines around headings
+    "MD031": true,                       // blank lines around fenced code
+    "MD032": true,                       // blank lines around lists
+    "MD047": true,                       // single trailing newline at EOF
+    "MD001": true                        // heading levels increment by one
+  }
+}

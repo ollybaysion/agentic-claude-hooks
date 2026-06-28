@@ -1,0 +1,13 @@
+{
+  "name": "claude-hooks",
+  "description": "ollybaysion's Claude Code hooks marketplace (single plugin: claude-hooks).",
+  "version": "0.1.0",
+  "plugins": [
+    {
+      "name": "claude-hooks",
+      "description": "Bundle of personal Claude Code hooks.",
+      "version": "0.1.0",
+      "source": "./"
+    }
+  ]
+}
