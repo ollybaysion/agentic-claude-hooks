@@ -24,6 +24,11 @@ the `LINTERS` table in `lint.mjs`.
 | `.js` `.jsx` `.cjs` `.mjs` `.ts` `.tsx` | `eslint` | 1 = violation, 2+ = infra (skip) |
 | `.sh` `.bash` | `shellcheck` | non-zero = violation |
 
+## Rule references
+
+- Markdown rules and which our bundle enables: [markdown-rules.md](markdown-rules.md)
+- Shell (shellcheck) rule categories: [shellcheck-rules.md](shellcheck-rules.md)
+
 ## Requirements (install what you want enforced)
 
 The hook dispatches by extension and **fails open on missing tools**, so
