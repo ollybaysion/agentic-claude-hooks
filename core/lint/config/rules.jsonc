@@ -17,7 +17,9 @@
   "MD003": { "style": "atx" },        // headings use `#`, not underline
   "MD004": { "style": "dash" },       // unordered lists use `-`
   "MD040": true,                       // code fences must declare a language
-  "MD041": true,                       // first line must be a top-level heading
+  // first line must be a top-level heading; frontmatter with title:/name: also
+  // satisfies it (issue #6 — Claude memory files use name:/description:).
+  "MD041": { "front_matter_title": "^\\s*(title|name)\\s*[:=]" },
   "MD022": true,                       // blank lines around headings
   "MD031": true,                       // blank lines around fenced code
   "MD032": true,                       // blank lines around lists
