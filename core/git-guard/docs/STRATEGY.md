@@ -7,7 +7,7 @@
 
 | 항목 | 결정 |
 | --- | --- |
-| main 보호 + force-push | **git-guard** 훅 — main/master 직접 작업(Edit·commit·push) + force-push 차단, `deny` |
+| git-guard 차단 | main/master 직접 작업(Edit·commit·push) + force-push + `--no-verify`, `deny` |
 | 기타 파괴적 명령 | **bash-guard** 소관 — `reset --hard`·`clean`·`checkout .` (PR #11, `ask`) |
 | 병렬 격리 | 네이티브 `claude --worktree` + `.worktreeinclude` (wt.sh 재발명 안 함) |
 | 커밋/PR | 기존 `/commit`·`/commit-push-pr`·`/clean_gone` 재사용 |
@@ -22,6 +22,7 @@ PreToolUse 훅 (`core/git-guard/`):
 - `Bash` `git commit` — main/master에서 차단
 - `Bash` `git push` — main/master 대상이면 차단
 - `Bash` `git push --force`/`-f` — force push 차단 (`--force-with-lease`는 허용)
+- `Bash` 모든 git `--no-verify` — pre-commit/pre-push 훅 우회 차단
 
 "지금 어느 브랜치냐"는 git 상태가 필요해 **bash-guard(상태 없는 명령 매처)로는 불가능** — 그래서 별도 훅. `reset --hard`류 파괴적 명령은 bash-guard가 맡아 경계가 깔끔하다.
 

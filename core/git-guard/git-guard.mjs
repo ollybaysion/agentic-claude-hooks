@@ -1,19 +1,20 @@
 #!/usr/bin/env node
-// Main-branch protection + force-push guard hook (PreToolUse).
+// Main-branch protection + force-push + no-verify guard hook (PreToolUse).
 //
 // Blocks, via deny:
 //   - Write/Edit/MultiEdit: file edits while HEAD is a protected branch (main/master).
 //   - Bash: `git commit` on a protected branch, `git push` to a protected branch,
-//           and force push (`--force`/`-f`) on ANY branch. `--force-with-lease`
-//           is the safe variant and is intentionally allowed.
+//           force push (`--force`/`-f`) on any branch, and any git `--no-verify`
+//           (skipping pre-commit/pre-push hooks). `--force-with-lease` is the safe
+//           variant and is allowed.
 //
 // Mechanism: structured `permissionDecision:"deny"` + a typed reason (stdout
 // JSON + exit 0), same as bash-guard. A clean action passes silently (NOT an
 // auto-approve — defers to the normal permission flow). Not-a-git-repo / no-git
 // / any internal error fails open, so the guard never wedges a session.
 //
-// Scope: main-branch protection + force-push. Other destructive commands
-// (reset --hard, clean -fd, checkout .) are bash-guard's job — keep that boundary.
+// Scope: main-branch protection + force-push + no-verify. Other destructive
+// commands (reset --hard, clean -fd, checkout .) are bash-guard's job.
 
 import { spawnSync } from "node:child_process";
 import { readHookInput, denyPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
@@ -36,6 +37,10 @@ const PUSH_TO_PROTECTED = /(^|\s|:)(main|master)(\s|$|:)/;
 // and is deliberately NOT matched here (allowed).
 const PLAIN_FORCE = /(^|\s)--force(\s|$)|(^|\s)-f(\s|$)/;
 const FORCE_WITH_LEASE = /--force-with-lease/;
+// `--no-verify` skips local hooks. Block the long form on any git command.
+// (Short `-n` means --no-verify only for `commit`; left uncaught to avoid
+// matching a literal "-n" inside a commit message.)
+const NO_VERIFY = /\bgit\b[^|]*--no-verify\b/;
 
 // Conservative split so `... && git push -f` can't smuggle past a clean prefix.
 function splitCommands(cmd) {
@@ -47,6 +52,11 @@ function splitCommands(cmd) {
 
 function checkBash(command, branch) {
   for (const seg of [command, ...splitCommands(command)]) {
+    if (NO_VERIFY.test(seg)) {
+      denyPreToolUse(
+        "`--no-verify` 거부 — pre-commit/pre-push 훅(검사)을 건너뛰지 마라. 훅이 실패하면 원인을 고쳐라."
+      );
+    }
     if (/\bgit\b[^|]*\bpush\b/.test(seg)) {
       if (PLAIN_FORCE.test(seg) && !FORCE_WITH_LEASE.test(seg)) {
         denyPreToolUse(
