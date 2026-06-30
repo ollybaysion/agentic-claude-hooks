@@ -12,6 +12,9 @@ hook lives as a self-contained module under `core/`.
 | [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
 | [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push + --no-verify |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
+| [`send-event`](core/send-event/README.md) | all 9 events | ✅ active | Forward every hook event to the local observability collector (never blocks) |
+| [`obs-lazy-start`](core/obs-lazy-start/README.md) | SessionStart | ✅ active | Spawn the collector (detached) if it isn't already running |
+| [`observability`](core/observability/README.md) | _(server)_ | ✅ active | Collector server: receives, stores (SQLite), redacts & streams hook events to a dashboard |
 
 ## Layout
 
@@ -60,7 +63,7 @@ Push this repo to GitHub, then on each machine:
 ```
 
 > The `source` in `.claude-plugin/marketplace.json` is `"./"` because this repo
-> *is* the plugin (relative paths resolve against the cloned marketplace repo,
+> _is_ the plugin (relative paths resolve against the cloned marketplace repo,
 > so this works once it's on GitHub). Alternatives per plugin entry:
 >
 > - subfolder of a repo → `{ "source": "git-subdir", "url": "owner/repo", "path": "sub/dir" }`
@@ -73,7 +76,7 @@ Push this repo to GitHub, then on each machine:
 Captured from `claude-hooks-syntax.md` / `claude-hooks-10-patterns.md`:
 
 - **Exit codes:** `exit 2` = blocking (stderr fed back to Claude); any other
-  non-zero = *fail open*. Never mix `exit 2` with stdout JSON.
+  non-zero = _fail open_. Never mix `exit 2` with stdout JSON.
 - **PostToolUse can't undo** an edit — it runs after the tool. The `exit 2` +
   imperative-stderr pattern turns errors into a correction loop instead.
 - `decision:"block"` means **opposite things per event** (PostToolUse: stop the
