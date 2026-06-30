@@ -58,12 +58,32 @@ const BLOCK_RULES = [
 // Style nudges, not safety blocks. Same deny mechanism — Claude reads the reason
 // and re-runs with the suggested tool. Anchored to the START of a segment so
 // `git grep`, `pgrep`/`egrep`, `ripgrep`, and "grep" inside a filename don't
-// trigger (the per-segment scan still catches `... | grep x`).
-// Requires the suggested tool (rg) on PATH; if rg is absent Claude has no
-// alternative, so drop the relevant rule rather than wedge it.
+// trigger (the per-segment scan still catches `... | grep x`). Several nudge
+// toward the harness's own built-in tools (Read/Edit) instead of a shell command.
+// External-tool nudges require that tool on PATH (rg, fd, nc); if it is absent
+// Claude has no alternative, so drop that rule rather than wedge it. See
+// style-nudge-candidates.md for the full analysis behind this set.
 const STYLE_RULES = [
+  // search -> ripgrep / fd  (faster, .gitignore-aware)
   [/^\s*grep\b/i, "'grep' 대신 'rg'(ripgrep)를 써라 — 빠르고 .gitignore를 인식한다."],
-  [/^\s*find\b[^|]*\s-name\b/i, "'find -name' 대신 'rg --files -g <패턴>'을 써라."],
+  // find -> fd, except for predicates fd can't cleanly replace (left to find).
+  [/^\s*find\b(?![^|]*\s-(?:exec|ok|delete|newer|[acm]time|[acm]min|size|perm|inum|links|user|group|uid|gid|i?regex)\b)/i,
+    "find 대신 fd를 써라 — 문법이 간결하고 .gitignore를 인식하며 빠르다. 이름검색 fd PATTERN, 확장자 fd -e js, 타입 fd -t f, 숨김포함 fd -H."],
+  // file viewing -> Read tool  (line numbers, offset/limit, multimodal, tracked)
+  [/^\s*(?:cat|head|tail)(?=\s)(?!.*[<>|])(?!.*\s--?[fF])\s+\S/i,
+    "파일 보기는 cat/head/tail 대신 Read 도구를 써라 — 줄번호와 offset/limit 페이지네이션을 주고 이미지/PDF/노트북도 읽으며, 하네스가 파일 상태를 추적한다."],
+  // in-place sed -> Edit tool  (reviewable diff, tracked)
+  [/^\s*sed\s+(?:-[a-z]*i|--in-place)/i,
+    "sed -i 인플레이스 치환 대신 Edit 도구를 써라 — 변경이 diff로 보여 리뷰 가능하고 하네스가 파일을 추적한다. 다중 파일 스트림 치환이 꼭 필요하면 sd."],
+  // telnet -> nc -z  (telnet hangs waiting for input in a non-TTY shell)
+  [/^\s*telnet\b/i,
+    "telnet은 대화형이라 비-TTY 셸에서 멈춘다. 포트 점검은 nc -z -w3 HOST PORT (종료코드 0=열림/1=닫힘), 상세는 nc -vz."],
+  // interactive monitors -> batch snapshot  (htop/top hang or spew control chars)
+  [/^\s*(?:[hbga]top\b|top\b(?![^|;&]*\s-b))/i,
+    "대화형 모니터(htop/top)는 TTY 없는 Bash에서 멈추거나 제어문자만 쏟아낸다. 스냅샷은 top -b -n1, CPU 상위는 ps aux --sort=-%cpu | head."],
+  // cd X && CMD -> tool path arg  (cwd resets between calls; can prompt for permission)
+  [/^\s*cd\s+[^&|;]+&&/i,
+    "'cd X && 명령' 대신 도구 경로인자를 써라 — rg PATH · git -C DIR · make -C DIR · ls DIR, 또는 절대경로. 에이전트는 호출 사이 cwd가 리셋되고 cd가 작업폴더 밖이면 권한 프롬프트를 유발한다. 상대경로 스크립트가 꼭 필요하면 서브셸 '(cd X && ./script)'로 감싸라."],
 ];
 
 // Split a compound command into segments so `echo x && rm -rf /` can't smuggle
