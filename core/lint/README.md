@@ -34,6 +34,13 @@ sudo apt install shellcheck                   # Debian/Ubuntu  (brew install she
 
 Anything not installed is simply skipped (fail open).
 
+## Path templates (per-directory rules)
+
+Markdown files can get extra rules based on their **path** — e.g. enforcing a
+required heading structure (MD043) on ADRs under `docs/adr/`. Matched files use
+a template config that `extends` the base; unmatched files use the base as
+usual. See [templates.md](templates.md) for how to add one.
+
 ## Caveats
 
 - **ESLint is best-effort.** It needs a resolvable config in the project being
