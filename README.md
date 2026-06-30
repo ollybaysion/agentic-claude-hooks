@@ -10,7 +10,7 @@ hook lives as a self-contained module under `core/`.
 | --- | --- | --- | --- |
 | [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh) |
 | [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
-| [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master — file edits, commits, and pushes to a protected branch |
+| [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
 
 ## Layout
