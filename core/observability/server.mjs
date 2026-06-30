@@ -668,13 +668,161 @@ function handleHealth(req, res) {
   });
 }
 
+// ── query API (keyset — design §4) ──────────────────────────────────────────
+function rowToEvent(r) {
+  let payload = r.payload;
+  try { payload = JSON.parse(r.payload); } catch {}
+  return { ...r, payload };
+}
+
+function handleEventsQuery(req, res, u) {
+  if (!hostOk(req)) return json(res, 421, { error: "bad host" });
+  if (!authed(req)) return json(res, 401, { error: "unauthorized" });
+  if (!db) return json(res, 200, { count: 0, events: [], next_cursor: null });
+  const order = u.searchParams.get("order") === "asc" ? "ASC" : "DESC";
+  let limit = Math.trunc(Number(u.searchParams.get("limit"))) || 200;
+  limit = Math.min(Math.max(1, limit), 1000);
+  const filters = [], params = [];
+  const since = u.searchParams.get("since");
+  if (since != null && since !== "" && Number.isFinite(Number(since))) {
+    filters.push(order === "ASC" ? "seq > ?" : "seq < ?"); // keyset cursor
+    params.push(Number(since));
+  }
+  for (const k of ["source_app", "session_id", "hook_event_type"]) {
+    const v = u.searchParams.get(k);
+    if (v) { filters.push(`${k} = ?`); params.push(v); }
+  }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  let rows;
+  try {
+    rows = db.impl.prepare(`SELECT * FROM events ${where} ORDER BY seq ${order} LIMIT ?`).all(...params, limit);
+  } catch (e) { logSafe("query", e); return json(res, 500, { error: "query failed" }); }
+  json(res, 200, {
+    count: rows.length,
+    events: rows.map(rowToEvent),
+    next_cursor: rows.length ? rows[rows.length - 1].seq : null,
+  });
+}
+
+function handleEventById(req, res, idStr) {
+  if (!hostOk(req)) return json(res, 421, { error: "bad host" });
+  if (!authed(req)) return json(res, 401, { error: "unauthorized" });
+  if (!db) return json(res, 404, { error: "not found" });
+  let row;
+  try {
+    row = /^\d+$/.test(idStr)
+      ? db.impl.prepare("SELECT * FROM events WHERE seq = ?").get(Number(idStr))
+      : db.impl.prepare("SELECT * FROM events WHERE id = ?").get(idStr);
+  } catch (e) { logSafe("query id", e); return json(res, 500, { error: "query failed" }); }
+  if (!row) return json(res, 404, { error: "not found" });
+  json(res, 200, rowToEvent(row));
+}
+
+// ── dashboard (dependency-free, same-origin — design §8) ────────────────────
+// Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
+// renders every value via textContent (never innerHTML), so attacker-influenced
+// payloads can't execute. No Access-Control-Allow-Origin is ever emitted.
+const CSP = "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'";
+
+const DASHBOARD_HTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>claude observability</title>
+<style>
+:root{color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#0b0e14;color:#c8d0dc}
+header{display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid #1c2230;position:sticky;top:0;background:#0b0e14;z-index:1}
+header h1{font-size:13px;margin:0;font-weight:600;color:#e6edf3;letter-spacing:.02em}
+#status{font-size:12px}
+#status.ok{color:#3fb950}#status.warn{color:#d29922}#status.err{color:#f85149}
+#meta{margin-left:auto;color:#6b7686;font-size:12px}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:4px 10px;border-bottom:1px solid #141a26;vertical-align:top;white-space:nowrap}
+th{position:sticky;top:41px;background:#0b0e14;color:#6b7686;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
+td.evt{color:#79c0ff}
+td.pay{white-space:pre-wrap;word-break:break-word;max-width:60vw;color:#8b949e}
+tbody tr:hover{background:#11161f}
+</style></head>
+<body>
+<header>
+  <h1>claude observability</h1>
+  <span id="status" class="warn">connecting…</span>
+  <span id="meta"></span>
+</header>
+<table>
+  <thead><tr><th>seq</th><th>time</th><th>event</th><th>app</th><th>session</th><th>tool</th><th>payload</th></tr></thead>
+  <tbody id="rows"></tbody>
+</table>
+<script src="/app.js"></script>
+</body></html>`;
+
+const DASHBOARD_JS = `(function(){
+  var KNOWN=["PreToolUse","PostToolUse","UserPromptSubmit","Notification","Stop","SubagentStop","PreCompact","SessionStart","SessionEnd"];
+  var tbody=document.getElementById("rows");
+  var statusEl=document.getElementById("status");
+  var metaEl=document.getElementById("meta");
+  var MAX_ROWS=500, seen=0;
+  function fmt(ms){ try{return new Date(ms).toLocaleTimeString();}catch(e){return "";} }
+  function cell(text,cls){ var td=document.createElement("td"); if(cls)td.className=cls; td.textContent=(text==null?"":String(text)); return td; }
+  function preview(p){ try{var s=JSON.stringify(p); return s.length>400?s.slice(0,400)+"…":s;}catch(e){return "";} }
+  function addRow(ev,prepend){
+    var tr=document.createElement("tr");
+    tr.appendChild(cell(ev.seq));
+    tr.appendChild(cell(fmt(ev.received_at)));
+    tr.appendChild(cell(ev.hook_event_type,"evt"));
+    tr.appendChild(cell(ev.source_app));
+    tr.appendChild(cell(ev.session_id));
+    tr.appendChild(cell(ev.tool_name));
+    tr.appendChild(cell(preview(ev.payload),"pay"));
+    if(prepend&&tbody.firstChild)tbody.insertBefore(tr,tbody.firstChild); else tbody.appendChild(tr);
+    while(tbody.childNodes.length>MAX_ROWS)tbody.removeChild(tbody.lastChild);
+    seen++; metaEl.textContent=seen+" events";
+  }
+  function setStatus(s,cls){ statusEl.textContent=s; statusEl.className=cls||""; }
+  fetch("/events?order=desc&limit=200").then(function(r){return r.json();}).then(function(d){
+    (d.events||[]).forEach(function(ev){ addRow(ev,false); });
+  }).catch(function(){ setStatus("history unavailable","err"); });
+  var es=new EventSource("/stream");
+  function onData(e){ try{ addRow(JSON.parse(e.data),true); }catch(x){} }
+  KNOWN.forEach(function(name){ es.addEventListener(name,onData); });
+  es.addEventListener("_ready",function(){ setStatus("● live","ok"); });
+  es.addEventListener("_bye",function(){ setStatus("○ server stopped","err"); });
+  es.onerror=function(){ setStatus("○ reconnecting…","warn"); };
+})();`;
+
+function handleDashboard(req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": CSP,
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+  });
+  res.end(DASHBOARD_HTML);
+}
+
+function handleAppJs(req, res) {
+  res.writeHead(200, {
+    "Content-Type": "text/javascript; charset=utf-8",
+    "Content-Security-Policy": "default-src 'none'; connect-src 'self'",
+    "X-Content-Type-Options": "nosniff",
+  });
+  res.end(DASHBOARD_JS);
+}
+
 // ── router ──────────────────────────────────────────────────────────────────
 function onRequest(req, res) {
   try {
-    const pathname = (req.url || "/").split("?")[0];
+    const u = new URL(req.url || "/", "http://localhost");
+    const pathname = u.pathname;
     if (pathname === "/events") {
       if (req.method === "POST") return handleEvents(req, res);
-      return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
+      if (req.method === "GET") return handleEventsQuery(req, res, u);
+      return json(res, 405, { error: "method not allowed" }, { Allow: "GET, POST" });
+    }
+    if (pathname.startsWith("/events/")) {
+      if (req.method === "GET") return handleEventById(req, res, decodeURIComponent(pathname.slice(8)));
+      return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
     }
     if (pathname === "/stream") {
       if (req.method === "GET") return handleStream(req, res);
@@ -682,6 +830,14 @@ function onRequest(req, res) {
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
+      return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+    }
+    if (pathname === "/") {
+      if (req.method === "GET") return handleDashboard(req, res);
+      return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+    }
+    if (pathname === "/app.js") {
+      if (req.method === "GET") return handleAppJs(req, res);
       return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
     }
     return json(res, 404, { error: "not found" });
