@@ -8,6 +8,21 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/bash-guard/bash-guard.mjs\"",
             "timeout": 60
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/git-guard/git-guard.mjs\"",
+            "timeout": 60
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/git-guard/git-guard.mjs\"",
+            "timeout": 60
           }
         ]
       }
