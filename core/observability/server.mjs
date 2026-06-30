@@ -252,10 +252,54 @@ function ingestPostAck(rec) {
   broadcast(safe); // stage 4 SSE
 }
 
-// STAGE 3 seam: real value-shape + key-name redaction (subtree masking) lands
-// here. Until then this is an identity pass so the post-ack path is exercised.
+// ── redaction (design §8) ───────────────────────────────────────────────────
+// Two ways in: value SHAPE (token formats) and KEY NAME (mask the whole subtree
+// under a sensitive key). Best-effort, not a boundary — the boundary is loopback
+// + 0600. The marker keeps the secret's *kind* for cause-tracing. OBS_REDACT=0
+// turns it off. Bounded (depth 12, skip >1MB strings) against ReDoS / OOM.
+const VALUE_PATTERNS = [
+  ["aws_key", /\b(?:AKIA|ASIA)[0-9A-Z]{16}\b/g],
+  ["gcp_key", /\bAIza[0-9A-Za-z\-_]{35}\b/g],
+  ["github_token", /\bgh[oprsu]_[0-9A-Za-z]{36}\b/g],
+  ["slack_token", /\bxox[baprs]-[0-9A-Za-z-]{10,}\b/g],
+  ["ai_key", /\bsk-(?:ant-)?[0-9A-Za-z._\-]{16,}\b/g],
+  ["jwt", /\beyJ[0-9A-Za-z_\-]+\.[0-9A-Za-z_\-]+\.[0-9A-Za-z_\-]+\b/g],
+  ["bearer", /\bBearer\s+[0-9A-Za-z._\-]+/gi],
+  ["pem", /-----BEGIN [^-]+-----[\s\S]*?-----END [^-]+-----/g],
+  ["assignment", /\b[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PWD)[A-Za-z0-9_]*\s*[=:]\s*[^\s"',]+/gi],
+];
+// Key matched ANYWHERE (not end-anchored) so access_key_id / password_hash /
+// client_secret / authorization are caught. A match masks the whole subtree.
+const KEY_RE = /(secret|passw(?:or)?d|passphrase|pwd|api[_-]?key|apikey|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|credential|bearer|token)/i;
+const REDACT_MAX_DEPTH = 12;
+const REDACT_MAX_STR = 1024 * 1024;
+
+function redactString(s, h) {
+  if (s.length > REDACT_MAX_STR) return s; // skip huge strings (ReDoS/memory)
+  let out = s;
+  for (const [kind, re] of VALUE_PATTERNS) {
+    out = out.replace(re, () => { h.n++; return `[redacted ${kind}]`; });
+  }
+  return out;
+}
+
+function redactValue(v, depth, h) {
+  if (v == null || typeof v === "number" || typeof v === "boolean") return v;
+  if (typeof v === "string") return redactString(v, h);
+  if (typeof v !== "object" || depth >= REDACT_MAX_DEPTH) return v;
+  if (Array.isArray(v)) return v.map((x) => redactValue(x, depth + 1, h));
+  const out = {};
+  for (const [k, val] of Object.entries(v)) {
+    if (KEY_RE.test(k)) { out[k] = "[redacted by key]"; h.n++; } // mask whole subtree
+    else out[k] = redactValue(val, depth + 1, h);
+  }
+  return out;
+}
+
+// Returns a NEW value (original untouched) + a hit count surfaced via /health.
 function redactDeep(payload) {
-  return { value: payload, hits: 0 };
+  const h = { n: 0 };
+  return { value: redactValue(payload, 0, h), hits: h.n };
 }
 
 // ── SQLite backend (design §5) ──────────────────────────────────────────────
