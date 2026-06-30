@@ -1,0 +1,12 @@
+{
+  // Template: Architecture Decision Records (matched by path, e.g. docs/adr/**).
+  // Inherits the base rule set and additionally enforces a heading structure
+  // via MD043. "*" matches any leading headings (e.g. the title); the document
+  // must then contain these section headings, in this order, as the last ones.
+  "config": {
+    "extends": "../rules.jsonc",
+    "MD043": {
+      "headings": ["*", "## 맥락", "## 결정", "## 결과"]
+    }
+  }
+}

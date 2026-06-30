@@ -22,6 +22,20 @@ import {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MD_CONFIG = join(HERE, "config", ".markdownlint-cli2.jsonc");
 
+// Path-matched Markdown templates. A matched .md is checked with that template
+// config (which `extends` the base rules and adds overrides like MD043 required
+// headings); unmatched files use the base config above. First match wins, so
+// put more specific patterns first. Add a template == one row here + the file
+// under config/templates/. See templates.md.
+const MD_TEMPLATES = [
+  { match: (p) => /(^|\/)(docs\/)?adr\//i.test(p), config: "templates/adr.jsonc" },
+];
+
+function mdConfigFor(file) {
+  const hit = MD_TEMPLATES.find((t) => t.match(file));
+  return hit ? join(HERE, "config", hit.config) : MD_CONFIG;
+}
+
 // Map a process exit status to a verdict: "clean" | "violation" | "infra".
 // Default: 0 == clean, any other non-zero == violation.
 const NONZERO_IS_VIOLATION = (s) => (s === 0 ? "clean" : "violation");
@@ -30,7 +44,7 @@ const LINTERS = [
   {
     exts: [".md", ".markdown"],
     cmd: "markdownlint-cli2",
-    args: (f) => ["--config", MD_CONFIG, f],
+    args: (f) => ["--config", mdConfigFor(f), f],
     fix: "Fix every Markdown violation above",
   },
   {
