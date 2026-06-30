@@ -3,13 +3,13 @@
 위험한 셸 명령을 **실행 전에 차단**하는 PreToolUse 훅. (10패턴 문서의 패턴 3 — "구조화된 Bash 검증기")
 
 - **Event**: `PreToolUse` (matcher `Bash`)
-- **Mechanism**: 위반 시 구조화된 `permissionDecision:"deny"` + 타입화된 이유를 Claude에 전달 (stdout JSON + exit 0)
+- **Mechanism**: 위반 시 구조화된 `permissionDecision` 전달 (stdout JSON + exit 0) — 안전 위반은 `deny`, 파괴적 git(6번)은 `ask`(사용자 확인)
 - **Requirement**: Node.js (PATH). 스타일 넛지는 대상 도구가 PATH에 있어야 함 — **rg, fd, nc**
 - **Fail-open**: 훅 자체 오류는 차단하지 않음 (`failOpen`)
 - **복합명령 분리**: `;` `&&` `||` `|` 줄바꿈으로 쪼개 각 조각 검사 → `echo x && rm -rf /` 우회 방지
-- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`(안전) 또는 `STYLE_RULES`(스타일 넛지)에 `[정규식, 사유]` 한 줄 추가
+- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`(안전·deny) / `ASK_RULES`(파괴적 git·ask) / `STYLE_RULES`(스타일 넛지·deny)에 `[정규식, 사유]` 한 줄 추가
 
-> 구현됨: `bash-guard.mjs`. 1~5번 **차단**, 스타일 넛지 7종 적용(아래), 6~7번 차단은 범위 밖(보류).
+> 구현됨: `bash-guard.mjs`. 1~5번 **차단(deny)**, 스타일 넛지 7종, 6번 파괴적 git **확인(ask)** 적용. 7번(전역설치) 차단은 범위 밖(보류). force-push/보호브랜치는 별도 git-guard 모듈 담당.
 
 ## 차단 규칙 (BLOCK — 실행 전 거부)
 
@@ -85,18 +85,21 @@
 > 후보 분석(추천/보류/기각, 에이전트 적합성·중복도 관점)은
 > [style-nudge-candidates.md](style-nudge-candidates.md) 참고.
 
-## 확인 후 진행 규칙 (ASK — 보류, 1차 범위 제외)
+## 확인 후 진행 규칙 (ASK — 실행 전 사용자 확인)
 
-### 6. Git 파괴적 작업
+### 6. Git 파괴적 작업 ✅ (ask)
+
+차단이 아니라 `permissionDecision:"ask"` — 가끔은 정당하므로 하드 deny 대신 사용자에게 확인을 받는다. `ASK_RULES`로 구현됨.
 
 | 정규식 | 사유 |
 | --- | --- |
-| `git\s+push\s+.*--force(?!-with-lease)` | 강제 푸시 (`--force-with-lease`는 허용) |
-| `git\s+reset\s+--hard` | 작업물 손실 |
-| `git\s+clean\s+-[a-z]*f[a-z]*d` | untracked 강제 삭제 |
-| `git\s+checkout\s+\.\s*$` | 전체 변경 폐기 |
+| `\bgit\s+reset\b[^\|]*\s--hard\b` | 커밋 안 된 변경 손실 (`reset HEAD~1 --hard` 포함) |
+| `\bgit\s+clean\b[^\|]*\s(?:-[a-z]*f\|--force)` | untracked 영구 삭제 (`clean -n` 드라이런은 면제) |
+| `\bgit\s+(?:checkout\|restore)\s+(?:--\s+)?\.\s*$` | 워킹트리 전체 변경 폐기 (`checkout main`/경로 지정은 면제) |
 
-### 7. 패키지/전역 설치
+> **force-push는 여기 없음** — `--force`/protected-branch 정책은 별도 **git-guard** 모듈 담당(경계 유지). git-guard 미배선 상태면 force-push는 현재 무방비. 켜려면 git-guard를 hooks.json에 배선할 것.
+
+### 7. 패키지/전역 설치 (보류, 범위 밖)
 
 | 정규식 | 사유 |
 | --- | --- |
@@ -106,9 +109,11 @@
 
 ## 적용 결정 (확정)
 
-- 차단 메커니즘: **(B) 구조화 `permissionDecision:"deny"`** (`lib/hook-io.mjs`의 `denyPreToolUse`)
-- 1차 범위: **1~5 차단**, 6~7은 제외(나중에 ASK로 확장)
-- 스타일 넛지 7종 적용 (rg/fd/nc 및 빌트인 Read/Edit로 유도)
+- 메커니즘: 구조화 `permissionDecision` — 안전(1~5) `deny`, 파괴적 git(6) `ask` (`lib/hook-io.mjs`의 `denyPreToolUse`/`askPreToolUse`)
+- 범위: **1~5 차단**, **6 확인(ask)** 적용. 7(전역설치)은 보류
+- 스캔 순서: 안전 deny → 파괴적-git ask → 스타일 nudge → file-view (안전이 항상 우선)
+- 스타일 넛지 7종 (rg/fd/nc 및 빌트인 Read/Edit로 유도)
+- force-push/보호브랜치는 git-guard 모듈 담당(경계 유지)
 - 모든 정규식은 대소문자 무시(`i` 플래그) 적용
 
 ## 로컬 테스트

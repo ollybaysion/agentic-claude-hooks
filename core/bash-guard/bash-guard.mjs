@@ -3,16 +3,18 @@
 //
 // Inspects the Bash command before it runs and denies destructive or
 // secret-leaking commands with a typed reason (structured `permissionDecision:
-// "deny"`). A clean command passes silently (NOT an auto-approve — it falls
-// through to the normal permission flow). Any internal error fails open so a
-// bug in the guard never wedges the session.
+// "deny"`), or routes destructive-but-sometimes-legitimate git commands to the
+// user for confirmation (`"ask"`). A clean command passes silently (NOT an
+// auto-approve — it falls through to the normal permission flow). Any internal
+// error fails open so a bug in the guard never wedges the session.
 //
-// Add a rule == add one [regex, reason] entry to BLOCK_RULES (safety) or
-// STYLE_RULES (house-style nudges like grep -> rg) below.
-// Scope: blocks categories 1-5 (see README). git / global-install (6-7) are
-// intentionally out of scope for now.
+// Add a rule == add one [regex, reason] entry to BLOCK_RULES (safety, deny),
+// ASK_RULES (destructive git, ask), or STYLE_RULES (house-style nudges, deny).
+// Scope: categories 1-5 block, category 6 (destructive git) asks. global-install
+// (7) is still out of scope. Force-push / protected-branch policy lives in the
+// separate git-guard module — keep that boundary.
 
-import { readHookInput, denyPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
+import { readHookInput, denyPreToolUse, askPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
 
 // `rm -rf` and friends are too easy to evade with a single regex (-rf, -fr,
 // -r -f, --recursive --force, reordered flags). Detect the recursive AND force
@@ -104,6 +106,23 @@ const FILE_VIEW_RULE = [
   "파일 보기는 cat/head/tail 대신 Read 도구를 써라 — 줄번호와 offset/limit 페이지네이션을 주고 이미지/PDF/노트북도 읽으며, 하네스가 파일 상태를 추적한다.",
 ];
 
+// Category 6 — destructive-but-sometimes-legitimate git commands. These ASK the
+// user to confirm (permissionDecision "ask") rather than hard-deny, since they
+// are occasionally exactly what you want. Force-push and protected-branch policy
+// deliberately live in the separate git-guard module, not here.
+// [regex (case-insensitive), reason]
+const ASK_RULES = [
+  // git reset --hard  (also `reset HEAD~1 --hard`)
+  [/\bgit\s+reset\b[^|]*\s--hard\b/i,
+    "git reset --hard는 커밋 안 된 변경을 되돌릴 수 없게 버린다. 보존하려면 먼저 git stash를 써라."],
+  // git clean -f / -fd / --force  (clean -n dry-run is left alone)
+  [/\bgit\s+clean\b[^|]*\s(?:-[a-z]*f|--force)/i,
+    "git clean -f는 untracked 파일을 영구 삭제한다. 먼저 git clean -n으로 무엇이 지워지는지 확인하라."],
+  // git checkout . / checkout -- . / restore .  (discard ALL working-tree changes)
+  [/\bgit\s+(?:checkout|restore)\s+(?:--\s+)?\.\s*$/i,
+    "git checkout/restore .는 워킹트리의 모든 변경을 폐기한다. 일부만 되돌리려면 경로를 지정하라."],
+];
+
 // Split a compound command into segments so `echo x && rm -rf /` can't smuggle
 // a banned command past a clean-looking prefix. We check BOTH the whole command
 // (so pipe-based rules like `curl | sh` keep their context) AND each segment
@@ -137,14 +156,22 @@ try {
     }
   }
 
-  // 2. Style nudges across every target (so `... | grep x` still fires).
+  // 2. Destructive git (category 6) -> ask for confirmation. After hard blocks
+  //    (so a genuine safety violation still wins) and before style nudges.
+  for (const target of targets) {
+    for (const [pattern, reason] of ASK_RULES) {
+      if (pattern.test(target)) askPreToolUse(reason);
+    }
+  }
+
+  // 3. Style nudges across every target (so `... | grep x` still fires).
   for (const target of targets) {
     for (const [pattern, reason] of STYLE_RULES) {
       if (pattern.test(target)) denyPreToolUse(reason);
     }
   }
 
-  // 3. File-viewing nudge — whole command only (see FILE_VIEW_RULE note).
+  // 4. File-viewing nudge — whole command only (see FILE_VIEW_RULE note).
   if (FILE_VIEW_RULE[0].test(command)) denyPreToolUse(FILE_VIEW_RULE[1]);
 
   pass(); // clean — defer to the normal permission flow
