@@ -500,9 +500,147 @@ function flush() {
   if (q.length && !qTimer) qTimer = setTimeout(flush, 50).unref();
 }
 
-// STAGE 4 seam: byte-bounded ring + per-subscriber bounded queue.
-function broadcast(_rec) {
+// ── live streaming (SSE pub/sub — design §6) ────────────────────────────────
+// One direction (server → dashboard/curl), so SSE beats WebSocket: free auto
+// reconnect + Last-Event-ID, `curl -N` tailing, same loopback+bearer guard.
+const RING_MAX_BYTES = 64 * 1024 * 1024; // replay buffer, BYTE-bounded (not slot count)
+const STREAM_EVENT_MAX = 64 * 1024; // per-event cap: stream truncated, full stays in DB
+const SUB_MAX_ITEMS = 2000;
+const SUB_MAX_BYTES = 8 * 1024 * 1024;
+const HEARTBEAT_MS = 20_000;
+
+const ring = []; // [{ seq:Number, frame:String, bytes:Number }]
+let ringBytes = 0;
+const subscribers = new Set();
+
+const sseSafe = (s) => String(s).replace(/[\r\n]/g, " "); // event: name can't span lines
+
+function streamFrame(rec) {
+  const meta = {
+    seq: rec.seq, hook_event_type: rec.hook_event_type, source_app: rec.source_app,
+    session_id: rec.session_id, tool_name: rec.tool_name ?? null, received_at: rec.received_at,
+  };
+  let data = JSON.stringify({ ...meta, payload: rec.payload });
+  if (data.length > STREAM_EVENT_MAX) data = JSON.stringify({ ...meta, payload: "[truncated]", _truncated: true });
+  // id: only on real data events (so control frames don't move Last-Event-ID).
+  return `id: ${rec.seq}\nevent: ${sseSafe(rec.hook_event_type)}\ndata: ${data}\n\n`;
+}
+
+function ringPush(rec, frame) {
+  const bytes = Buffer.byteLength(frame);
+  // keep the match fields so replay can honour a subscriber's filter
+  ring.push({
+    seq: Number(rec.seq), frame, bytes,
+    source_app: rec.source_app, session_id: rec.session_id, hook_event_type: rec.hook_event_type,
+  });
+  ringBytes += bytes;
+  while (ringBytes > RING_MAX_BYTES && ring.length) ringBytes -= ring.shift().bytes;
+}
+
+class Subscriber { // one SSE connection = one bounded outbound queue
+  constructor(res, filter) {
+    this.res = res; this.filter = filter;
+    this.queue = []; this.bytes = 0; this.dropped = 0;
+    this.writing = false; this.closed = false;
+  }
+  matches(rec) {
+    const f = this.filter;
+    if (f.source_app && rec.source_app !== f.source_app) return false;
+    if (f.session_id && rec.session_id !== f.session_id) return false;
+    if (f.hook_event_type && rec.hook_event_type !== f.hook_event_type) return false;
+    return true;
+  }
+  enqueue(chunk) {
+    if (this.closed) return;
+    this.queue.push(chunk); this.bytes += chunk.length;
+    while (this.queue.length > SUB_MAX_ITEMS || this.bytes > SUB_MAX_BYTES) { // drop-oldest
+      this.bytes -= this.queue.shift().length; this.dropped++;
+    }
+    this._pump();
+  }
+  _pump() {
+    if (this.writing || this.closed) return;
+    this.writing = true;
+    if (this.dropped > 0) {
+      const c = `event: _dropped\ndata: {"dropped":${this.dropped}}\n\n`; // no id:
+      this.dropped = 0; this.queue.unshift(c); this.bytes += c.length;
+    }
+    while (this.queue.length) {
+      const c = this.queue.shift(); this.bytes -= c.length;
+      let ok;
+      try { ok = this.res.write(c); } catch { return this.close(); } // dead socket → close, don't starve others
+      if (!ok) { this.res.once("drain", () => { this.writing = false; this._pump(); }); return; } // backpressure
+    }
+    this.writing = false;
+  }
+  close() {
+    if (this.closed) return;
+    this.closed = true; subscribers.delete(this);
+    try { this.res.end(); } catch {}
+  }
+}
+
+function broadcast(rec) {
   stats.broadcast++;
+  const frame = streamFrame(rec);
+  ringPush(rec, frame);
+  for (const sub of subscribers) {
+    try { if (sub.matches(rec)) sub.enqueue(frame); } catch (e) { logSafe("broadcast sub", e); }
+  }
+}
+
+function handleStream(req, res) {
+  if (!hostOk(req)) return json(res, 421, { error: "bad host" }); // same guards as ingest
+  if (!authed(req)) return json(res, 401, { error: "unauthorized" });
+  const u = new URL(req.url, "http://localhost");
+  const filter = {
+    source_app: u.searchParams.get("source_app") || null,
+    session_id: u.searchParams.get("session_id") || null,
+    hook_event_type: u.searchParams.get("hook_event_type") || null,
+  };
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive",
+    "X-Accel-Buffering": "no",
+  });
+  res.write("retry: 3000\n\n");
+  const sub = new Subscriber(res, filter);
+  subscribers.add(sub);
+
+  // resume only when a cursor was actually given (Number(null)===0 would
+  // otherwise replay the whole ring on every fresh, live-only connection).
+  // Clamp to the current seq so a forged / too-large cursor can't wedge
+  // "never receive anything".
+  const cursor = req.headers["last-event-id"] ?? u.searchParams.get("since");
+  if (cursor != null && cursor !== "" && Number.isFinite(Number(cursor))) {
+    const from = Math.min(Number(cursor), SEQ);
+    if (ring.length && from < ring[0].seq - 1) {
+      sub.enqueue(`event: _gap\ndata: {"from":${from},"oldest":${ring[0].seq}}\n\n`); // missed events evicted
+    }
+    // replay respects the subscriber's filter (broadcast does; replay must too).
+    for (const item of ring) if (item.seq > from && sub.matches(item)) sub.enqueue(item.frame);
+  }
+  sub.enqueue(`event: _ready\ndata: {"seq":${SEQ}}\n\n`); // no id:
+  req.on("close", () => sub.close());
+}
+
+let heartbeatTimer = null;
+function startHeartbeat() {
+  heartbeatTimer = setInterval(() => {
+    for (const sub of subscribers) {
+      try { sub.res.write(": keepalive\n\n"); } catch { sub.close(); } // half-open socket → close
+    }
+  }, HEARTBEAT_MS).unref();
+}
+
+function closeAllSubscribers() {
+  for (const sub of subscribers) {
+    sub.closed = true;
+    // end() flushes the farewell; destroy() would drop the buffered _bye.
+    try { sub.res.end("event: _bye\ndata: {}\n\n"); } catch {}
+  }
+  subscribers.clear();
 }
 
 // ── GET /health ─────────────────────────────────────────────────────────────
@@ -521,7 +659,7 @@ function handleHealth(req, res) {
     port: PORT,
     uptime: Math.floor((Date.now() - STARTED_AT) / 1000),
     seq: SEQ,
-    sse: 0, // subscriber count (stage 4)
+    sse: subscribers.size,
     durable: DURABLE,
     redact: REDACT,
     backend: db ? db.kind : null,
@@ -537,6 +675,10 @@ function onRequest(req, res) {
     if (pathname === "/events") {
       if (req.method === "POST") return handleEvents(req, res);
       return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
+    }
+    if (pathname === "/stream") {
+      if (req.method === "GET") return handleStream(req, res);
+      return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
@@ -604,7 +746,7 @@ function installShutdown(server) {
     if (closing) return;
     closing = true;
     setTimeout(() => process.exit(0), GRACE_MS).unref(); // force-exit backstop
-    // STAGE 4: write _bye to every SSE subscriber and res.destroy() them.
+    closeAllSubscribers(); // _bye + res.end() flushes the farewell, then closes
     server.close(() => {
       try { flush(); } catch (e) { logSafe("shutdown flush", e); }
       if (db) {
@@ -614,6 +756,8 @@ function installShutdown(server) {
       try { fs.unlinkSync(pidFile(DATA_DIR)); } catch {}
       process.exit(0); // clean signal exit → 0 (systemd Restart=on-failure stays put)
     });
+    // nudge the just-ended SSE sockets closed so server.close() doesn't wait on them.
+    setImmediate(() => { try { server.closeIdleConnections?.(); } catch {} });
   };
   for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(s, shutdown);
 }
@@ -630,6 +774,7 @@ async function startServer() {
 
   await startBackend(); // open SQLite, migrate, seed SEQ (degrades to null on failure)
   setInterval(runRetention, 3_600_000).unref(); // hourly; self-guarded
+  startHeartbeat(); // SSE keepalive + half-open socket detection
 
   const server = http.createServer(onRequest);
 
