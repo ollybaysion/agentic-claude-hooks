@@ -1,0 +1,95 @@
+#!/usr/bin/env node
+// send-event — the SENDING side of the observability collector.
+//
+// Fires on every Claude Code hook event, wraps the raw hook JSON in the
+// collector envelope (design appendix A / §4.1), and POSTs it to the local
+// collector. This hook is pure observation: it NEVER blocks the session.
+//   • always exits 0 (even on connection refused / timeout / any error)
+//   • hard 5s request timeout; loopback ECONNREFUSED returns in ~7ms
+//   • reads the bearer token from config.json only if the collector set one
+//
+// The collector validates leniently: only hook_event_type (string) is required;
+// everything else is best-effort. We promote the few fields the collector
+// indexes (tool_name, tool_use_id, …) to the top level when present.
+
+import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import { readHookInput, pass, failOpen } from "../../lib/hook-io.mjs";
+import { configFile } from "../../lib/obs-paths.mjs";
+
+const HOST = process.env.OBS_HOST || "127.0.0.1";
+const PORT = Number.isInteger(Number(process.env.OBS_PORT)) && Number(process.env.OBS_PORT) > 0
+  ? Number(process.env.OBS_PORT) : 4090;
+const TIMEOUT_MS = 5000;
+
+// Token: env wins; else config.json (written 0600 by the collector when auth is
+// on). Absent → POST without auth (collector trusts loopback by default).
+function readToken() {
+  if (process.env.OBS_TOKEN) return process.env.OBS_TOKEN;
+  try {
+    const c = JSON.parse(fs.readFileSync(configFile(), "utf8"));
+    if (typeof c.token === "string" && c.token) return c.token;
+  } catch {}
+  return null;
+}
+
+// A human-friendly label for the source: explicit override, else the project
+// directory name, else a constant.
+function sourceApp(input) {
+  if (process.env.OBS_SOURCE_APP) return process.env.OBS_SOURCE_APP;
+  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  return path.basename(cwd) || "claude-code";
+}
+
+function buildEnvelope(input) {
+  const env = {
+    source_app: sourceApp(input),
+    session_id: typeof input.session_id === "string" ? input.session_id : "unknown",
+    hook_event_type: input.hook_event_name, // guaranteed a string by the caller
+    payload: input, // the raw hook JSON
+    timestamp: Date.now(), // kept as client_ts; the server stamps its own order
+  };
+  const promote = (k, v) => { if (typeof v === "string" && v) env[k] = v; };
+  promote("tool_name", input.tool_name);
+  promote("tool_use_id", input.tool_use_id);
+  promote("agent_id", input.agent_id);
+  promote("agent_type", input.agent_type);
+  promote("source", input.source); // SessionStart: startup/resume/clear
+  promote("reason", input.reason); // SessionEnd
+  // error may sit at the top level or inside a tool_response object.
+  const err = input.error ?? input?.tool_response?.error;
+  if (typeof err === "string" && err) env.error = err;
+  else if (err != null && typeof err !== "string") env.error = JSON.stringify(err);
+  return env;
+}
+
+function post(body) {
+  return new Promise((resolve) => {
+    const headers = {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(body),
+      Host: "127.0.0.1", // collector requires a loopback Host (421 otherwise)
+    };
+    const token = readToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const req = http.request(
+      { host: HOST, port: PORT, path: "/events", method: "POST", headers, timeout: TIMEOUT_MS },
+      (res) => { res.resume(); res.on("end", resolve); res.on("error", resolve); }
+    );
+    req.on("error", resolve); // ECONNREFUSED (collector down) etc. — swallow
+    req.on("timeout", () => { req.destroy(); resolve(); });
+    req.end(body);
+  });
+}
+
+try {
+  const input = await readHookInput();
+  // Only forward real hook events. An empty/garbled stdin (no hook_event_name)
+  // is dropped silently rather than POSTed as noise.
+  if (!input || typeof input.hook_event_name !== "string" || !input.hook_event_name) pass();
+  await post(JSON.stringify(buildEnvelope(input)));
+  pass(); // observation is best-effort — never block the session
+} catch (err) {
+  failOpen(`[claude-hooks/send-event] ${err?.message ?? err}`);
+}
