@@ -29,6 +29,7 @@ to the `LINTERS` table in `lint.mjs`.
 
 - Markdown rules and which our bundle enables: [markdown-rules.md](markdown-rules.md)
 - Shell (shellcheck) rule categories: [shellcheck-rules.md](shellcheck-rules.md)
+- Shell formatting (shfmt) behaviors/options: [shfmt-rules.md](shfmt-rules.md)
 
 ## Requirements (install what you want enforced)
 
