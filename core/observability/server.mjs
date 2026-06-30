@@ -20,6 +20,8 @@
 
 import http from "node:http";
 import fs from "node:fs";
+import path from "node:path";
+import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
@@ -44,6 +46,11 @@ const REDACT = process.env.OBS_REDACT !== "0"; // default ON
 const DURABLE = process.env.OBS_DURABLE === "1"; // store-before-ack (stage 2)
 const GRACE_MS = intEnv("OBS_SHUTDOWN_GRACE_MS", 3000);
 
+// retention budget (design §5.4 / §11). Tune to your disk in stage 6.
+const MAX_AGE_MS = intEnv("OBS_MAX_AGE_DAYS", 7) * 86_400_000;
+const MAX_ROWS = intEnv("OBS_MAX_ROWS", 500_000);
+const MAX_DB_BYTES = intEnv("OBS_MAX_DB_MB", 1024) * 1024 * 1024;
+
 // Auth is OFF by default (single-user box trusts loopback — design §8, decision).
 // Turn it on by exporting a non-empty OBS_TOKEN, or by putting {token} in
 // config.json. An empty OBS_TOKEN explicitly disables auth.
@@ -59,6 +66,7 @@ let SEQ = 0; // boot seeds from MAX(seq) once the DB exists (stage 2)
 const stats = {
   received: 0, accepted: 0, duplicate: 0, rejected: 0,
   flushed: 0, dropped_queue: 0, broadcast: 0, redaction_hits: 0,
+  bad_row: 0, spilled: 0,
 };
 
 // ── small helpers ─────────────────────────────────────────────────────────-
@@ -207,11 +215,22 @@ async function handleEvents(req, res) {
     if (dedupHit(key)) { stats.duplicate++; return json(res, 200, { status: "duplicate" }); }
 
     rec.seq = String(++SEQ); // the unique identifier
-    stats.accepted++;
-    json(res, 202, { status: "accepted", seq: rec.seq, id: rec.id }, { "X-Obs-Seq": rec.seq });
+    const ack = () => json(res, 202, { status: "accepted", seq: rec.seq, id: rec.id }, { "X-Obs-Seq": rec.seq });
 
-    // post-ack: response already sent. redact ONCE → writer + broadcaster.
-    setImmediate(() => { try { ingestPostAck(rec); } catch (e) { logSafe("post-ack", e); } });
+    if (DURABLE) {
+      // store-before-ack: materialize (redact once) + write synchronously, ack,
+      // then stream off the response path.
+      const safe = materialize(rec);
+      try { storeOne(safe); } catch (e) { logSafe("durable store", e); }
+      stats.accepted++;
+      ack();
+      setImmediate(() => { try { broadcast(safe); } catch (e) { logSafe("broadcast", e); } });
+    } else {
+      // default: ack first, then redact once → writer + broadcaster off-path.
+      stats.accepted++;
+      ack();
+      setImmediate(() => { try { ingestPostAck(rec); } catch (e) { logSafe("post-ack", e); } });
+    }
   } catch (e) {
     // async throw bypasses the router's sync try/catch — caught here.
     if (!res.headersSent) try { json(res, 500, { error: "internal" }); } catch {}
@@ -219,10 +238,16 @@ async function handleEvents(req, res) {
   }
 }
 
-function ingestPostAck(rec) {
-  const r = REDACT ? redactDeep(rec.payload) : { value: rec.payload, hits: 0 };
+// redact ONCE; the same value goes to writer and broadcaster (design §2).
+function materialize(rec) {
+  if (!REDACT) return rec;
+  const r = redactDeep(rec.payload);
   stats.redaction_hits += r.hits;
-  const safe = REDACT ? { ...rec, payload: r.value } : rec;
+  return { ...rec, payload: r.value };
+}
+
+function ingestPostAck(rec) {
+  const safe = materialize(rec);
   enqueueWrite(safe); // stage 2 storage
   broadcast(safe); // stage 4 SSE
 }
@@ -233,9 +258,163 @@ function redactDeep(payload) {
   return { value: payload, hits: 0 };
 }
 
+// ── SQLite backend (design §5) ──────────────────────────────────────────────
+// node:sqlite (builtin, experimental on Node 24) with a better-sqlite3 fallback.
+// Lazy dynamic import so the CLI (status/stop) never needs a sqlite backend.
+let db = null; // adapter or null (degraded counter-only mode)
+let insertStmt = null;
+
+const SCHEMA_COLUMNS = [
+  "seq", "id", "source_app", "session_id", "hook_event_type",
+  "tool_name", "tool_use_id", "agent_id", "agent_type",
+  "source", "reason", "error", "unknown_event", "client_ts", "received_at", "payload",
+];
+
+async function openBackend(dbPath) {
+  try {
+    const { DatabaseSync } = await import("node:sqlite");
+    return { kind: "node:sqlite", impl: new DatabaseSync(dbPath) };
+  } catch (e1) {
+    try {
+      const { default: Database } = await import("better-sqlite3");
+      return { kind: "better-sqlite3", impl: new Database(dbPath) };
+    } catch (e2) {
+      throw new Error(`no sqlite backend (node:sqlite: ${e1.message}; better-sqlite3: ${e2.message})`);
+    }
+  }
+}
+
+function pragmaScalar(impl, sql) {
+  const row = impl.prepare(sql).get();
+  return row ? Number(Object.values(row)[0]) : null;
+}
+
+function initSchema(impl) {
+  const exists = impl.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get();
+  impl.exec("PRAGMA journal_mode = WAL;");
+  impl.exec(`PRAGMA synchronous = ${DURABLE ? "FULL" : "NORMAL"};`);
+  impl.exec("PRAGMA busy_timeout = 5000;");
+  if (!exists) {
+    impl.exec("PRAGMA auto_vacuum = INCREMENTAL;"); // only honoured on a fresh DB
+  } else if (pragmaScalar(impl, "PRAGMA auto_vacuum") === 0) {
+    impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
+    impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
+  }
+  impl.exec("PRAGMA user_version = 1;");
+  impl.exec(`CREATE TABLE IF NOT EXISTS events (
+    seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
+    source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
+    tool_name TEXT, tool_use_id TEXT, agent_id TEXT, agent_type TEXT,
+    source TEXT, reason TEXT, error TEXT,
+    unknown_event INTEGER NOT NULL DEFAULT 0,
+    client_ts INTEGER, received_at INTEGER NOT NULL, payload TEXT NOT NULL)`);
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_session   ON events(session_id, seq)");
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_type_time ON events(hook_event_type, received_at)");
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_app_time  ON events(source_app, received_at)");
+  impl.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dedup ON events(tool_use_id, hook_event_type)
+    WHERE tool_use_id IS NOT NULL`);
+}
+
+function toRow(r) {
+  return [
+    Number(r.seq), r.id, r.source_app, r.session_id, r.hook_event_type,
+    r.tool_name ?? null, r.tool_use_id ?? null, r.agent_id ?? null, r.agent_type ?? null,
+    r.source ?? null, r.reason ?? null, r.error ?? null,
+    r.unknown_event ?? 0, r.client_ts ?? null, r.received_at,
+    JSON.stringify(r.payload ?? null),
+  ];
+}
+
+// Open + migrate + seed SEQ. On total failure, run degraded (db stays null).
+async function startBackend() {
+  const dbPath = path.join(DATA_DIR, "events.db");
+  try {
+    const be = await openBackend(dbPath);
+    initSchema(be.impl);
+    const placeholders = SCHEMA_COLUMNS.map(() => "?").join(",");
+    insertStmt = be.impl.prepare(
+      `INSERT OR IGNORE INTO events (${SCHEMA_COLUMNS.join(",")}) VALUES (${placeholders})`
+    );
+    const row = be.impl.prepare("SELECT MAX(seq) m FROM events").get();
+    if (row && row.m != null) SEQ = Number(row.m); // boot seed: seq stays monotonic
+    db = be;
+  } catch (e) {
+    logSafe("backend", e); // degraded: ingest still acks, rows are dropped
+  }
+}
+
+// Single synchronous insert (durable path).
+function storeOne(safe) {
+  if (!db || !insertStmt) return;
+  try { insertStmt.run(...toRow(safe)); stats.flushed++; }
+  catch (e) { stats.bad_row++; logSafe("store row", e); }
+}
+
+// fail-open spill: gzip the batch and append to spill.jsonl.gz (rotated).
+const SPILL_MAX_BYTES = 64 * 1024 * 1024;
+function spill(batch, err) {
+  stats.spilled += batch.length;
+  logSafe("spill", err);
+  try {
+    const text = batch.map((x) => JSON.stringify(x.rec)).join("\n") + "\n";
+    const p = path.join(DATA_DIR, "spill.jsonl.gz");
+    try { if (fs.statSync(p).size > SPILL_MAX_BYTES) fs.renameSync(p, p + ".1"); } catch {}
+    fs.appendFileSync(p, zlib.gzipSync(text), { mode: 0o600 });
+  } catch (e) { logSafe("spill write", e); }
+}
+
+// ── retention (paged archive+delete; freelist-aware size cap — design §5.4) ──
+function usedBytes() {
+  return (pragmaScalar(db.impl, "PRAGMA page_count") - pragmaScalar(db.impl, "PRAGMA freelist_count")) *
+    pragmaScalar(db.impl, "PRAGMA page_size");
+}
+
+function appendArchive(text) {
+  const day = new Date().toISOString().slice(0, 10);
+  const dir = path.join(DATA_DIR, "archive");
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  fs.appendFileSync(path.join(dir, `events-${day}.jsonl.gz`), zlib.gzipSync(text), { mode: 0o600 });
+}
+
+// Page through matches (LIMIT N) → archive slice → DELETE slice. Never SELECT
+// the whole set at once (a giant join string would RangeError / OOM).
+function archiveAndDeletePaged(whereSql, params) {
+  const PAGE = 1000;
+  for (;;) {
+    const rows = db.impl.prepare(
+      `SELECT * FROM events WHERE ${whereSql} ORDER BY seq LIMIT ${PAGE}`
+    ).all(...params);
+    if (!rows.length) break;
+    appendArchive(rows.map((r) => JSON.stringify(r)).join("\n") + "\n");
+    const seqs = rows.map((r) => r.seq);
+    db.impl.prepare(`DELETE FROM events WHERE seq IN (${seqs.map(() => "?").join(",")})`).run(...seqs);
+    if (rows.length < PAGE) break;
+  }
+}
+
+function runRetention() {
+  // Whole thing in try/catch — a throw escaping setInterval would kill the process.
+  try {
+    if (!db) return;
+    flush();
+    archiveAndDeletePaged("received_at < ?", [Date.now() - MAX_AGE_MS]); // by age
+    archiveAndDeletePaged("seq <= (SELECT MAX(seq) - ? FROM events)", [MAX_ROWS]); // by rows
+    // size cap: page_count only shrinks after incremental_vacuum returns pages
+    // (DELETE alone just moves them to the freelist). Measure used pages, drop a
+    // slice, vacuum, re-measure — inside the loop.
+    let guard = 50;
+    while (usedBytes() > MAX_DB_BYTES && guard-- > 0) {
+      const lo = pragmaScalar(db.impl, "SELECT MIN(seq) m FROM events");
+      const hi = pragmaScalar(db.impl, "SELECT MAX(seq) m FROM events");
+      if (lo == null || hi == null || hi <= lo) break;
+      archiveAndDeletePaged("seq <= ?", [lo + Math.max(1, Math.floor((hi - lo) * 0.05))]);
+      db.impl.exec("PRAGMA incremental_vacuum;");
+    }
+    db.impl.exec("PRAGMA wal_checkpoint(TRUNCATE);");
+  } catch (e) { logSafe("retention", e); }
+}
+
 // ── write queue (BYTE-bounded, drop-oldest — design §5.3) ───────────────────
-// STAGE 1: queue + batched drain, no DB yet (proves hooks never block). STAGE 2
-// replaces the flush() body with a SQLite BEGIN IMMEDIATE / row-try batch.
 const Q_MAX_BYTES = 64 * 1024 * 1024;
 const BATCH_ROWS = 256;
 const q = [];
@@ -258,8 +437,22 @@ function flush() {
   if (!q.length) return;
   const batch = q.splice(0, BATCH_ROWS); // bounded slice, not the whole queue
   for (const x of batch) qBytes -= x.size;
-  // STAGE 2: db.exec("BEGIN IMMEDIATE"); per-row try insert; COMMIT; spill on fail.
-  stats.flushed += batch.length;
+  if (!db || !insertStmt) {
+    stats.dropped_queue += batch.length; // degraded: no backend, drop
+  } else {
+    try {
+      db.impl.exec("BEGIN IMMEDIATE");
+      for (const x of batch) {
+        // row-level try: one poison row must not roll back the other 255.
+        try { insertStmt.run(...toRow(x.rec)); stats.flushed++; }
+        catch (e) { stats.bad_row++; logSafe("bad row", e); }
+      }
+      db.impl.exec("COMMIT");
+    } catch (e) {
+      try { db.impl.exec("ROLLBACK"); } catch {}
+      spill(batch, e); // fail-open: DB down → don't die, don't lose
+    }
+  }
   if (q.length && !qTimer) qTimer = setTimeout(flush, 50).unref();
 }
 
@@ -269,6 +462,11 @@ function broadcast(_rec) {
 }
 
 // ── GET /health ─────────────────────────────────────────────────────────────
+function dbRowCount() {
+  if (!db) return null;
+  try { return pragmaScalar(db.impl, "SELECT COUNT(*) c FROM events"); } catch { return null; }
+}
+
 function handleHealth(req, res) {
   json(res, 200, {
     status: "ok",
@@ -282,6 +480,8 @@ function handleHealth(req, res) {
     sse: 0, // subscriber count (stage 4)
     durable: DURABLE,
     redact: REDACT,
+    backend: db ? db.kind : null,
+    rows: dbRowCount(),
     counters: { ...stats },
   });
 }
@@ -360,10 +560,13 @@ function installShutdown(server) {
     if (closing) return;
     closing = true;
     setTimeout(() => process.exit(0), GRACE_MS).unref(); // force-exit backstop
+    // STAGE 4: write _bye to every SSE subscriber and res.destroy() them.
     server.close(() => {
       try { flush(); } catch (e) { logSafe("shutdown flush", e); }
-      // STAGE 4: write _bye to every SSE subscriber and res.destroy() them.
-      // STAGE 2: wal_checkpoint(TRUNCATE) + db.close().
+      if (db) {
+        try { db.impl.exec("PRAGMA wal_checkpoint(TRUNCATE);"); } catch (e) { logSafe("checkpoint", e); }
+        try { db.impl.close(); } catch (e) { logSafe("db close", e); }
+      }
       try { fs.unlinkSync(pidFile(DATA_DIR)); } catch {}
       process.exit(0); // clean signal exit → 0 (systemd Restart=on-failure stays put)
     });
@@ -371,7 +574,7 @@ function installShutdown(server) {
   for (const s of ["SIGINT", "SIGTERM", "SIGHUP"]) process.on(s, shutdown);
 }
 
-function startServer() {
+async function startServer() {
   process.umask(0o077);
   process.on("uncaughtException", (e) => logSafe("uncaught", e));
   process.on("unhandledRejection", (e) => logSafe("unhandled", e));
@@ -380,6 +583,9 @@ function startServer() {
   ensureDataDir();
   loadToken();
   EXPECT = TOKEN ? sha256(TOKEN) : null;
+
+  await startBackend(); // open SQLite, migrate, seed SEQ (degrades to null on failure)
+  setInterval(runRetention, 3_600_000).unref(); // hourly; self-guarded
 
   const server = http.createServer(onRequest);
 
@@ -431,7 +637,16 @@ async function cliStop() {
   process.exit(0);
 }
 
+async function cliRetain() {
+  await startBackend();
+  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
+  runRetention();
+  process.stdout.write(`retention pass done; rows=${dbRowCount()}\n`);
+  process.exit(0);
+}
+
 const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
-else startServer();
+else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
+else await startServer();
