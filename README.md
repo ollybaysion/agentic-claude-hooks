@@ -12,8 +12,9 @@ hook lives as a self-contained module under `core/`.
 | [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
 | [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push + --no-verify |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
-| [`send-event`](core/send-event/README.md) | all 9 events | 🚧 in progress | Forward every hook event to the local observability collector (never blocks) |
-| [`observability`](core/observability/README.md) | _(server)_ | 🚧 in progress | Collector server that receives, stores & streams hook events to a dashboard |
+| [`send-event`](core/send-event/README.md) | all 9 events | ✅ active | Forward every hook event to the local observability collector (never blocks) |
+| [`obs-lazy-start`](core/obs-lazy-start/README.md) | SessionStart | ✅ active | Spawn the collector (detached) if it isn't already running |
+| [`observability`](core/observability/README.md) | _(server)_ | ✅ active | Collector server: receives, stores (SQLite), redacts & streams hook events to a dashboard |
 
 ## Layout
 

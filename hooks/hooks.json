@@ -119,6 +119,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/obs-lazy-start/obs-lazy-start.mjs\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/send-event/send-event.mjs\"",
             "timeout": 10
           }
