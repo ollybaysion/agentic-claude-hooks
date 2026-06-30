@@ -69,9 +69,6 @@ const STYLE_RULES = [
   // find -> fd, except for predicates fd can't cleanly replace (left to find).
   [/^\s*find\b(?![^|]*\s-(?:exec|ok|delete|newer|[acm]time|[acm]min|size|perm|inum|links|user|group|uid|gid|i?regex)\b)/i,
     "find 대신 fd를 써라 — 문법이 간결하고 .gitignore를 인식하며 빠르다. 이름검색 fd PATTERN, 확장자 fd -e js, 타입 fd -t f, 숨김포함 fd -H."],
-  // file viewing -> Read tool  (line numbers, offset/limit, multimodal, tracked)
-  [/^\s*(?:cat|head|tail)(?=\s)(?!.*[<>|])(?!.*\s--?[fF])\s+\S/i,
-    "파일 보기는 cat/head/tail 대신 Read 도구를 써라 — 줄번호와 offset/limit 페이지네이션을 주고 이미지/PDF/노트북도 읽으며, 하네스가 파일 상태를 추적한다."],
   // in-place sed -> Edit tool  (reviewable diff, tracked)
   [/^\s*sed\s+(?:-[a-z]*i|--in-place)/i,
     "sed -i 인플레이스 치환 대신 Edit 도구를 써라 — 변경이 diff로 보여 리뷰 가능하고 하네스가 파일을 추적한다. 다중 파일 스트림 치환이 꼭 필요하면 sd."],
@@ -82,8 +79,22 @@ const STYLE_RULES = [
   [/^\s*(?:[hbga]top\b|top\b(?![^|;&]*\s-b))/i,
     "대화형 모니터(htop/top)는 TTY 없는 Bash에서 멈추거나 제어문자만 쏟아낸다. 스냅샷은 top -b -n1, CPU 상위는 ps aux --sort=-%cpu | head."],
   // cd X && CMD -> tool path arg  (cwd resets between calls; can prompt for permission)
-  [/^\s*cd\s+[^&|;]+&&/i,
+  // `[^&|;\n]` stops at a newline so an unrelated `cd` on one line and `&&` on
+  // the next (a multi-line script) don't get matched as a single `cd … &&`.
+  [/^\s*cd\s+[^&|;\n]+&&/i,
     "'cd X && 명령' 대신 도구 경로인자를 써라 — rg PATH · git -C DIR · make -C DIR · ls DIR, 또는 절대경로. 에이전트는 호출 사이 cwd가 리셋되고 cd가 작업폴더 밖이면 권한 프롬프트를 유발한다. 상대경로 스크립트가 꼭 필요하면 서브셸 '(cd X && ./script)'로 감싸라."],
+];
+
+// File-viewing nudge — checked against the WHOLE command only (not split
+// segments). cat/head/tail viewing a FILE -> Read; but `... | tail -3`
+// (truncating a pipe's output) is stream processing, not file viewing, and
+// Read can't replace it. The `(?!.*[<>|])` lookahead suppresses any piped /
+// redirected / heredoc usage, and `(?!.*\s--?[fF])` leaves `tail -f`/`-F`
+// alone — but both only work when matched against the FULL command, because a
+// per-segment scan would strip the pipe and wrongly fire on `tail -3`.
+const FILE_VIEW_RULE = [
+  /^\s*(?:cat|head|tail)(?=\s)(?!.*[<>|])(?!.*\s--?[fF])\s+\S/i,
+  "파일 보기는 cat/head/tail 대신 Read 도구를 써라 — 줄번호와 offset/limit 페이지네이션을 주고 이미지/PDF/노트북도 읽으며, 하네스가 파일 상태를 추적한다.",
 ];
 
 // Split a compound command into segments so `echo x && rm -rf /` can't smuggle
@@ -105,8 +116,11 @@ try {
   const command = input?.tool_input?.command;
   if (!command || !command.trim()) pass();
 
-  // Full command first (keeps pipes intact), then each segment.
+  // Whole command first (keeps pipes intact), then each segment.
   const targets = [command, ...splitCommands(command)];
+
+  // 1. Safety blocks across every target — these take precedence over nudges,
+  //    so `cat .env` is denied as a secret leak before the file-view nudge.
   for (const target of targets) {
     if (dangerousRm(target)) {
       denyPreToolUse("파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
@@ -114,10 +128,17 @@ try {
     for (const [pattern, reason] of BLOCK_RULES) {
       if (pattern.test(target)) denyPreToolUse(reason);
     }
+  }
+
+  // 2. Style nudges across every target (so `... | grep x` still fires).
+  for (const target of targets) {
     for (const [pattern, reason] of STYLE_RULES) {
       if (pattern.test(target)) denyPreToolUse(reason);
     }
   }
+
+  // 3. File-viewing nudge — whole command only (see FILE_VIEW_RULE note).
+  if (FILE_VIEW_RULE[0].test(command)) denyPreToolUse(FILE_VIEW_RULE[1]);
 
   pass(); // clean — defer to the normal permission flow
 } catch (err) {
