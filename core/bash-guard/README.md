@@ -66,6 +66,8 @@
 
 > ⚠️ **`rg`가 PATH에 있어야 함.** rg 미설치 환경이면 Claude가 대안 없이 grep만 막혀 멈출 수 있으니, 그런 머신에선 해당 규칙을 빼라.
 
+> 추가할 넛지 후보(추천/보류/기각 분석)는 [style-nudge-candidates.md](style-nudge-candidates.md) 참고.
+
 ## 확인 후 진행 규칙 (ASK — 보류, 1차 범위 제외)
 
 ### 6. Git 파괴적 작업
