@@ -66,6 +66,13 @@ const BLOCK_RULES = [
 const STYLE_RULES = [
   // search -> ripgrep / fd  (faster, .gitignore-aware)
   [/^\s*grep\b/i, "'grep' 대신 'rg'(ripgrep)를 써라 — 빠르고 .gitignore를 인식한다."],
+  // find … -exec grep / find … | xargs grep -> rg  (one recursive, gitignore-aware
+  // search instead of spawning grep per file). MUST come before the find->fd rule
+  // so it wins on the whole command (find->fd would otherwise fire on the find
+  // part before the pipe). Skipped when find uses metadata predicates rg can't
+  // replicate (-mtime/-size/-perm/-newer/…), which are left to find.
+  [/^\s*find\b(?![^|]*\s-(?:(?:a|c)?newer|[acm]time|[acm]min|size|perm|user|group|uid|gid|inum|links|empty)\b)[^|]*(?:-exec\s+[ef]?grep\b|\|\s*xargs(?:\s+-\S+)*\s+[ef]?grep\b)/i,
+    "'find … -exec grep' / 'find … | xargs grep' 대신 'rg <패턴>'(필요시 -g '*.ext')를 써라 — 한 번에 재귀 검색하고 .gitignore를 인식하며 file:line:match로 출력한다."],
   // find -> fd, except for predicates fd can't cleanly replace (left to find).
   [/^\s*find\b(?![^|]*\s-(?:exec|ok|delete|newer|[acm]time|[acm]min|size|perm|inum|links|user|group|uid|gid|i?regex)\b)/i,
     "find 대신 fd를 써라 — 문법이 간결하고 .gitignore를 인식하며 빠르다. 이름검색 fd PATTERN, 확장자 fd -e js, 타입 fd -t f, 숨김포함 fd -H."],

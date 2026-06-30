@@ -8,8 +8,9 @@
 `bash-guard.mjs`의 `STYLE_RULES`에 `[정규식, 이유]`로 옮긴다.
 
 > **구현 상태**: 추천 1~5번(cat/head/tail→Read, sed -i→Edit, telnet→nc, htop/top→배치,
-> cd&&→경로인자)과 `find → fd`(fd 설치 후, 기존 `find -name→rg`를 대체)가 모두
-> `bash-guard.mjs`에 반영됨. `grep → rg`는 그 이전부터 적용 중. 아래 보류·기각 항목은 미반영.
+> cd&&→경로인자), `find → fd`(fd 설치 후, 기존 `find -name→rg`를 대체), 그리고 보류였던
+> **`find … -exec grep`/`… | xargs grep → rg`**(메타필터 술어는 면제)가 `bash-guard.mjs`에
+> 반영됨. `grep → rg`는 그 이전부터 적용 중. 나머지 보류·기각 항목은 미반영.
 
 ## 판단 기준 — 에이전트 컨텍스트 적합성
 
