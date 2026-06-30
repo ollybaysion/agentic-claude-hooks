@@ -102,6 +102,14 @@ for (const l of matched) {
     continue;
   }
 
+  // Killed by a signal (status === null, error unset): unrunnable, so fail open.
+  if (result.status === null) {
+    process.stderr.write(
+      `[claude-hooks/lint] ${l.cmd} was killed (signal ${result.signal}) on ${file}; skipping.\n`
+    );
+    continue;
+  }
+
   const verdict = (l.classify ?? NONZERO_IS_VIOLATION)(result.status);
   if (verdict === "clean") continue;
   if (verdict === "infra") {
@@ -113,6 +121,16 @@ for (const l of matched) {
   }
 
   const findings = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+
+  // Nonzero but produced no output: nothing actionable to relay -> fail open
+  // rather than block with an empty, un-fixable message.
+  if (!findings) {
+    process.stderr.write(
+      `[claude-hooks/lint] ${l.cmd} exited ${result.status} with no output on ${file}; skipping.\n`
+    );
+    continue;
+  }
+
   problems.push(
     `[claude-hooks/lint] ${l.cmd} reported issues in ${file}:\n\n${findings}\n\n${l.fix}.`
   );
