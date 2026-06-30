@@ -9,11 +9,12 @@ hook lives as a self-contained module under `core/`.
 | Module | Event | Status | Purpose |
 | --- | --- | --- | --- |
 | [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh) |
+| [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
 
 ## Layout
 
-```
+```text
 claude-hooks/
 ├── .claude-plugin/
 │   ├── plugin.json        # plugin manifest
