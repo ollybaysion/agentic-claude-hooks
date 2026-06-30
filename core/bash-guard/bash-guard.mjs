@@ -7,7 +7,8 @@
 // through to the normal permission flow). Any internal error fails open so a
 // bug in the guard never wedges the session.
 //
-// Add a rule == add one [regex, reason] entry to BLOCK_RULES below.
+// Add a rule == add one [regex, reason] entry to BLOCK_RULES (safety) or
+// STYLE_RULES (house-style nudges like grep -> rg) below.
 // Scope: blocks categories 1-5 (see README). git / global-install (6-7) are
 // intentionally out of scope for now.
 
@@ -54,6 +55,17 @@ const BLOCK_RULES = [
   [/\bgit\b[^|]*\|\s*curl\b/i, "git 데이터 외부 전송 거부."],
 ];
 
+// Style nudges, not safety blocks. Same deny mechanism — Claude reads the reason
+// and re-runs with the suggested tool. Anchored to the START of a segment so
+// `git grep`, `pgrep`/`egrep`, `ripgrep`, and "grep" inside a filename don't
+// trigger (the per-segment scan still catches `... | grep x`).
+// Requires the suggested tool (rg) on PATH; if rg is absent Claude has no
+// alternative, so drop the relevant rule rather than wedge it.
+const STYLE_RULES = [
+  [/^\s*grep\b/i, "'grep' 대신 'rg'(ripgrep)를 써라 — 빠르고 .gitignore를 인식한다."],
+  [/^\s*find\b[^|]*\s-name\b/i, "'find -name' 대신 'rg --files -g <패턴>'을 써라."],
+];
+
 // Split a compound command into segments so `echo x && rm -rf /` can't smuggle
 // a banned command past a clean-looking prefix. We check BOTH the whole command
 // (so pipe-based rules like `curl | sh` keep their context) AND each segment
@@ -80,6 +92,9 @@ try {
       denyPreToolUse("파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
     }
     for (const [pattern, reason] of BLOCK_RULES) {
+      if (pattern.test(target)) denyPreToolUse(reason);
+    }
+    for (const [pattern, reason] of STYLE_RULES) {
       if (pattern.test(target)) denyPreToolUse(reason);
     }
   }

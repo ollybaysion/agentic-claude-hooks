@@ -7,9 +7,9 @@
 - **Requirement**: Node.js (PATH)
 - **Fail-open**: 훅 자체 오류는 차단하지 않음 (`failOpen`)
 - **복합명령 분리**: `;` `&&` `||` `|` 줄바꿈으로 쪼개 각 조각 검사 → `echo x && rm -rf /` 우회 방지
-- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`에 `[정규식, 사유]` 한 줄 추가
+- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`(안전) 또는 `STYLE_RULES`(스타일 넛지)에 `[정규식, 사유]` 한 줄 추가
 
-> 구현됨: `bash-guard.mjs`. 아래는 적용 중인 규칙 모음. 1~5번 **차단**, 6~7번은 범위 밖(보류).
+> 구현됨: `bash-guard.mjs`. 아래는 적용 중인 규칙 모음. 1~5번 **차단**, 스타일 넛지(grep→rg) 적용, 6~7번은 범위 밖(보류).
 
 ## 차단 규칙 (BLOCK — 실행 전 거부)
 
@@ -54,6 +54,17 @@
 | `(cat\|less)\s+.*\.aws/credentials` | AWS 자격증명 노출 |
 | `env\s*(\|\s*curl\|\|\s*nc)` | 환경변수 외부 전송 |
 | `git\s+.*\|\s*curl` | 데이터 외부 전송 |
+
+## 스타일 넛지 (STYLE — 차단 아님, 더 나은 도구로 유도)
+
+안전 문제가 아니라 하우스 스타일. 같은 `deny` 메커니즘을 쓰지만, Claude가 사유를 읽고 **제안된 도구로 다시 실행**한다(차단이 아니라 교정 넛지). 세그먼트 **맨 앞 명령**에만 매칭(`^\s*`)해서 `git grep`·`pgrep`·`egrep`·`ripgrep`·파일명 속 "grep" 오탐을 피한다.
+
+| 정규식 | 유도 |
+|---|---|
+| `^\s*grep\b` | `grep` → `rg`(ripgrep) — 빠르고 .gitignore 인식 |
+| `^\s*find\b[^\|]*\s-name\b` | `find -name` → `rg --files -g <패턴>` |
+
+> ⚠️ **`rg`가 PATH에 있어야 함.** rg 미설치 환경이면 Claude가 대안 없이 grep만 막혀 멈출 수 있으니, 그런 머신에선 해당 규칙을 빼라.
 
 ## 확인 후 진행 규칙 (ASK — 보류, 1차 범위 제외)
 
