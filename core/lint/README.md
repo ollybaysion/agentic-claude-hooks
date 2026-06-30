@@ -1,14 +1,15 @@
 # lint
 
 A single PostToolUse hook that lint/format-checks files **by extension**,
-dispatching each type to the right tool. Add a file type by adding one entry to
-the `LINTERS` table in `lint.mjs`.
+dispatching each type to the right tool(s). Add a file type by adding one entry
+to the `LINTERS` table in `lint.mjs`.
 
 ## How it works
 
 - **Event / matcher:** `PostToolUse` on `Write|Edit|MultiEdit`.
-- **Dispatch:** the file's extension selects a tool from `LINTERS`. Unlisted
-  extensions pass untouched.
+- **Dispatch:** the file's extension selects one or more tools from `LINTERS`
+  (e.g. `.sh` runs both shellcheck and shfmt); all matching tools run and their
+  findings are aggregated. Unlisted extensions pass untouched.
 - **Behaviour:** block-and-feedback only (no auto-fix). On a violation the hook
   exits `2` and writes the tool output plus a fix instruction to stderr, which
   Claude receives and acts on — a self-correction loop.
@@ -22,7 +23,7 @@ the `LINTERS` table in `lint.mjs`.
 | `.md` `.markdown` | `markdownlint-cli2` (with bundled `config/`) | non-zero = violation |
 | `.json` `.yaml` `.yml` | `prettier --check` | non-zero = violation |
 | `.js` `.jsx` `.cjs` `.mjs` `.ts` `.tsx` | `eslint` | 1 = violation, 2+ = infra (skip) |
-| `.sh` `.bash` | `shellcheck` | non-zero = violation |
+| `.sh` `.bash` | `shellcheck` (lint) + `shfmt -d` (format) | non-zero = violation |
 
 ## Rule references
 
@@ -55,6 +56,15 @@ brew install shellcheck         # macOS
 ver=$(curl -fsSL https://api.github.com/repos/koalaman/shellcheck/releases/latest | grep -m1 tag_name | cut -d'"' -f4)
 curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.$(uname -m).tar.xz" | tar xJ
 install -Dm755 "shellcheck-${ver}/shellcheck" ~/.local/bin/shellcheck
+```
+
+`shfmt` (shell formatter, runs alongside shellcheck on `.sh`) is likewise a
+dependency-free static binary:
+
+```bash
+ver=$(curl -fsSL https://api.github.com/repos/mvdan/sh/releases/latest | grep -m1 tag_name | cut -d'"' -f4)
+arch=$(uname -m); [ "$arch" = x86_64 ] && arch=amd64; [ "$arch" = aarch64 ] && arch=arm64
+curl -fsSL "https://github.com/mvdan/sh/releases/download/${ver}/shfmt_${ver}_linux_${arch}" -o ~/.local/bin/shfmt && chmod +x ~/.local/bin/shfmt
 ```
 
 Anything not installed is simply skipped (fail open).

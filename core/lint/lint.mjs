@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 // Unified lint / format-check hook (PostToolUse / Write|Edit|MultiEdit).
 //
-// One PostToolUse hook dispatches by file extension to the matching tool.
-// On a violation it relays the tool's output plus a fix instruction via stderr
-// and exits 2 (block-and-feedback; no auto-fix). Missing or unrunnable tools
-// fail open (exit 0) so a partial toolchain never breaks the session.
+// One PostToolUse hook dispatches by file extension to the matching tool(s).
+// A file type may map to MORE THAN ONE tool (e.g. .sh -> shellcheck + shfmt);
+// every matching tool runs and their findings are aggregated. On any violation
+// it relays the tool output plus a fix instruction via stderr and exits 2
+// (block-and-feedback; no auto-fix). Missing or unrunnable tools fail open
+// (that tool is skipped) so a partial toolchain never breaks the session.
 //
 // Add a file type == add one entry to LINTERS below.
 
@@ -16,7 +18,6 @@ import {
   toolFilePath,
   blockWithFeedback,
   pass,
-  failOpen,
 } from "../../lib/hook-io.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -69,6 +70,14 @@ const LINTERS = [
     args: (f) => [f],
     fix: "Address every ShellCheck finding above",
   },
+  {
+    // Runs alongside shellcheck on the same files (lint + format).
+    exts: [".sh", ".bash"],
+    cmd: "shfmt",
+    args: (f) => ["-d", f],
+    // shfmt -d: 0 = formatted; nonzero = diff or parse error (both actionable).
+    fix: "Reformat to shfmt's style (run `shfmt -w <file>` to apply)",
+  },
 ];
 
 const input = await readHookInput();
@@ -76,35 +85,42 @@ const file = toolFilePath(input);
 if (!file) pass();
 
 const ext = extname(file).toLowerCase();
-const linter = LINTERS.find((l) => l.exts.includes(ext));
-if (!linter) pass(); // extension we don't enforce
+const matched = LINTERS.filter((l) => l.exts.includes(ext));
+if (!matched.length) pass(); // extension we don't enforce
 
-const result = spawnSync(linter.cmd, linter.args(file), { encoding: "utf8" });
+// Run every tool that matches this file (a type may have several). Each tool
+// fails open independently: a missing or unrunnable tool is skipped while the
+// others still run. Violations are collected and reported together.
+const problems = [];
+for (const l of matched) {
+  const result = spawnSync(l.cmd, l.args(file), { encoding: "utf8" });
 
-// Tool not installed / not on PATH -> don't break the user's flow.
-if (result.error) {
-  failOpen(
-    `[claude-hooks/lint] ${linter.cmd} not found; skipping ${ext} check. ` +
-      `Install it to enable enforcement for this file type.`
+  if (result.error) {
+    process.stderr.write(
+      `[claude-hooks/lint] ${l.cmd} not found; skipping. Install it to enable this check.\n`
+    );
+    continue;
+  }
+
+  const verdict = (l.classify ?? NONZERO_IS_VIOLATION)(result.status);
+  if (verdict === "clean") continue;
+  if (verdict === "infra") {
+    process.stderr.write(
+      `[claude-hooks/lint] ${l.cmd} could not run on ${file} (exit ${result.status}); ` +
+        `skipping. Usually a missing/invalid config, not a violation.\n`
+    );
+    continue;
+  }
+
+  const findings = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+  problems.push(
+    `[claude-hooks/lint] ${l.cmd} reported issues in ${file}:\n\n${findings}\n\n${l.fix}.`
   );
 }
 
-const classify = linter.classify ?? NONZERO_IS_VIOLATION;
-const verdict = classify(result.status);
+if (!problems.length) pass(); // clean, or every matching tool was skipped
 
-if (verdict === "clean") pass();
-
-if (verdict === "infra") {
-  failOpen(
-    `[claude-hooks/lint] ${linter.cmd} could not run on ${file} ` +
-      `(exit ${result.status}); skipping. Usually a missing/invalid config, not a violation.`
-  );
-}
-
-const findings = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
 blockWithFeedback(
-  `[claude-hooks/lint] ${linter.cmd} reported issues in ${file}:\n\n` +
-    `${findings}\n\n` +
-    `${linter.fix} and write the file again. ` +
-    `Do not proceed until ${linter.cmd} passes.`
+  `${problems.join("\n\n———\n\n")}\n\n` +
+    `Fix everything above and write the file again. Do not proceed until the lint passes.`
 );
