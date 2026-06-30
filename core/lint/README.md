@@ -26,10 +26,30 @@ the `LINTERS` table in `lint.mjs`.
 
 ## Requirements (install what you want enforced)
 
+The hook dispatches by extension and **fails open on missing tools**, so
+enabling a supported type is just installing its tool — there is no code change.
+A tool listed in `LINTERS` but not on `PATH` is simply skipped; install it and
+the same file type starts being enforced. Install only what you want.
+
+The Node-based tools come from npm:
+
 ```bash
-npm i -g markdownlint-cli2 prettier eslint   # node-based tools
-# shellcheck is a system package:
-sudo apt install shellcheck                   # Debian/Ubuntu  (brew install shellcheck on macOS)
+npm i -g markdownlint-cli2 prettier eslint
+```
+
+`shellcheck` ships as a dependency-free static binary, so it needs no package
+manager or `sudo` — install it system-wide, or just drop the binary on your
+`PATH`:
+
+```bash
+# Option A — package manager
+sudo apt install shellcheck     # Debian/Ubuntu
+brew install shellcheck         # macOS
+
+# Option B — no sudo: static binary into ~/.local/bin (linux x86_64 / aarch64)
+ver=$(curl -fsSL https://api.github.com/repos/koalaman/shellcheck/releases/latest | grep -m1 tag_name | cut -d'"' -f4)
+curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/${ver}/shellcheck-${ver}.linux.$(uname -m).tar.xz" | tar xJ
+install -Dm755 "shellcheck-${ver}/shellcheck" ~/.local/bin/shellcheck
 ```
 
 Anything not installed is simply skipped (fail open).
