@@ -1,7 +1,7 @@
 {
   "name": "claude-hooks",
   "description": "Personal collection of Claude Code hooks (lint, tdd-guard, ...) bundled as one installable plugin.",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "author": {
     "name": "ollybaysion",
     "email": "ollybaysion@gmail.com"

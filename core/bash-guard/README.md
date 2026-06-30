@@ -70,6 +70,7 @@
 | 넛지 | 유도 | 외부 도구 |
 | --- | --- | --- |
 | `grep` → `rg` | 빠르고 .gitignore 인식 | rg |
+| `find … -exec grep` / `… \| xargs grep` → `rg` | 한 번에 재귀 검색 (`-mtime`/`-size`/`-perm` 등 메타필터 있으면 면제) | rg |
 | `find` → `fd` | 간결·gitignore 인식 (`-exec`/`-mtime`/`-size` 등은 면제) | fd |
 | `cat`/`head`/`tail FILE` → `Read` 도구 | 줄번호·offset/limit·멀티모달·파일추적 (파이프/`tail -f`/리다이렉트 면제) | — |
 | `sed -i` → `Edit` 도구 | 변경이 diff로 보이고 추적됨 (스트림 sed는 면제) | — |
