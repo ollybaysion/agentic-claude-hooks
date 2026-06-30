@@ -14,7 +14,7 @@ hook lives as a self-contained module under `core/`.
 
 ## Layout
 
-```
+```text
 claude-hooks/
 ├── .claude-plugin/
 │   ├── plugin.json        # plugin manifest
