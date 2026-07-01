@@ -202,11 +202,12 @@ core/context/
 │   ├── config.mjs           # .claude/context.json 로드·검증, DEFAULT_PROFILE 제공
 │   ├── registry.mjs         # id → 프로바이더 (상대경로 정적 import)
 │   ├── budget.mjs           # 순수 함수: 우선순위·예산 반영해 자르기
+│   ├── ledger.mjs           # os.tmpdir() 상태(keyword-docs dedup 등). §10
 │   └── providers/
 │       ├── git.mjs          # SessionStart: 브랜치·SHA·dirty·최근 커밋
-│       ├── project-files.mjs# SessionStart: 표준 파일 첫 존재분
+│       ├── project-files.mjs# SessionStart: 표준 파일 첫 존재분 (옵트인)
 │       ├── time.mjs         # UserPromptSubmit: 현재 시각
-│       └── keyword-docs.mjs # UserPromptSubmit(옵트인): 프롬프트 맞춤 문서
+│       └── keyword-docs.mjs # UserPromptSubmit(옵트인): 프롬프트 맞춤 문서 + dedup
 ├── DESIGN.md                # 이 문서
 └── README.md                # 사용법 + .claude/context.json 형식
 ```
@@ -428,12 +429,20 @@ export default {
 
 ### `keyword-docs` — UserPromptSubmit, prio 50 · **옵트인, 기본 OFF**
 
-로컬 전용 RAG-lite. 벡터 DB·임베딩 없이, `prompt`를 소문자 단어 단위로
-`.claude/context-docs.json`의 `keywords`와 매칭해 **매치된 파일 ≤`maxDocs`개**를 잘라
-주입한다. 매치 없으면 `null`(대부분의 턴은 아무것도 안 붙음 → **API 토큰 0, 30s 여유**).
+로컬 전용 RAG-lite. 벡터 DB·임베딩 없이 `prompt`를 `.claude/context-docs.json`의
+`keywords`와 매칭해 **매치된 파일 ≤`maxDocs`개**를 잘라 주입한다. 매치 없으면 `null`
+(대부분의 턴은 아무것도 안 붙음 → **API 토큰 0, 30s 여유**, ledger I/O도 없음).
+
+- **매칭 모드**(`params.match`): `word`(기본 — 단어경계 + 복수형 허용: 키워드
+  `migration`이 `migrations`도 매치, 공백 포함 키워드는 phrase 부분일치), `exact`,
+  `substring`.
+- **크로스-턴 dedup**(`params.dedup`, 기본 on): 같은 세션에서 이미 주입한 문서는
+  `dedupTtlMs`(기본 15분) 안엔 재주입하지 않는다(연속 턴에 같은 주제를 말해도 이미
+  컨텍스트에 있는 걸 또 안 넣음). 새 세션이거나 TTL 경과(스크롤아웃 추정) 후 재주입.
+  상태는 `lib/ledger.mjs`가 세션별로 `os.tmpdir()`에 둔다(best-effort, §10).
 
 ```js
-// core/context/lib/providers/keyword-docs.mjs (요지)
+// core/context/lib/providers/keyword-docs.mjs (요지 — 실제 구현엔 매칭 모드·세션 dedup 추가)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 export default {

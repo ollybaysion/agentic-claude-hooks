@@ -7,8 +7,9 @@
 
 import git from "./providers/git.mjs";
 import time from "./providers/time.mjs";
+import keywordDocs from "./providers/keyword-docs.mjs";
 
-const REGISTRY = Object.fromEntries([git, time].map((p) => [p.id, p]));
+const REGISTRY = Object.fromEntries([git, time, keywordDocs].map((p) => [p.id, p]));
 
 export function selectProviders(cfg, event) {
   return (cfg.providers ?? [])
