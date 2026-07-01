@@ -9,7 +9,12 @@ export default {
   events: ["UserPromptSubmit"],
   defaultPriority: 40,
   async run() {
+    const now = new Date();
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    return { text: `Current date/time: ${new Date().toISOString()} (timezone: ${tz})` };
+    // Local wall-clock (in the resolved tz) FIRST, then UTC. Never label a UTC
+    // ISO string with the local tz — that reads as N hours off (the whole point
+    // of this line is to be unambiguously "now").
+    const local = now.toLocaleString("sv-SE", { timeZone: tz }); // YYYY-MM-DD HH:MM:SS
+    return { text: `Current date/time: ${local} (${tz}) | ${now.toISOString()} (UTC)` };
   },
 };
