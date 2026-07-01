@@ -24,12 +24,14 @@ to the `LINTERS` table in `lint.mjs`.
 | `.json` `.yaml` `.yml` | `prettier --check` | non-zero = violation |
 | `.js` `.jsx` `.cjs` `.mjs` `.ts` `.tsx` | `eslint` | 1 = violation, 2+ = infra (skip) |
 | `.sh` `.bash` | `shellcheck` (lint) + `shfmt -d` (format) | non-zero = violation |
+| `.html` `.htm` | `html-validate` (with bundled `config/`) | non-zero = violation |
 
 ## Rule references
 
 - Markdown rules and which our bundle enables: [markdown-rules.md](markdown-rules.md)
 - Shell (shellcheck) rule categories: [shellcheck-rules.md](shellcheck-rules.md)
 - Shell formatting (shfmt) behaviors/options: [shfmt-rules.md](shfmt-rules.md)
+- HTML (html-validate) recommended rules + our config: [html-validate-rules.md](html-validate-rules.md)
 
 ## Requirements (install what you want enforced)
 
@@ -41,7 +43,7 @@ the same file type starts being enforced. Install only what you want.
 The Node-based tools come from npm:
 
 ```bash
-npm i -g markdownlint-cli2 prettier eslint
+npm i -g markdownlint-cli2 prettier eslint html-validate
 ```
 
 `shellcheck` ships as a dependency-free static binary, so it needs no package

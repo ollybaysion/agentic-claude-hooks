@@ -22,6 +22,10 @@ import {
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const MD_CONFIG = join(HERE, "config", ".markdownlint-cli2.jsonc");
+// Bundled html-validate config (root:true so a project's own .htmlvalidate.json
+// is never merged in — a project's broken config would otherwise crash the tool
+// with exit 1, indistinguishable from a real violation).
+const HTML_CONFIG = join(HERE, "config", ".htmlvalidate.json");
 
 // Path-matched Markdown templates. A matched .md is checked with that template
 // config (which `extends` the base rules and adds overrides like MD043 required
@@ -77,6 +81,14 @@ const LINTERS = [
     args: (f) => ["-d", f],
     // shfmt -d: 0 = formatted; nonzero = diff or parse error (both actionable).
     fix: "Reformat to shfmt's style (run `shfmt -w <file>` to apply)",
+  },
+  {
+    exts: [".html", ".htm"],
+    cmd: "html-validate",
+    // Pin our bundled config so behaviour is deterministic and independent of
+    // any project .htmlvalidate.json. 0 = clean, nonzero = violation.
+    args: (f) => ["--config", HTML_CONFIG, f],
+    fix: "Fix every html-validate error above",
   },
 ];
 
