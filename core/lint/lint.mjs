@@ -90,6 +90,17 @@ const LINTERS = [
     args: (f) => ["--config", HTML_CONFIG, f],
     fix: "Fix every html-validate error above",
   },
+  {
+    exts: [".py", ".pyi"],
+    cmd: "ruff",
+    args: (f) => ["check", f],
+    // ruff: 0 = clean, 1 = violations (incl. E999 syntax errors), 2+ =
+    // config/parse/CLI error -> infra, so a broken or absent project config is
+    // skipped rather than falsely blocked. Best-effort like eslint: respects the
+    // project's pyproject.toml/ruff.toml, else ruff's built-in defaults.
+    classify: (s) => (s === 0 ? "clean" : s === 1 ? "violation" : "infra"),
+    fix: "Fix every ruff violation above (address them in the file; the hook never auto-fixes)",
+  },
 ];
 
 const input = await readHookInput();

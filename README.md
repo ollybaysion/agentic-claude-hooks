@@ -8,7 +8,7 @@ hook lives as a self-contained module under `core/`.
 
 | Module | Event | Status | Purpose |
 | --- | --- | --- | --- |
-| [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh, html) |
+| [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh, html, py) |
 | [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
 | [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push + --no-verify |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
@@ -38,7 +38,7 @@ touch the user's project config.
 
 - **Node.js** on `PATH` (hooks are written as `.mjs`).
 - Per-module tools — see each module's README. Currently:
-  - `lint` → `npm i -g markdownlint-cli2 prettier eslint html-validate` (+ `shellcheck`/`shfmt` static binaries)
+  - `lint` → `npm i -g markdownlint-cli2 prettier eslint html-validate` (+ `shellcheck`/`shfmt` static binaries, + `ruff` for Python)
 
 Missing per-module tools cause that hook to **fail open** (it logs a note and
 does nothing), so a partial install never breaks your session.
