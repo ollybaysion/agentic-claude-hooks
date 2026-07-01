@@ -7,8 +7,8 @@
   "plugins": [
     {
       "name": "claude-hooks",
-      "description": "Bundle of personal Claude Code hooks.",
-      "version": "0.6.1",
+      "description": "Bundle of personal Claude Code hooks and skills.",
+      "version": "0.7.0",
       "source": "./"
     }
   ]
