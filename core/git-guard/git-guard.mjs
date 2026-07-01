@@ -8,6 +8,12 @@
 //           (skipping pre-commit/pre-push hooks). `--force-with-lease` is the safe
 //           variant and is allowed.
 //
+// Detection is argv-based, NOT substring-based: a Bash command is split into
+// segments and each is tokenized into argv, so a rule fires only when `git` is
+// the actually-invoked command with the matching subcommand — never because the
+// words "git"/"push"/"main" merely co-occur in some argument or message text
+// (e.g. `git show main:push.txt`, or a `gh pr create --body "... push ... main"`).
+//
 // Mechanism: structured `permissionDecision:"deny"` + a typed reason (stdout
 // JSON + exit 0), same as bash-guard. A clean action passes silently (NOT an
 // auto-approve — defers to the normal permission flow). Not-a-git-repo / no-git
@@ -31,56 +37,136 @@ function currentBranch(cwd) {
   return (r.stdout || "").trim();
 }
 
-// A protected branch named as a push target: `... main`, `HEAD:master`, etc.
-const PUSH_TO_PROTECTED = /(^|\s|:)(main|master)(\s|$|:)/;
-// Plain force push (history rewrite). `--force-with-lease` is the safe variant
-// and is deliberately NOT matched here (allowed).
-const PLAIN_FORCE = /(^|\s)--force(\s|$)|(^|\s)-f(\s|$)/;
-const FORCE_WITH_LEASE = /--force-with-lease/;
-// `--no-verify` skips local hooks. Block the long form on any git command.
-// (Short `-n` means --no-verify only for `commit`; left uncaught to avoid
-// matching a literal "-n" inside a commit message.)
-const NO_VERIFY = /\bgit\b[^|]*--no-verify\b/;
+// Command wrappers that precede the real command (`sudo git push …`). Skipped,
+// along with leading `VAR=val` env assignments, before reading argv[0].
+const WRAPPERS = new Set(["sudo", "command", "env", "nice", "nohup", "time"]);
+// git *global* options that consume the following token as their value, e.g.
+// `git -C <dir> push …`. Needed so their value isn't mistaken for the subcommand.
+const GIT_GLOBAL_VALUE_OPTS = new Set([
+  "-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path", "--super-prefix",
+]);
+// `git push` options that consume the following token as their value, so that
+// value isn't mistaken for a refspec (e.g. `--repo main` is a repo, not a target).
+const PUSH_VALUE_OPTS = new Set(["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
 
-// Quoted string literals (commit messages, `-m`/`-F` bodies) can contain words
-// like "push", "main" or "--force" that would otherwise be misread as command
-// tokens. Strip them (both quote styles, incl. multi-line) before analysis so a
-// message such as `-m "sync with main"` never trips the push/force/target rules.
-function stripQuoted(s) {
-  return s.replace(/'[^']*'/g, " ").replace(/"[^"]*"/g, " ");
+// Split a shell command line into segments (chained by `; & && | || newline` and
+// command substitution `$( … )` / backticks) and tokenize each into argv. A
+// single quote-aware pass: operators and word boundaries are only honoured
+// OUTSIDE quotes, and quoted spans stay inside their token — so a commit message
+// like `-m "push to main; --force"` becomes ONE argument token and can never be
+// read as command structure. Returns an array of token arrays (one per segment).
+function lexSegments(command) {
+  const segments = [];
+  let tokens = [];
+  let cur = "";
+  let started = false; // current token has content (guards empty-token flushes)
+  let quote = null; // "'" or '"' while inside a quoted span
+
+  const endTok = () => { if (started) { tokens.push(cur); cur = ""; started = false; } };
+  const endSeg = () => { endTok(); if (tokens.length) { segments.push(tokens); tokens = []; } };
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      else cur += ch;
+      started = true; // even an empty "" is a real (empty) token
+      continue;
+    }
+    if (ch === "'" || ch === '"') { quote = ch; started = true; continue; }
+    if (ch === "\\") { if (i + 1 < command.length) { cur += command[++i]; started = true; } continue; }
+    if (ch === "$" && command[i + 1] === "(") { endSeg(); i++; continue; } // $( … )
+    if (ch === "`" || ch === "(" || ch === ")") { endSeg(); continue; }    // subst / subshell
+    if (ch === "&") { endSeg(); if (command[i + 1] === "&") i++; continue; }
+    if (ch === "|") { endSeg(); if (command[i + 1] === "|") i++; continue; }
+    if (ch === ";" || ch === "\n" || ch === "\r") { endSeg(); continue; }
+    if (ch === " " || ch === "\t") { endTok(); continue; }
+    cur += ch; started = true;
+  }
+  endSeg();
+  return segments;
 }
 
-// Conservative split so `... && git push -f` can't smuggle past a clean prefix.
-function splitCommands(cmd) {
-  return cmd
-    .split(/(?:&&|\|\||[;\n|])/)
-    .map((s) => s.trim())
-    .filter(Boolean);
+// Parse one segment's argv as a git invocation. Returns { subcommand, args }
+// (args = tokens after the subcommand, options included) or null when the
+// segment isn't `git` (after skipping wrappers/env-assignments and git's own
+// global options). Only the real subcommand drives the rules — not word matches.
+function parseGit(tokens) {
+  let i = 0;
+  while (i < tokens.length &&
+    (WRAPPERS.has(tokens[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]))) i++;
+  if (i >= tokens.length) return null;
+  const argv0 = tokens[i];
+  if (argv0.slice(argv0.lastIndexOf("/") + 1) !== "git") return null;
+  i++;
+  while (i < tokens.length && tokens[i].startsWith("-")) {
+    if (!tokens[i].includes("=") && GIT_GLOBAL_VALUE_OPTS.has(tokens[i])) i++; // skip its value too
+    i++;
+  }
+  if (i >= tokens.length) return null; // no subcommand (e.g. `git --version`)
+  return { subcommand: tokens[i], args: tokens.slice(i + 1) };
+}
+
+// Destination ref of a push refspec: `+src:dst` → dst, `main` → main,
+// `refs/heads/main` → main. Used to match a push *target* against PROTECTED.
+function refDst(ref) {
+  const r = ref.replace(/^\+/, "");
+  const colon = r.lastIndexOf(":");
+  return (colon >= 0 ? r.slice(colon + 1) : r).replace(/^refs\/heads\//, "");
+}
+
+// True if this `git push`'s argv is a plain force (history rewrite). The safe
+// `--force-with-lease` / `--force-if-includes` are distinct tokens and allowed.
+function hasForce(args) {
+  return args.some((t) => t === "--force" || /^-[A-Za-z]*f[A-Za-z]*$/.test(t));
+}
+
+// True if this `git push` writes a protected branch. With an explicit
+// `remote refspec…`, checks each refspec destination. With no refspec (bare
+// `git push` / remote-only), it pushes the *current* branch — protected iff we
+// are on one. (`--delete origin main` falls out of the general refspec check.)
+function pushTargetsProtected(args, branch) {
+  const positionals = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (t.startsWith("-")) {
+      if (!t.includes("=") && PUSH_VALUE_OPTS.has(t)) i++; // skip its value
+      continue;
+    }
+    positionals.push(t);
+  }
+  if (positionals.length >= 2) {
+    return positionals.slice(1).some((ref) => PROTECTED.has(refDst(ref)));
+  }
+  return PROTECTED.has(branch); // no refspec → current branch is the target
 }
 
 function checkBash(command, branch) {
-  // Analyse each real sub-command in isolation (quotes stripped first) so a token
-  // in one segment can't cross-trigger a rule meant for another. Checking the
-  // whole command as one string would let `git push` in one place collide with a
-  // "main"/"--force" token elsewhere (e.g. inside a commit message).
-  for (const seg of splitCommands(stripQuoted(command))) {
-    if (NO_VERIFY.test(seg)) {
+  // Analyse each real sub-command in isolation so a token in one segment can't
+  // cross-trigger a rule meant for another, and so only an actual git subcommand
+  // — not a co-occurring word — fires a rule.
+  for (const tokens of lexSegments(command)) {
+    const git = parseGit(tokens);
+    if (!git) continue;
+    const { subcommand, args } = git;
+
+    if (args.includes("--no-verify")) {
       denyPreToolUse(
         "`--no-verify` 거부 — pre-commit/pre-push 훅(검사)을 건너뛰지 마라. 훅이 실패하면 원인을 고쳐라."
       );
     }
-    if (/\bgit\b[^|]*\bpush\b/.test(seg)) {
-      if (PLAIN_FORCE.test(seg) && !FORCE_WITH_LEASE.test(seg)) {
+    if (subcommand === "push") {
+      if (hasForce(args)) {
         denyPreToolUse(
           "force push 거부 — 히스토리를 덮어쓴다. 안전한 `git push --force-with-lease`를 " +
             "쓰거나, 정말 필요하면 사용자가 직접 실행해라."
         );
       }
-      if (PUSH_TO_PROTECTED.test(seg)) {
+      if (pushTargetsProtected(args, branch)) {
         denyPreToolUse("main/master로 직접 push 거부 — 브랜치를 만들어 PR로 머지해라.");
       }
     }
-    if (/\bgit\b[^|]*\bcommit\b/.test(seg) && PROTECTED.has(branch)) {
+    if (subcommand === "commit" && PROTECTED.has(branch)) {
       denyPreToolUse(
         `'${branch}'에 직접 커밋 거부 — feature/* 또는 fix/* 브랜치를 먼저 만들어라.`
       );
