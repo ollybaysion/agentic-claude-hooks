@@ -24,7 +24,7 @@ and are auto-discovered by the plugin loader.
 
 | Skill | Invoke | Status | Purpose |
 | --- | --- | --- | --- |
-| [`git-flow`](skills/git-flow/README.md) | `/claude-hooks:git-flow` | ✅ active | Personal issue→PR flow in one skill: issue → plan → update main → feat branch + worktree (`setup`), then commit → push → PR (`finish`). The happy-path for what `git-guard` enforces. |
+| [`agentic-coding-git-workflow`](skills/agentic-coding-git-workflow/README.md) | `/claude-hooks:agentic-coding-git-workflow` | ✅ active | Personal issue→PR→cleanup flow in one skill, from an existing issue (`#N`, never creates issues): view issue → plan → update main → feat branch + worktree (`setup`), commit → push → PR (`finish`), then remove worktree → update main after merge (`cleanup`). The happy-path for what `git-guard` enforces. |
 
 ## Layout
 

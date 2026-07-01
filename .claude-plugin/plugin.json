@@ -1,6 +1,6 @@
 {
   "name": "claude-hooks",
-  "description": "Personal collection of Claude Code hooks and skills (lint, git-guard, git-flow, ...) bundled as one installable plugin.",
+  "description": "Personal collection of Claude Code hooks and skills (lint, git-guard, agentic-coding-git-workflow, ...) bundled as one installable plugin.",
   "version": "0.7.0",
   "author": {
     "name": "ollybaysion",
