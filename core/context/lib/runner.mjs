@@ -31,6 +31,7 @@ export async function runContext(event) {
       event,
       prompt: input?.prompt ?? "", // UserPromptSubmit only
       source: input?.source, // SessionStart: startup|resume|clear|compact
+      sessionId: input?.session_id, // used by stateful providers (keyword-docs dedup)
     };
 
     const cfg = loadConfig(base.cwd);
