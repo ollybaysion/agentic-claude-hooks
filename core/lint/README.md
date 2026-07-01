@@ -25,6 +25,7 @@ to the `LINTERS` table in `lint.mjs`.
 | `.js` `.jsx` `.cjs` `.mjs` `.ts` `.tsx` | `eslint` | 1 = violation, 2+ = infra (skip) |
 | `.sh` `.bash` | `shellcheck` (lint) + `shfmt -d` (format) | non-zero = violation |
 | `.html` `.htm` | `html-validate` (with bundled `config/`) | non-zero = violation |
+| `.py` `.pyi` | `ruff check` (lint only) | 1 = violation, 2+ = infra (skip) |
 
 ## Rule references
 
@@ -32,6 +33,7 @@ to the `LINTERS` table in `lint.mjs`.
 - Shell (shellcheck) rule categories: [shellcheck-rules.md](shellcheck-rules.md)
 - Shell formatting (shfmt) behaviors/options: [shfmt-rules.md](shfmt-rules.md)
 - HTML (html-validate) recommended rules + our config: [html-validate-rules.md](html-validate-rules.md)
+- Python (ruff) default rules, config & suppression: [ruff-rules.md](ruff-rules.md)
 
 ## Requirements (install what you want enforced)
 
@@ -70,6 +72,15 @@ arch=$(uname -m); [ "$arch" = x86_64 ] && arch=amd64; [ "$arch" = aarch64 ] && a
 curl -fsSL "https://github.com/mvdan/sh/releases/download/${ver}/shfmt_${ver}_linux_${arch}" -o ~/.local/bin/shfmt && chmod +x ~/.local/bin/shfmt
 ```
 
+`ruff` (Python linter) is a single self-contained binary — no sudo needed:
+
+```bash
+pipx install ruff          # isolated (preferred if pipx is available)
+pip install --user ruff    # or into the user site
+# or the official standalone installer (drops a binary on your PATH):
+#   curl -LsSf https://astral.sh/ruff/install.sh | sh
+```
+
 Anything not installed is simply skipped (fail open).
 
 ## Path templates (per-directory rules)
@@ -88,3 +99,8 @@ usual. See [templates.md](templates.md) for how to add one.
 - **Prettier `--check`** only reports *that* a file isn't formatted, not the
   diff. The fix message tells Claude to reformat; running `prettier --write`
   shows the exact changes.
+- **Ruff is best-effort and lint-only.** Like ESLint it respects the project's
+  own config (`pyproject.toml`/`ruff.toml`) and falls back to ruff's defaults; a
+  broken config exits `2` and is skipped, not blocked. It runs `ruff check`
+  (lint) only — not `ruff format` — so a project's formatting choices are left
+  alone. See [ruff-rules.md](ruff-rules.md) to opt into format enforcement.
