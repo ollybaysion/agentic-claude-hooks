@@ -68,6 +68,15 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/context/prompt-context.mjs\"",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "Notification": [
@@ -126,6 +135,16 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/send-event/send-event.mjs\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/core/context/session-context.mjs\"",
+            "timeout": 20
           }
         ]
       }
