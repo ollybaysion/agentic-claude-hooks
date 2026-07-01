@@ -42,6 +42,14 @@ const FORCE_WITH_LEASE = /--force-with-lease/;
 // matching a literal "-n" inside a commit message.)
 const NO_VERIFY = /\bgit\b[^|]*--no-verify\b/;
 
+// Quoted string literals (commit messages, `-m`/`-F` bodies) can contain words
+// like "push", "main" or "--force" that would otherwise be misread as command
+// tokens. Strip them (both quote styles, incl. multi-line) before analysis so a
+// message such as `-m "sync with main"` never trips the push/force/target rules.
+function stripQuoted(s) {
+  return s.replace(/'[^']*'/g, " ").replace(/"[^"]*"/g, " ");
+}
+
 // Conservative split so `... && git push -f` can't smuggle past a clean prefix.
 function splitCommands(cmd) {
   return cmd
@@ -51,7 +59,11 @@ function splitCommands(cmd) {
 }
 
 function checkBash(command, branch) {
-  for (const seg of [command, ...splitCommands(command)]) {
+  // Analyse each real sub-command in isolation (quotes stripped first) so a token
+  // in one segment can't cross-trigger a rule meant for another. Checking the
+  // whole command as one string would let `git push` in one place collide with a
+  // "main"/"--force" token elsewhere (e.g. inside a commit message).
+  for (const seg of splitCommands(stripQuoted(command))) {
     if (NO_VERIFY.test(seg)) {
       denyPreToolUse(
         "`--no-verify` 거부 — pre-commit/pre-push 훅(검사)을 건너뛰지 마라. 훅이 실패하면 원인을 고쳐라."

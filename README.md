@@ -1,8 +1,9 @@
 # claude-hooks
 
 A personal, portable collection of [Claude Code](https://code.claude.com)
-hooks, bundled as a single installable plugin. Install once per machine; each
-hook lives as a self-contained module under `core/`.
+hooks and skills, bundled as a single installable plugin. Install once per
+machine; each hook lives as a self-contained module under `core/`, each skill
+under `skills/`.
 
 ## Modules
 
@@ -16,6 +17,15 @@ hook lives as a self-contained module under `core/`.
 | [`obs-lazy-start`](core/obs-lazy-start/README.md) | SessionStart | ✅ active | Spawn the collector (detached) if it isn't already running |
 | [`observability`](core/observability/README.md) | _(server)_ | ✅ active | Collector server: receives, stores (SQLite), redacts & streams hook events to a dashboard |
 
+## Skills
+
+User-invoked procedural skills (not hooks). Live under `skills/<name>/SKILL.md`
+and are auto-discovered by the plugin loader.
+
+| Skill | Invoke | Status | Purpose |
+| --- | --- | --- | --- |
+| [`agentic-coding-git-workflow`](skills/agentic-coding-git-workflow/README.md) | `/claude-hooks:agentic-coding-git-workflow` | ✅ active | Personal issue→PR→cleanup flow in one skill, from an existing issue (`#N`, never creates issues): view issue → plan → update main → feat branch + worktree (`setup`), commit → push → PR (`finish`), then remove worktree → update main after merge (`cleanup`). The happy-path for what `git-guard` enforces. |
+
 ## Layout
 
 ```text
@@ -26,6 +36,7 @@ claude-hooks/
 ├── hooks/
 │   └── hooks.json         # central wiring: every hook, grouped by event
 ├── core/<module>/         # one self-contained module per hook
+├── skills/<name>/         # one self-contained skill (SKILL.md) per workflow
 ├── lib/hook-io.mjs        # shared stdin/decision helpers
 └── README.md
 ```
