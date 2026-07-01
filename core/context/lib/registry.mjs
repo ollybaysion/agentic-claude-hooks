@@ -1,0 +1,26 @@
+// core/context/lib/registry.mjs — id -> provider.
+//
+// Static relative imports only (never absolute / project paths). Add a provider
+// == import it and add it to the array below. Config entries that reference an
+// unknown id, or a provider that does not run on this event, are skipped
+// silently. See DESIGN.md §5.
+
+import git from "./providers/git.mjs";
+import time from "./providers/time.mjs";
+
+const REGISTRY = Object.fromEntries([git, time].map((p) => [p.id, p]));
+
+export function selectProviders(cfg, event) {
+  return (cfg.providers ?? [])
+    .map((entry) => {
+      const p = REGISTRY[entry.id];
+      if (!p || !p.events.includes(event)) return null; // unknown id or wrong event -> skip
+      return {
+        id: p.id,
+        run: p.run,
+        params: entry.params ?? {},
+        priority: entry.priority ?? p.defaultPriority,
+      };
+    })
+    .filter(Boolean);
+}
