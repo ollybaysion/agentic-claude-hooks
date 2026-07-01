@@ -4,7 +4,7 @@
 절차형 skill이다(`/claude-hooks:agentic-coding-git-workflow`).
 
 - **종류**: Skill (SKILL.md) — `skills/agentic-coding-git-workflow/SKILL.md`
-- **흐름**: `이슈(기존) 조회 → 계획 → main 최신화 → feat 브랜치 + 워크트리 → 개발 → 커밋 → push → PR → 정리`
+- **흐름**: `이슈(기존) 조회 → 계획 → main 최신화 → feat 브랜치 + 워크트리 → 개발 → 커밋 → main 동기화 → push → PR → 정리`
 - **이슈 생성 안 함**: 대상 이슈는 미리 만들어 `#N`으로 넘긴다(자동호출로 발동해도 멋대로 이슈를 만들지 않게 한 의도적 설계)
 - **국면**: 개발을 경계로 `setup`/`finish`, 머지 후 `cleanup`
   - `setup #N` — 이슈 조회~워크트리 생성+계획까지
@@ -28,6 +28,7 @@
 | 브랜치+워크트리 | `git worktree add -b feat/<slug> origin/main` | 무관 |
 | 개발 | 워크트리 HEAD가 feature라 편집 허용 | ✅ |
 | 커밋/푸시 | feature 브랜치, force·no-verify 없음 | ✅ |
+| main 동기화 | `git merge origin/main` (충돌 시 사용자 해결) | feature 브랜치라 허용 |
 | PR | `gh pr create` (`Closes #N`) | 무관 |
 | 정리 | `git worktree remove` → `git checkout main` + `pull` | checkout/pull은 허용 |
 

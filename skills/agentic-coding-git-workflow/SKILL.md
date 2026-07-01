@@ -34,7 +34,7 @@ description: >-
 
 - `setup #N` — 개발 준비: 이슈 `#N` 조회 → 계획 → main 최신화 → `feat/<slug>` 브랜치 +
   워크트리 생성. 번호를 안 주면 어느 이슈인지 사용자에게 물어본다. 여기서 멈춘다.
-- `finish` — 마무리: 워크트리의 변경을 커밋 → push → PR(`Closes #N`).
+- `finish` — 마무리: 변경 커밋 → main 동기화(충돌 해결) → push → PR(`Closes #N`).
 - `cleanup` — 머지 후 정리: 워크트리 제거 → 로컬 브랜치 삭제 → main 최신화.
 - 인자 없음 — 상태로 국면 자동 감지: `main`이고 워킹트리 깨끗 → **setup**(이슈 번호를 물어봄),
   feature 워크트리에 변경 있음 → **finish**, PR 머지됐고 워크트리 남음 → **cleanup**.
@@ -100,7 +100,24 @@ description: >-
 
    `--no-verify`는 절대 쓰지 않는다(가드가 차단하며, pre-commit 훅을 우회하면 안 된다).
 
-3. **Push.**
+3. **main 동기화 (필요 시).** 브랜치를 딴 뒤 main이 앞서갔을 수 있다 — PR 충돌을 미리
+   없애려면 최신 main을 브랜치에 합친다:
+
+   ```bash
+   git -C <WT> fetch origin
+   git -C <WT> merge origin/main --no-edit
+   ```
+
+   - 충돌이 없으면 그대로 진행한다.
+   - **충돌이 나면 자동으로 봉합하지 않는다.** 충돌 파일
+     (`git -C <WT> diff --name-only --diff-filter=U`)을 사용자에게 보여주고 해결을 맡긴다.
+     버전 bump·문서 같이 명백히 기계적인 충돌만 직접 해결하고, 코드 로직 충돌은 반드시
+     사용자 확인을 받는다. 해결 후 `git -C <WT> add <파일>` →
+     `git -C <WT> commit --no-edit`(머지 커밋)로 마무리한다.
+   - 깔끔한 히스토리를 원하면 merge 대신 `git -C <WT> rebase origin/main`. 단 이후 push는
+     `--force-with-lease`가 필요하다(`--force`는 가드가 차단).
+
+4. **Push.**
 
    ```bash
    git -C <WT> push -u origin <BRANCH>
@@ -108,7 +125,7 @@ description: >-
 
    재푸시로 히스토리를 덮어야 하면 `--force`가 아니라 `--force-with-lease`만 쓴다.
 
-4. **PR 생성.** head 브랜치가 있는 `<WT>` 안에서 실행한다. 본문에 `Closes #<N>`:
+5. **PR 생성.** head 브랜치가 있는 `<WT>` 안에서 실행한다. 본문에 `Closes #<N>`:
 
    ```bash
    (cd <WT> && gh pr create --base main --head <BRANCH> \
