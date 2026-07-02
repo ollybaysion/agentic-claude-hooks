@@ -11,7 +11,7 @@ under `skills/`.
 | --- | --- | --- | --- |
 | [`lint`](core/lint/README.md) | PostToolUse | ✅ active | Lint/format-check files by extension (md, json/yaml, js/ts, sh, html, py) |
 | [`bash-guard`](core/bash-guard/README.md) | PreToolUse | ✅ active | Block dangerous shell commands (rm -rf, disk destruction, secret leaks) + style nudges (grep→rg, find→fd, cat→Read, …) |
-| [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push + --no-verify |
+| [`git-guard`](core/git-guard/README.md) | PreToolUse | ✅ active | Block direct work on main/master (edits, commits, pushes) + force push + --no-verify + agent-initiated PR merges (`gh pr merge`, `gh api` PUT merge, `git merge` on main) |
 | [`tdd-guard`](core/tdd-guard/README.md) | PreToolUse | 🚧 placeholder | (developed elsewhere — slot reserved) |
 | [`context`](core/context/README.md) | SessionStart + UserPromptSubmit | ✅ active | Inject dynamic project context — git state (SessionStart) + current time (UserPromptSubmit) |
 | [`send-event`](core/send-event/README.md) | all 9 events | ✅ active | Forward every hook event to the local observability collector (never blocks) |
