@@ -21,9 +21,10 @@ The hook only ever injects context; it never blocks (always exits 0).
 | --- | --- | --- | --- |
 | `git` | SessionStart | on | branch, short SHA, uncommitted files (head 20), recent commits |
 | `time` | UserPromptSubmit | on | current date/time (counteracts the model's knowledge cutoff) |
+| `keyword-docs` | UserPromptSubmit | off (opt-in) | docs whose keywords match the prompt, from `.claude/context-docs.json` (local, deterministic) |
 
-`project-files`, `keyword-docs`, `db-schema`, and tool-time providers are
-designed in [DESIGN.md](DESIGN.md) and tracked as issues — not yet shipped.
+`project-files`, `db-schema`, and tool-time providers are designed in
+[DESIGN.md](DESIGN.md) and tracked as issues — not yet shipped.
 
 ## Requirement
 
@@ -49,6 +50,35 @@ Zero config required — the defaults above work out of the box. To customize, a
 - `{ "providers": [] }` → kill switch (inject nothing, exit 0).
 - Unknown provider ids are ignored, so referencing a not-yet-shipped provider is
   a harmless no-op.
+
+### `keyword-docs` (opt-in)
+
+Enable it, then create the index it reads:
+
+```json
+{
+  "id": "keyword-docs",
+  "priority": 50,
+  "params": { "index": ".claude/context-docs.json", "maxDocs": 2, "maxCharsEach": 1200 }
+}
+```
+
+`<project>/.claude/context-docs.json` maps keywords to a doc, injected only when
+the prompt mentions them:
+
+```json
+[
+  { "keywords": ["migration", "schema", "alembic"], "path": "docs/db-schema.md" },
+  { "keywords": ["auth", "jwt", "session"], "path": "docs/auth.md" }
+]
+```
+
+- `params.match`: `"word"` (default — word-boundary and plural-tolerant, so
+  `migration` also matches `migrations`; multi-word keywords match as phrases),
+  `"exact"`, or `"substring"`.
+- `params.dedup` (default on): a doc injected this session is not re-injected
+  within `params.dedupTtlMs` (default 15m); it returns after the TTL or in a new
+  session. No match injects nothing (no tokens).
 
 ## Testing locally
 
