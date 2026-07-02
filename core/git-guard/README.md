@@ -5,7 +5,7 @@
 - **Event**: `PreToolUse` (matcher `Bash` + `Write|Edit|MultiEdit`)
 - **Mechanism**: 위반 시 구조화된 `permissionDecision:"deny"` + 타입화된 이유 (stdout JSON + exit 0) — bash-guard와 동일
 - **Requirement**: Node.js + `git` (PATH). git 저장소가 아니거나 git이 없으면 **fail-open**
-- **복합명령 분리**: 따옴표 문자열(커밋 메시지 등)을 먼저 제거한 뒤 `;` `&&` `||` `|` 줄바꿈으로 쪼개 **각 조각을 독립 검사**. 전체 명령을 한 덩어리로 안 봐서, 한 조각의 `git push`가 다른 조각(예: 커밋 메시지 속 "main"/"--force")과 오탐으로 엮이지 않음
+- **argv 기반 탐지**: 명령을 `;` `&&` `||` `|` `&` 줄바꿈·명령치환(`$(…)`/백틱)으로 쪼개 **각 조각을 따옴표 인식 argv로 토큰화**한 뒤, 실제 `git` 서브커맨드(`push`/`commit`)일 때만 규칙을 건다. 단어 `git`·`push`·`main`이 인자·메시지에 **우연히 함께 나온다고** 걸리지 않음 — 예: `git show main:push.txt`, `gh pr create --body "…push…main…"`은 통과. `push` 대상은 refspec 목적지에서만, `main`/`master`를 매칭
 - **범위**: main 보호 + force-push + `--no-verify`. `reset --hard`·`clean`·`checkout .`은 **bash-guard** 소관
 
 ## 차단 규칙
