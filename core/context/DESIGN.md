@@ -204,7 +204,11 @@ core/context/
 │   └── providers/
 │       ├── git.mjs          # SessionStart: 브랜치·SHA·dirty·최근 커밋
 │       ├── time.mjs         # UserPromptSubmit: 현재 시각
-│       └── keyword-docs.mjs # UserPromptSubmit(옵트인): 프롬프트 맞춤 문서 + dedup
+│       ├── keyword-docs.mjs # UserPromptSubmit(옵트인): 프롬프트 맞춤 문서 + dedup
+│       │                    #   + makeKeywordDocsProvider 팩토리 (상속 지점)
+│       ├── msg-format.mjs   # keyword-docs 인스턴스: 설비 커맨드 → 메시지 포맷 문서
+│       ├── db-schema.mjs    # keyword-docs 인스턴스: DB명 → 스키마 문서 (#22 v1)
+│       └── domain-docs.mjs  # keyword-docs 인스턴스: 도메인 용어(TSUM 등) → 문서
 ├── DESIGN.md                # 이 문서
 └── README.md                # 사용법 + .claude/context.json 형식
 ```
@@ -343,7 +347,7 @@ keyword-docs(50) > time(40).
 
 ---
 
-## 8. 프로바이더 3종 (기본 `git`·`time` / 옵트인 `keyword-docs`)
+## 8. 프로바이더 (기본 `git`·`time` / 옵트인 `keyword-docs` + 상속 인스턴스 3종)
 
 ### `git` — SessionStart, prio 90 · **기본** (휘발성 git 사실은 전부 여기)
 
@@ -412,8 +416,16 @@ export default {
   (`→ path — related doc …; Read it if relevant`, ~20토큰) — 관련이 진짜면 모델이
   직접 Read한다. 넓어서 못 믿지만 지우긴 아까운 키워드의 중간 지대: 오탐 비용이
   ~500토큰에서 ~20토큰으로 준다. 존재하지 않는 파일은 포인터도 안 낸다. dedup 동일 적용.
+- **상속 인스턴스** (`makeKeywordDocsProvider` 팩토리): 같은 엔진에 자기 인덱스
+  파일·id·우선순위만 다른 명명 인스턴스를 얇은 파일 하나로 만든다. v1 인스턴스 3종
+  (전부 옵트인): `msg-format`(설비 커맨드→메시지 포맷, prio 65) ·
+  `db-schema`(DB명→스키마 문서, prio 60 — #22의 파일 기반 v1) ·
+  `domain-docs`(도메인 용어 TSUM/Interlock→개념 문서, prio 55). 인스턴스별 `## <id>`
+  헤더로 주입되고, 엔진 기능(매칭·dedup·precision·stats) 전부 동일 적용.
+  **인덱스는 매 턴 다시 읽으므로 문서 추가 = 인덱스 한 줄 append, 즉시 적용.**
+  새 카테고리 추가 = 팩토리 호출 파일 하나 + registry 한 줄.
 - **주입 stats — 오탐 프루닝 layer 1** (이슈 #32): 실제 주입마다
-  `{ts, session, 발화 키워드, path, mode: full|link}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
+  `{ts, session, 발화 키워드, path, mode: full|link, index}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
   append(`lib/stats.mjs`). 오탐 1회 = ~500토큰인데 주입이 조용해서 유저가 못 보므로,
   **키워드 단위 누적**으로 반복 오탐을 가시화하는 것이 목적. **기록만** 한다 — 판정
   신호(layer 2)·리포트/mute(layer 3)는 후속. dedup으로 억제된 매치는 기록하지
@@ -525,7 +537,9 @@ v1 본질을 안 건드리는, 자연스러운 확장 슬롯. 전부 **프로바
   **상태가 필요**하므로 `os.tmpdir()` 키잉(§10).
 - **`gh-context`** — SessionStart. `gh pr list`/`gh issue list`. 네트워크라 **TTL
   캐시** 필수, 매턴 금지.
-- **`db-schema`** — SessionStart. 스키마 introspection을 요약해 주입.
+- **`db-schema` introspection** — 파일 기반 v1은 상속 인스턴스로 출시됨(§8).
+  이슈 #22에 남은 범위: 라이브 introspection + 캐시(TTL) + 마이그레이션 파일 변경
+  시 무효화 + 스키마 요약 — "문서를 손으로 갱신"을 "자동 introspection"으로.
 - **벡터 RAG** — `keyword-docs`를 로컬 임베딩 인덱스로 교체(50–500ms; 매턴 예산 관리).
 - **`env-persister`** — `CLAUDE_ENV_FILE`에 `export VAR=val` append(SessionStart/Setup/
   CwdChanged/FileChanged 제공, best-effort). 컨텍스트가 아니라 env 지속 — 별도 관심사.

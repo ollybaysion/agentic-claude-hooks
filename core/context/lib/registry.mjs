@@ -8,8 +8,13 @@
 import git from "./providers/git.mjs";
 import time from "./providers/time.mjs";
 import keywordDocs from "./providers/keyword-docs.mjs";
+import msgFormat from "./providers/msg-format.mjs";
+import dbSchema from "./providers/db-schema.mjs";
+import domainDocs from "./providers/domain-docs.mjs";
 
-const REGISTRY = Object.fromEntries([git, time, keywordDocs].map((p) => [p.id, p]));
+const REGISTRY = Object.fromEntries(
+  [git, time, keywordDocs, msgFormat, dbSchema, domainDocs].map((p) => [p.id, p])
+);
 
 export function selectProviders(cfg, event) {
   return (cfg.providers ?? [])
