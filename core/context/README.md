@@ -143,6 +143,12 @@ To register a new doc the guided way, run
 your config, proposes keywords, collision-checks every index file, and appends
 only after your approval.
 
+To create the doc itself from a template (and register it in the same pass),
+run `/claude-hooks:keyword-docs-new-docs [category] [name]` — per-category
+templates (`msg-format` / `db-schema` / `domain`) front-load the injection
+window, slots are filled by interview or code extraction, and the add-index
+flow runs at the end.
+
 ## Testing locally
 
 ```bash
