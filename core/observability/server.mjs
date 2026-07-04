@@ -2,10 +2,11 @@
 // Observability collector — receives every Claude Code hook event over HTTP,
 // stores it, and (later) streams it live to a dashboard.
 //
-// This file is built in stages (see docs/agent-dashboard-collector-design.md §10).
-// Implemented here: STAGE 0 (skeleton + lifecycle) and STAGE 1 (non-blocking
-// ingest core, no DB yet). SQLite (stage 2), redaction (stage 3), SSE (stage 4),
-// and the query API + dashboard (stage 5) slot into the marked TODO seams.
+// This file is built in stages (see docs/agent-dashboard-collector-design.md §10
+// for 0-6 and docs/agent-dashboard-analysis-design.md for 7+). Implemented here:
+// skeleton + lifecycle (0), non-blocking ingest (1), SQLite WAL storage (2),
+// redaction (3), SSE (4), query API + dashboard (5), and the read-only stats
+// aggregation API (7). Auto-start (6) lives in core/obs-lazy-start/.
 //
 // Invariants held from the start (design §2, §11):
 //   • single monotonic seq (ingest seq = future store PK = future SSE id = cursor)
@@ -26,7 +27,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.1.0";
+const VERSION = "0.2.0"; // 0.2: stats/aggregation API (stage 7)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -50,6 +51,12 @@ const GRACE_MS = intEnv("OBS_SHUTDOWN_GRACE_MS", 3000);
 const MAX_AGE_MS = intEnv("OBS_MAX_AGE_DAYS", 7) * 86_400_000;
 const MAX_ROWS = intEnv("OBS_MAX_ROWS", 500_000);
 const MAX_DB_BYTES = intEnv("OBS_MAX_DB_MB", 1024) * 1024 * 1024;
+
+// stats idle threshold (analysis design §3): a Pre with no Post older than this
+// is an "orphan" (hook deny / user reject / crash — indistinguishable here), and
+// a session idle longer than this is no longer "active". Raise it if
+// long-running Bash calls (builds) show up as false orphans.
+const ACTIVE_MS = intEnv("OBS_ACTIVE_MS", 600_000);
 
 // Auth is OFF by default (single-user box trusts loopback — design §8, decision).
 // Turn it on by exporting a non-empty OBS_TOKEN, or by putting {token} in
@@ -344,7 +351,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 1;");
+  impl.exec("PRAGMA user_version = 2;"); // v2 = + v_tool_calls view (stage 7)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -357,6 +364,23 @@ function initSchema(impl) {
   impl.exec("CREATE INDEX IF NOT EXISTS idx_app_time  ON events(source_app, received_at)");
   impl.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dedup ON events(tool_use_id, hook_event_type)
     WHERE tool_use_id IS NOT NULL`);
+  // One Pre/Post pair per row, for /stats/tools. A view costs no storage;
+  // idx_dedup (partial unique) serves the post-side lookup, idx_type_time the
+  // pre-side scan. ended_at IS NULL = still running / denied / crashed.
+  impl.exec(`CREATE VIEW IF NOT EXISTS v_tool_calls AS
+    SELECT
+      pre.tool_use_id                    AS tool_use_id,
+      pre.session_id                     AS session_id,
+      pre.source_app                     AS source_app,
+      pre.tool_name                      AS tool_name,
+      pre.received_at                    AS started_at,
+      post.received_at                   AS ended_at,
+      post.received_at - pre.received_at AS duration_ms,
+      post.error                         AS error
+    FROM events pre
+    LEFT JOIN events post
+      ON post.tool_use_id = pre.tool_use_id AND post.hook_event_type = 'PostToolUse'
+    WHERE pre.hook_event_type = 'PreToolUse' AND pre.tool_use_id IS NOT NULL`);
 }
 
 function toRow(r) {
@@ -718,6 +742,134 @@ function handleEventById(req, res, idStr) {
   json(res, 200, rowToEvent(row));
 }
 
+// ── stats API (read-only aggregates — analysis design §4) ───────────────────
+// Same gates as the query API; degraded (db=null) answers empty-but-200; and no
+// query here ever SELECTs the payload column (the widest one). The hot path
+// (POST /events) is untouched by this whole section.
+const WINDOW_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000 };
+
+function statsGate(req, res) {
+  if (!hostOk(req)) { json(res, 421, { error: "bad host" }); return false; }
+  if (!authed(req)) { json(res, 401, { error: "unauthorized" }); return false; }
+  return true;
+}
+
+// window=1h|6h|24h|7d — whitelist only (no free-form parsing), else the default.
+function windowOf(u, def) {
+  return WINDOW_MS[u.searchParams.get("window")] ?? WINDOW_MS[def];
+}
+
+// p-th percentile of an ASC-sorted array (nearest-rank; null on empty).
+function pct(sorted, p) {
+  if (!sorted.length) return null;
+  return sorted[Math.max(0, Math.ceil(sorted.length * p) - 1)];
+}
+
+function handleStatsOverview(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "24h");
+  const bucket_ms = window_ms <= WINDOW_MS["1h"] ? 60_000 : 3_600_000;
+  if (!db) return json(res, 200, { window_ms, bucket_ms, events: 0, errors: 0, sessions: 0, sessions_active: 0, by_event_type: {}, buckets: [] });
+  const now = Date.now(), since = now - window_ms;
+  try {
+    const by_event_type = {};
+    let events = 0;
+    for (const r of db.impl.prepare(
+      "SELECT hook_event_type t, COUNT(*) c FROM events WHERE received_at >= ? GROUP BY hook_event_type"
+    ).all(since)) { by_event_type[r.t] = Number(r.c); events += Number(r.c); }
+    const errors = Number(db.impl.prepare(
+      "SELECT COUNT(*) c FROM events WHERE received_at >= ? AND hook_event_type = 'PostToolUse' AND error IS NOT NULL"
+    ).get(since).c);
+    const sess = db.impl.prepare(
+      "SELECT MAX(received_at) last_at, MAX(hook_event_type = 'SessionEnd') ended FROM events WHERE received_at >= ? GROUP BY session_id"
+    ).all(since);
+    const sessions_active = sess.filter((s) => !Number(s.ended) && Number(s.last_at) >= now - ACTIVE_MS).length;
+    // bucket_ms is INLINED, not bound: node:sqlite binds JS numbers as REAL, so
+    // a bound `received_at / ?` becomes float division and never buckets.
+    // Safe to template — bucket_ms only comes from the two-value whitelist above.
+    const buckets = db.impl.prepare(
+      `SELECT (received_at / ${bucket_ms}) * ${bucket_ms} t, COUNT(*) count,
+              SUM(hook_event_type = 'PostToolUse' AND error IS NOT NULL) errors
+       FROM events WHERE received_at >= ? GROUP BY t ORDER BY t`
+    ).all(since).map((b) => ({ t: Number(b.t), count: Number(b.count), errors: Number(b.errors) }));
+    json(res, 200, { window_ms, bucket_ms, events, errors, sessions: sess.length, sessions_active, by_event_type, buckets });
+  } catch (e) { logSafe("stats overview", e); json(res, 500, { error: "query failed" }); }
+}
+
+function handleStatsSessions(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  if (!db) return json(res, 200, { window_ms, count: 0, sessions: [] });
+  const now = Date.now(), since = now - window_ms;
+  let limit = Math.trunc(Number(u.searchParams.get("limit"))) || 50;
+  limit = Math.min(Math.max(1, limit), 200);
+  const app = u.searchParams.get("source_app");
+  const where = app ? "received_at >= ? AND source_app = ?" : "received_at >= ?";
+  const params = app ? [since, app] : [since];
+  try {
+    // boolean SUM = 0/1 rollup (analysis design §3.2)
+    const sessions = db.impl.prepare(
+      `SELECT session_id, source_app,
+         MIN(received_at)                                         started_at,
+         MAX(received_at)                                         last_at,
+         SUM(hook_event_type = 'UserPromptSubmit')                turns,
+         SUM(hook_event_type = 'PreToolUse')                      tool_calls,
+         SUM(hook_event_type = 'PostToolUse' AND error IS NOT NULL) errors,
+         SUM(hook_event_type = 'PreCompact')                      precompacts,
+         SUM(hook_event_type = 'SubagentStop')                    subagents,
+         MAX(hook_event_type = 'SessionEnd')                      ended
+       FROM events WHERE ${where}
+       GROUP BY session_id ORDER BY last_at DESC LIMIT ?`
+    ).all(...params, limit).map((r) => ({
+      session_id: r.session_id, source_app: r.source_app,
+      started_at: Number(r.started_at), last_at: Number(r.last_at),
+      duration_ms: Number(r.last_at) - Number(r.started_at),
+      turns: Number(r.turns), tool_calls: Number(r.tool_calls), errors: Number(r.errors),
+      precompacts: Number(r.precompacts), subagents: Number(r.subagents),
+      ended: !!Number(r.ended),
+      active: !Number(r.ended) && Number(r.last_at) >= now - ACTIVE_MS,
+    }));
+    json(res, 200, { window_ms, count: sessions.length, sessions });
+  } catch (e) { logSafe("stats sessions", e); json(res, 500, { error: "query failed" }); }
+}
+
+function handleStatsTools(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "24h");
+  if (!db) return json(res, 200, { window_ms, count: 0, tools: [] });
+  const now = Date.now(), since = now - window_ms;
+  const app = u.searchParams.get("source_app");
+  const where = app ? "started_at >= ? AND source_app = ?" : "started_at >= ?";
+  const params = app ? [since, app] : [since];
+  try {
+    // percentiles in JS — SQLite has none built in; the window keeps this bounded.
+    const byTool = new Map();
+    for (const r of db.impl.prepare(
+      `SELECT tool_name, duration_ms, error, ended_at, started_at FROM v_tool_calls WHERE ${where}`
+    ).all(...params)) {
+      const name = r.tool_name || "unknown";
+      let t = byTool.get(name);
+      if (!t) byTool.set(name, (t = { tool_name: name, calls: 0, errors: 0, orphans: 0, pending: 0, durations: [] }));
+      t.calls++;
+      if (r.error != null) t.errors++;
+      if (r.ended_at == null) {
+        // no Post yet: recent = pending (still running), old = orphan
+        if (Number(r.started_at) < now - ACTIVE_MS) t.orphans++;
+        else t.pending++;
+      } else t.durations.push(Number(r.duration_ms));
+    }
+    const tools = [...byTool.values()].map((t) => {
+      const d = t.durations.sort((a, b) => a - b);
+      return {
+        tool_name: t.tool_name, calls: t.calls, errors: t.errors,
+        orphans: t.orphans, pending: t.pending,
+        p50_ms: pct(d, 0.5), p95_ms: pct(d, 0.95), max_ms: d.length ? d[d.length - 1] : null,
+      };
+    }).sort((a, b) => b.calls - a.calls);
+    json(res, 200, { window_ms, count: tools.length, tools });
+  } catch (e) { logSafe("stats tools", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
 // Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
 // renders every value via textContent (never innerHTML), so attacker-influenced
@@ -827,6 +979,13 @@ function onRequest(req, res) {
     if (pathname === "/stream") {
       if (req.method === "GET") return handleStream(req, res);
       return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+    }
+    if (pathname.startsWith("/stats/")) {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+      if (pathname === "/stats/overview") return handleStatsOverview(req, res, u);
+      if (pathname === "/stats/sessions") return handleStatsSessions(req, res, u);
+      if (pathname === "/stats/tools") return handleStatsTools(req, res, u);
+      return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
