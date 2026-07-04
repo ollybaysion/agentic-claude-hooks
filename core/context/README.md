@@ -23,8 +23,9 @@ The hook only ever injects context; it never blocks (always exits 0).
 | `time` | UserPromptSubmit | on | current date/time (counteracts the model's knowledge cutoff) |
 | `keyword-docs` | UserPromptSubmit | off (opt-in) | docs whose keywords match the prompt, from `.claude/context-docs.json` (local, deterministic) |
 
-`project-files`, `db-schema`, and tool-time providers are designed in
-[DESIGN.md](DESIGN.md) and tracked as issues — not yet shipped.
+`db-schema` and tool-time providers are designed in [DESIGN.md](DESIGN.md) and
+tracked as issues — not yet shipped. (A `project-files` provider was considered
+and rejected — CLAUDE.md `@imports` cover it; see DESIGN.md §12.)
 
 ## Requirement
 

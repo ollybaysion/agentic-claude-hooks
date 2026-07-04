@@ -46,8 +46,8 @@ CLAUDE.md(및 `@경로` import·계층 병합)가 이미 자동 로드로 처리
 
 경험칙: **한 번 쓰고 안 바뀌면 CLAUDE.md. 매번/세션마다 계산돼야 하거나, 지시가
 아니라 *정보*로 제시하고 싶으면 훅.** 그래서 기본 프로바이더는 CLAUDE.md가 원천적으로
-못 하는 `git`·`time` 둘뿐이고, 파일 내용을 넣는 `project-files`는 CLAUDE.md와 겹치므로
-**기본이 아니라 옵트인**이다(§4·§8).
+못 하는 `git`·`time` 둘뿐이다. (표준 파일을 통째 주입하는 `project-files` 안은 이
+경계에 걸려 **기각**됐다 — §12.)
 
 ---
 
@@ -157,10 +157,7 @@ SessionStart (startup/resume/clear/compact)   UserPromptSubmit (매 턴)
     { "id": "git",  "priority": 90 },          // 기본
     { "id": "time", "priority": 40 },          // 기본
 
-    // 아래 둘은 옵트인(기본 OFF) — 이 프로젝트가 명시적으로 켠 예:
-    { "id": "project-files", "priority": 70,   // CLAUDE.md와 겹치므로 기본이 아님 (§1 경계)
-      "params": { "paths": [".claude/CONTEXT.md", "TODO.md", ".claude-requirements"],
-                  "maxCharsEach": 1500 } },
+    // 옵트인(기본 OFF) — 이 프로젝트가 명시적으로 켠 예:
     { "id": "keyword-docs", "priority": 50,    // 로컬 전용 RAG-lite
       "params": { "index": ".claude/context-docs.json", "maxDocs": 2, "maxCharsEach": 1200 } }
   ]
@@ -176,7 +173,7 @@ SessionStart (startup/resume/clear/compact)   UserPromptSubmit (매 턴)
 
 ```jsonc
 // 내장 DEFAULT_PROFILE (config.mjs 상단 상수 — bash-guard처럼 "코드 위 const" 편집 가능)
-// CLAUDE.md가 원천적으로 못 하는 git·time 둘만. project-files·keyword-docs는 옵트인(§1 경계).
+// CLAUDE.md가 원천적으로 못 하는 git·time 둘만. keyword-docs는 옵트인(§1 경계).
 { "providers": [
     { "id": "git",  "priority": 90 },
     { "id": "time", "priority": 40 } ] }
@@ -205,7 +202,6 @@ core/context/
 │   ├── ledger.mjs           # os.tmpdir() 상태(keyword-docs dedup 등). §10
 │   └── providers/
 │       ├── git.mjs          # SessionStart: 브랜치·SHA·dirty·최근 커밋
-│       ├── project-files.mjs# SessionStart: 표준 파일 첫 존재분 (옵트인)
 │       ├── time.mjs         # UserPromptSubmit: 현재 시각
 │       └── keyword-docs.mjs # UserPromptSubmit(옵트인): 프롬프트 맞춤 문서 + dedup
 ├── DESIGN.md                # 이 문서
@@ -341,12 +337,12 @@ export function budgetFragments(fragments, budget) {
 }
 ```
 
-우선순위는 "예산이 부족할 때 **무엇이 먼저 살아남는가**"다. git(90) > project-files(70)
-> keyword-docs(50) > time(40).
+우선순위는 "예산이 부족할 때 **무엇이 먼저 살아남는가**"다. git(90) >
+keyword-docs(50) > time(40).
 
 ---
 
-## 8. 프로바이더 4종 (기본 `git`·`time` / 옵트인 `project-files`·`keyword-docs`)
+## 8. 프로바이더 3종 (기본 `git`·`time` / 옵트인 `keyword-docs`)
 
 ### `git` — SessionStart, prio 90 · **기본** (휘발성 git 사실은 전부 여기)
 
@@ -380,36 +376,6 @@ export default {
 ```
 
 **구조화된 좁은 필드만** 낸다 — 원시 `git diff` 덤프는 안 넣는다(§10 인젝션 표면).
-
-### `project-files` — SessionStart, prio 70 · **옵트인 (기본 OFF)**
-
-> **기본이 아닌 이유**: 이 프로바이더가 주입하는 표준 파일(`.claude/CONTEXT.md`,
-> `TODO.md`, `.claude-requirements`)은 대부분 **CLAUDE.md + `@경로` import로 이미
-> 커버**된다(§1 경계). 그래서 기본에서 뺐다. 진짜 니치는 셋뿐이다: (a) 지시가 아니라
-> *데이터*로 제시하고 싶은 파일(격리 헤더로 감쌈), (b) `@import`로 넣기엔 계산·조건부
-> 선택이 필요한 파일, (c) 신뢰 못 할 정보성 파일. 이 니치가 필요할 때만 설정으로 켠다.
-
-허용목록의 **첫 존재 파일 하나**를 `maxCharsEach`로 잘라 파일명 헤더와 함께 주입.
-기본 목록 `[.claude/CONTEXT.md, TODO.md, .claude-requirements]`. 세션당 한 번 로드되는
-안정 컨텍스트라 compact 후 정확히 재주입된다.
-
-```js
-// core/context/lib/providers/project-files.mjs
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-export default {
-  id: "project-files", events: ["SessionStart"], defaultPriority: 70,
-  async run({ cwd, params }) {
-    const paths = params.paths ?? [".claude/CONTEXT.md", "TODO.md", ".claude-requirements"];
-    const cap = params.maxCharsEach ?? 1500;
-    for (const rel of paths) {
-      try { return { text: `--- ${rel} ---\n${readFileSync(join(cwd, rel), "utf8").slice(0, cap)}` }; }
-      catch { /* 다음 후보 */ }
-    }
-    return null;
-  },
-};
-```
 
 ### `time` — UserPromptSubmit, prio 40
 
@@ -551,6 +517,13 @@ v1 본질을 안 건드리는, 자연스러운 확장 슬롯. 전부 **프로바
 - **`env-persister`** — `CLAUDE_ENV_FILE`에 `export VAR=val` append(SessionStart/Setup/
   CwdChanged/FileChanged 제공, best-effort). 컨텍스트가 아니라 env 지속 — 별도 관심사.
 
+기각된 안 (재제안 방지용 기록):
+
+- **`project-files`** — 기각 (2026-07-04, 이슈 #20 닫힘). 표준 파일(SessionStart) 주입은
+  **CLAUDE.md `@경로` import가 이미 커버**하고, 남는 니치(데이터 프레이밍·조건부 선택·
+  compact 재수화)에 실수요가 없었다. 같은 요구가 다시 생기면 새 프로바이더가 아니라
+  CLAUDE.md `@import`부터 검토할 것.
+
 ---
 
 ## 13. 와이어링
@@ -592,7 +565,7 @@ observability 훅(`obs-lazy-start`·`send-event`)이 등록돼 있으므로, 이
 - [ ] `core/context/lib/config.mjs` (+ `DEFAULT_PROFILE`, `DEFAULT_BUDGET`, 킬 스위치, §4)
 - [ ] `core/context/lib/registry.mjs` (id→provider, 정적 import, §5)
 - [ ] `core/context/lib/budget.mjs` (순수, 삼중 방어, §7)
-- [ ] `core/context/lib/providers/{git,project-files,time,keyword-docs}.mjs` (§8)
+- [ ] `core/context/lib/providers/{git,time,keyword-docs}.mjs` (§8)
 - [ ] `core/context/README.md` (사용법 + `.claude/context.json` / `.claude/context-docs.json` 형식)
 - [ ] `hooks/hooks.json`에 SessionStart·UserPromptSubmit 항목 (§13)
 - [ ] 최상위 `README.md` Modules 표 갱신 (§13)
