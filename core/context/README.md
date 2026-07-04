@@ -69,7 +69,7 @@ the prompt mentions them:
 ```json
 [
   { "keywords": ["migration", "schema", "alembic"], "path": "docs/db-schema.md" },
-  { "keywords": ["auth", "jwt", "session"], "path": "docs/auth.md" }
+  { "keywords": ["auth", "jwt", "session"], "path": "docs/auth.md", "precision": 0.5 }
 ]
 ```
 
@@ -79,6 +79,11 @@ the prompt mentions them:
 - `params.dedup` (default on): a doc injected this session is not re-injected
   within `params.dedupTtlMs` (default 15m); it returns after the TTL or in a new
   session. No match injects nothing (no tokens).
+- `precision` (per index entry, default `1`): how confident the keyword→doc
+  mapping is. `1` injects the doc slice; `< 1` (e.g. `0.5`) injects only a
+  one-line pointer (`→ docs/auth.md — related doc …; Read it if relevant`,
+  ~20 tokens) so the model pulls the doc itself only when actually relevant.
+  Use it for broad keywords you don't want to delete but don't fully trust.
 
 ### Injection stats (false-positive pruning, layer 1)
 
@@ -86,7 +91,7 @@ Every actual injection appends one JSON line to
 `~/.claude/context-stats/<project-hash>.jsonl`:
 
 ```json
-{ "ts": 1751600000000, "session": "abc", "keywords": ["mcp"], "path": "docs/x.md" }
+{ "ts": 1751600000000, "session": "abc", "keywords": ["mcp"], "path": "docs/x.md", "mode": "full" }
 ```
 
 `keywords` holds the keyword(s) that fired — accumulate a few weeks and

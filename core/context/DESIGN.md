@@ -186,7 +186,7 @@ SessionStart (startup/resume/clear/compact)   UserPromptSubmit (매 턴)
 
 ```jsonc
 [ { "keywords": ["migration", "schema", "alembic"], "path": "docs/db-schema.md" },
-  { "keywords": ["auth", "jwt", "session"],          "path": "docs/auth.md" } ]
+  { "keywords": ["auth", "jwt", "session"],          "path": "docs/auth.md", "precision": 0.5 } ]
 ```
 
 ---
@@ -441,8 +441,13 @@ export default {
   `dedupTtlMs`(기본 15분) 안엔 재주입하지 않는다(연속 턴에 같은 주제를 말해도 이미
   컨텍스트에 있는 걸 또 안 넣음). 새 세션이거나 TTL 경과(스크롤아웃 추정) 후 재주입.
   상태는 `lib/ledger.mjs`가 세션별로 `os.tmpdir()`에 둔다(best-effort, §10).
+- **정밀도**(`precision`, 엔트리별, 기본 1): 키워드→문서 매핑의 확신도이자 주입량.
+  `1` = 문서 슬라이스 전체, `< 1`(예: 0.5) = **한 줄 포인터만**
+  (`→ path — related doc …; Read it if relevant`, ~20토큰) — 관련이 진짜면 모델이
+  직접 Read한다. 넓어서 못 믿지만 지우긴 아까운 키워드의 중간 지대: 오탐 비용이
+  ~500토큰에서 ~20토큰으로 준다. 존재하지 않는 파일은 포인터도 안 낸다. dedup 동일 적용.
 - **주입 stats — 오탐 프루닝 layer 1** (이슈 #32): 실제 주입마다
-  `{ts, session, 발화 키워드, path}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
+  `{ts, session, 발화 키워드, path, mode: full|link}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
   append(`lib/stats.mjs`). 오탐 1회 = ~500토큰인데 주입이 조용해서 유저가 못 보므로,
   **키워드 단위 누적**으로 반복 오탐을 가시화하는 것이 목적. **기록만** 한다 — 판정
   신호(layer 2)·리포트/mute(layer 3)는 후속. dedup으로 억제된 매치는 기록하지

@@ -19,12 +19,20 @@
 // re-injects on a new session or after the TTL (when the doc has likely scrolled
 // off). State is per-session in os.tmpdir() (see lib/ledger.mjs), best-effort.
 //
+// Precision (per index entry, default 1): how confident the keyword→doc
+// mapping is, and therefore how much to inject.
+//   precision 1 (or omitted) - inject the doc content (clipped slice).
+//   precision < 1 (e.g. 0.5) - inject only a one-line LINK ("this doc is
+//                              related — Read it if relevant"), ~20 tokens.
+// Low-confidence keywords stay useful without paying the full-slice cost on
+// every misfire; the model pulls the doc itself only when actually relevant.
+//
 // Stats (오탐 프루닝 layer 1, issue #32): every ACTUAL injection appends one
-// line {ts, session, keywords(fired), path} to ~/.claude/context-stats/ (see
-// lib/stats.mjs). Recording only, best-effort; dedup-suppressed matches are
-// not recorded (they cost no tokens).
+// line {ts, session, keywords(fired), path, mode: "full"|"link"} to
+// ~/.claude/context-stats/ (see lib/stats.mjs). Recording only, best-effort;
+// dedup-suppressed matches are not recorded (they cost no tokens).
 
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadLedger, saveLedger } from "../ledger.mjs";
 import { recordInjection } from "../stats.mjs";
@@ -74,7 +82,8 @@ export default {
       const matched = keywords.filter((k) => matcherFor(k, mode)(lower, words));
       if (matched.length === 0) continue;
       seenPath.add(entry.path);
-      candidates.push({ path: entry.path, matched });
+      const precision = Number.isFinite(Number(entry.precision)) ? Number(entry.precision) : 1;
+      candidates.push({ path: entry.path, matched, precision });
     }
     if (candidates.length === 0) return null; // common case: no ledger I/O at all
 
@@ -93,9 +102,19 @@ export default {
     const maxDocs = params.maxDocs ?? 2;
     const maxCharsEach = params.maxCharsEach ?? 1200;
     const blocks = [];
-    for (const { path, matched } of candidates) {
+    for (const { path, matched, precision } of candidates) {
       if (blocks.length >= maxDocs) break;
       if (dedup && sess.paths[path] && now - sess.paths[path] < ttlMs) continue; // still fresh in context
+
+      // Low precision -> pointer only, the model Reads the doc if it matters.
+      if (precision < 1) {
+        if (!existsSync(join(cwd, path))) continue; // never point at a missing file
+        blocks.push(`→ ${path} — related doc (matched: ${matched.join(", ")}); Read it if relevant.`);
+        if (dedup) sess.paths[path] = now;
+        recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "link" });
+        continue;
+      }
+
       let body;
       try {
         body = readFileSync(join(cwd, path), "utf8").slice(0, maxCharsEach);
@@ -105,7 +124,7 @@ export default {
       if (!body.trim()) continue;
       blocks.push(`--- ${path} ---\n${body}`);
       if (dedup) sess.paths[path] = now;
-      recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path });
+      recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "full" });
     }
 
     if (dedup) saveLedger(cwd, led);
