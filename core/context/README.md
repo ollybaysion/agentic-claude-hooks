@@ -139,7 +139,7 @@ aggregates per keyword, joins transcripts for follow-up rates, and proposes
 removals/narrowings; changes apply only after your approval.
 
 To register a new doc the guided way, run
-`/claude-hooks:keyword-docs-add [doc-path]` — it picks the right instance from
+`/claude-hooks:keyword-docs-add-index [doc-path]` — it picks the right instance from
 your config, proposes keywords, collision-checks every index file, and appends
 only after your approval.
 

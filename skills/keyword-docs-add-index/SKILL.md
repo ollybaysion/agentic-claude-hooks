@@ -1,15 +1,15 @@
 ---
-name: keyword-docs-add
+name: keyword-docs-add-index
 argument-hint: "[문서경로]"
 disable-model-invocation: true
 description: >-
   keyword-docs 계열 인덱스에 문서를 추가한다: 문서를 읽고 → 카테고리(인스턴스)
   선택 → 트리거 키워드 제안 → 전체 인덱스 충돌 검사 → precision 확정 → 승인 후
-  인덱스에 한 항목 append. keyword-docs-prune의 쌍(prune=빼기, add=넣기).
-  /keyword-docs-add 로만 호출된다 (모델 자동 발동 없음).
+  인덱스에 한 항목 append. keyword-docs-prune의 쌍(prune=빼기, add-index=넣기).
+  /keyword-docs-add-index 로만 호출된다 (모델 자동 발동 없음).
 ---
 
-# keyword-docs-add
+# keyword-docs-add-index
 
 `context` 모듈의 keyword-docs 계열 인덱스에 **문서 하나를 등록하는 절차**.
 등록되면 그 키워드가 프롬프트에 등장할 때마다 문서가 자동 주입된다 — 인덱스는
