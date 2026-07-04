@@ -1,7 +1,7 @@
 <!--
 category: db-schema
 인덱스: .claude/context-docs.db-schema.json
-저장 경로: docs/db/<테이블명 소문자>.md
+저장 경로: .claude/docs/db/<테이블명 소문자>.md
 필수 슬롯: 테이블명, 용도, 컬럼표, PK
 선택 슬롯: 보조 인덱스, FK/관계, 대표 쿼리, 마이그레이션 주의
 키워드 기본값: 테이블명 소문자 — 스키마 접두가 있으면 접두 포함/미포함 둘 다 (예: "fab.lot_history", "lot_history")

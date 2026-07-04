@@ -1,7 +1,7 @@
 <!--
 category: msg-format
 인덱스: .claude/context-docs.msg-format.json
-저장 경로: docs/msg/<커맨드명 소문자 kebab>.md (예: CMD_START_LOT → docs/msg/cmd-start-lot.md)
+저장 경로: .claude/docs/msg/<커맨드명 소문자 kebab>.md (예: CMD_START_LOT → .claude/docs/msg/cmd-start-lot.md)
 필수 슬롯: 커맨드명, 방향, 용도, 필드표
 선택 슬롯: 응답/타임아웃, 거부 조건, 예시 페이로드, 에러코드표
 키워드 기본값: 커맨드명 소문자 그대로 (예: cmd_start_lot) — 밑줄 식별자는 한 토큰으로 매치됨
