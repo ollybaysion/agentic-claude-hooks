@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.5.0"; // 0.3: analysis UI (8) · 0.4: token usage (10a) · 0.5: tokens UI (10b)
+const VERSION = "0.5.1"; // 0.3: analysis UI (8) · 0.4: token usage (10a) · 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -809,10 +809,13 @@ function handleStatsOverview(req, res, u) {
     const errors = Number(db.impl.prepare(
       "SELECT COUNT(*) c FROM events WHERE received_at >= ? AND hook_event_type = 'PostToolUse' AND error IS NOT NULL"
     ).get(since).c);
+    // ended only when SessionEnd is the latest event — resumed sessions return to active
     const sess = db.impl.prepare(
-      "SELECT MAX(received_at) last_at, MAX(hook_event_type = 'SessionEnd') ended FROM events WHERE received_at >= ? GROUP BY session_id"
+      "SELECT MAX(received_at) last_at, MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end FROM events WHERE received_at >= ? GROUP BY session_id"
     ).all(since);
-    const sessions_active = sess.filter((s) => !Number(s.ended) && Number(s.last_at) >= now - ACTIVE_MS).length;
+    const sessions_active = sess.filter((s) =>
+      !(s.last_end != null && Number(s.last_end) >= Number(s.last_at)) && Number(s.last_at) >= now - ACTIVE_MS
+    ).length;
     // bucket_ms is INLINED, not bound: node:sqlite binds JS numbers as REAL, so
     // a bound `received_at / ?` becomes float division and never buckets.
     // Safe to template — bucket_ms only comes from the two-value whitelist above.
@@ -846,18 +849,22 @@ function handleStatsSessions(req, res, u) {
          SUM(hook_event_type = 'PostToolUse' AND error IS NOT NULL) errors,
          SUM(hook_event_type = 'PreCompact')                      precompacts,
          SUM(hook_event_type = 'SubagentStop')                    subagents,
-         MAX(hook_event_type = 'SessionEnd')                      ended
+         MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end
        FROM events WHERE ${where}
        GROUP BY session_id ORDER BY last_at DESC LIMIT ?`
-    ).all(...params, limit).map((r) => ({
-      session_id: r.session_id, source_app: r.source_app,
-      started_at: Number(r.started_at), last_at: Number(r.last_at),
-      duration_ms: Number(r.last_at) - Number(r.started_at),
-      turns: Number(r.turns), tool_calls: Number(r.tool_calls), errors: Number(r.errors),
-      precompacts: Number(r.precompacts), subagents: Number(r.subagents),
-      ended: !!Number(r.ended),
-      active: !Number(r.ended) && Number(r.last_at) >= now - ACTIVE_MS,
-    }));
+    ).all(...params, limit).map((r) => {
+      // ended only when SessionEnd is the latest event — resumed sessions return to active
+      const ended = r.last_end != null && Number(r.last_end) >= Number(r.last_at);
+      return {
+        session_id: r.session_id, source_app: r.source_app,
+        started_at: Number(r.started_at), last_at: Number(r.last_at),
+        duration_ms: Number(r.last_at) - Number(r.started_at),
+        turns: Number(r.turns), tool_calls: Number(r.tool_calls), errors: Number(r.errors),
+        precompacts: Number(r.precompacts), subagents: Number(r.subagents),
+        ended,
+        active: !ended && Number(r.last_at) >= now - ACTIVE_MS,
+      };
+    });
     json(res, 200, { window_ms, count: sessions.length, sessions });
   } catch (e) { logSafe("stats sessions", e); json(res, 500, { error: "query failed" }); }
 }
@@ -1294,7 +1301,7 @@ const DASHBOARD_JS = `(function(){
   function fleetNote(ev){ if(!ev.session_id)return; var f=fleet[ev.session_id]||(fleet[ev.session_id]={what:""});
     f.app=ev.source_app; f.last_at=ev.received_at||Date.now();
     f.what=ev.hook_event_type+(ev.tool_name?" "+ev.tool_name:"");
-    if(ev.hook_event_type==="SessionEnd")f.ended=true;
+    f.ended=(ev.hook_event_type==="SessionEnd");
     renderFleet(); }
   function renderFleet(){ var box=$("fleet"), now=Date.now(); box.textContent="";
     var ids=Object.keys(fleet).filter(function(k){ var f=fleet[k]; return !f.ended&&now-f.last_at<FLEET_IDLE; })
@@ -1310,8 +1317,7 @@ const DASHBOARD_JS = `(function(){
       box.appendChild(c); }); }
   function fleetSeed(){ getJson("/stats/sessions?window=1h&limit=50").then(function(d){
       (d.sessions||[]).forEach(function(s){ var f=fleet[s.session_id]||(fleet[s.session_id]={what:""});
-        if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; }
-        if(s.ended)f.ended=true; });
+        if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; f.ended=!!s.ended; } });
       renderFleet(); }).catch(function(){ renderFleet(); });
     // context size per session (compaction pressure) — best-effort, wider window
     getJson("/stats/tokens?window=6h&group=session").then(function(d){
