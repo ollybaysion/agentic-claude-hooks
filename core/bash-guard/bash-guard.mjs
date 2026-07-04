@@ -15,16 +15,59 @@
 // separate git-guard module — keep that boundary.
 
 import { readHookInput, denyPreToolUse, askPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
+import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
+
+const basename = (tok) => tok.slice(tok.lastIndexOf("/") + 1);
+
+// Shells whose `-c STRING` argument is itself a command line — recursed into,
+// and `eval`, whose every argument may be. Beyond these one level of indirection
+// the evasion game is unwinnable by design (see #30); this guard targets the
+// agent's own mistakes, not a determined adversary.
+const SHELL_CMDS = new Set(["sh", "bash", "zsh", "dash", "ksh"]);
 
 // `rm -rf` and friends are too easy to evade with a single regex (-rf, -fr,
-// -r -f, --recursive --force, reordered flags). Detect the recursive AND force
-// intents independently on a lowercased copy.
-function dangerousRm(seg) {
-  const c = seg.toLowerCase();
-  if (!/\brm\b/.test(c)) return false;
-  const recursive = /-[a-z]*r|--recursive/.test(c);
-  const force = /-[a-z]*f|--force/.test(c);
+// -r -f, --recursive --force, reordered flags) — and, scanned as substrings,
+// too easy to hallucinate out of unrelated fragments (#36: `git … rm` plus a
+// `-F` flag plus a hyphenated path combined into a phantom `rm -rf`). So the
+// check is argv-based on one lexed segment:
+//   - a segment whose real command is `git` is skipped entirely — `git rm` is
+//     an index-level delete (recoverable), and git deletion policy is
+//     git-guard's domain, not this rule's;
+//   - otherwise the recursive AND force intents are read only from option
+//     tokens AFTER an actual `rm` word (`--` ends option parsing), so quoted
+//     message text and path fragments can never contribute a flag.
+function dangerousRm(tokens) {
+  const start = skipWrappers(tokens);
+  if (start >= tokens.length) return false;
+  const cmd = basename(tokens[start]);
+  if (cmd === "git") return false;
+  if (cmd === "eval") {
+    if (tokens.slice(start + 1).some((t) => dangerousRmCommand(t))) return true;
+  } else if (SHELL_CMDS.has(cmd)) {
+    const ci = tokens.findIndex((t, i) => i > start && /^-[a-z]*c$/.test(t)); // -c, -lc, -euc …
+    if (ci >= 0 && tokens[ci + 1] && dangerousRmCommand(tokens[ci + 1])) return true;
+  }
+  const rm = tokens.findIndex((t, i) => i >= start && basename(t.toLowerCase()) === "rm");
+  if (rm < 0) return false;
+  let recursive = false;
+  let force = false;
+  for (let i = rm + 1; i < tokens.length; i++) {
+    const t = tokens[i].toLowerCase();
+    if (t === "--") break; // operands only from here on
+    if (t === "--recursive") recursive = true;
+    else if (t === "--force") force = true;
+    else if (/^-[a-z]+$/.test(t)) {
+      if (t.includes("r")) recursive = true;
+      if (t.includes("f")) force = true;
+    }
+  }
   return recursive && force;
+}
+
+// A whole command line (e.g. the string handed to `bash -c`) is dangerous when
+// any of its lexed segments is.
+function dangerousRmCommand(command) {
+  return lexSegments(command).some(dangerousRm);
 }
 
 // [regex (case-insensitive), reason]. Categories 1-5 from the module README.
@@ -145,12 +188,15 @@ try {
   // Whole command first (keeps pipes intact), then each segment.
   const targets = [command, ...splitCommands(command)];
 
-  // 1. Safety blocks across every target — these take precedence over nudges,
-  //    so `cat .env` is denied as a secret leak before the file-view nudge.
+  // 1. Safety blocks — these take precedence over nudges, so `cat .env` is
+  //    denied as a secret leak before the file-view nudge. The rm scan is
+  //    argv-based per lexed segment, NEVER on the whole string (#36): fragments
+  //    from different segments must not combine, while the per-segment scan
+  //    still catches smuggling (`echo x && rm -rf ~`, `$( … )`, `bash -c`).
+  if (dangerousRmCommand(command)) {
+    denyPreToolUse("파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
+  }
   for (const target of targets) {
-    if (dangerousRm(target)) {
-      denyPreToolUse("파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
-    }
     for (const [pattern, reason] of BLOCK_RULES) {
       if (pattern.test(target)) denyPreToolUse(reason);
     }

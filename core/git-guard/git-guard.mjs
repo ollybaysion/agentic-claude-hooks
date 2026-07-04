@@ -28,6 +28,7 @@
 
 import { spawnSync } from "node:child_process";
 import { readHookInput, denyPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
+import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
 
 const PROTECTED = new Set(["main", "master"]);
 
@@ -41,9 +42,6 @@ function currentBranch(cwd) {
   return (r.stdout || "").trim();
 }
 
-// Command wrappers that precede the real command (`sudo git push …`). Skipped,
-// along with leading `VAR=val` env assignments, before reading argv[0].
-const WRAPPERS = new Set(["sudo", "command", "env", "nice", "nohup", "time"]);
 // git *global* options that consume the following token as their value, e.g.
 // `git -C <dir> push …`. Needed so their value isn't mistaken for the subcommand.
 const GIT_GLOBAL_VALUE_OPTS = new Set([
@@ -53,52 +51,9 @@ const GIT_GLOBAL_VALUE_OPTS = new Set([
 // value isn't mistaken for a refspec (e.g. `--repo main` is a repo, not a target).
 const PUSH_VALUE_OPTS = new Set(["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
 
-// Split a shell command line into segments (chained by `; & && | || newline` and
-// command substitution `$( … )` / backticks) and tokenize each into argv. A
-// single quote-aware pass: operators and word boundaries are only honoured
-// OUTSIDE quotes, and quoted spans stay inside their token — so a commit message
-// like `-m "push to main; --force"` becomes ONE argument token and can never be
-// read as command structure. Returns an array of token arrays (one per segment).
-function lexSegments(command) {
-  const segments = [];
-  let tokens = [];
-  let cur = "";
-  let started = false; // current token has content (guards empty-token flushes)
-  let quote = null; // "'" or '"' while inside a quoted span
-
-  const endTok = () => { if (started) { tokens.push(cur); cur = ""; started = false; } };
-  const endSeg = () => { endTok(); if (tokens.length) { segments.push(tokens); tokens = []; } };
-
-  for (let i = 0; i < command.length; i++) {
-    const ch = command[i];
-    if (quote) {
-      if (ch === quote) quote = null;
-      else cur += ch;
-      started = true; // even an empty "" is a real (empty) token
-      continue;
-    }
-    if (ch === "'" || ch === '"') { quote = ch; started = true; continue; }
-    if (ch === "\\") { if (i + 1 < command.length) { cur += command[++i]; started = true; } continue; }
-    if (ch === "$" && command[i + 1] === "(") { endSeg(); i++; continue; } // $( … )
-    if (ch === "`" || ch === "(" || ch === ")") { endSeg(); continue; }    // subst / subshell
-    if (ch === "&") { endSeg(); if (command[i + 1] === "&") i++; continue; }
-    if (ch === "|") { endSeg(); if (command[i + 1] === "|") i++; continue; }
-    if (ch === ";" || ch === "\n" || ch === "\r") { endSeg(); continue; }
-    if (ch === " " || ch === "\t") { endTok(); continue; }
-    cur += ch; started = true;
-  }
-  endSeg();
-  return segments;
-}
-
-// Skip leading command wrappers (`sudo git …`) and `VAR=val` env assignments;
-// return the index of the real argv[0]. Shared by the git and gh parsers.
-function skipWrappers(tokens) {
-  let i = 0;
-  while (i < tokens.length &&
-    (WRAPPERS.has(tokens[i]) || /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[i]))) i++;
-  return i;
-}
+// The quote-aware segment/argv lexer and wrapper skipping live in the shared
+// lib/shell-lex.mjs (extracted from this module for #36 so bash-guard's
+// dangerous-delete scan reads the same tokens).
 
 // Parse one segment's argv as a git invocation. Returns { subcommand, args }
 // (args = tokens after the subcommand, options included) or null when the
