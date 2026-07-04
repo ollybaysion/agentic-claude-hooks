@@ -27,9 +27,18 @@
 // Low-confidence keywords stay useful without paying the full-slice cost on
 // every misfire; the model pulls the doc itself only when actually relevant.
 //
+// Inheritance: makeKeywordDocsProvider({ id, defaultPriority, defaults })
+// builds a NAMED INSTANCE of this engine with its own index file and param
+// defaults — msg-format / db-schema / domain-docs are such instances (one
+// thin file + one registry line each; see DESIGN.md §8). Instances share the
+// engine, the dedup ledger (path-keyed), and the stats format. Every instance
+// re-reads its index on each turn, so adding a doc to an index file takes
+// effect immediately — no reload.
+//
 // Stats (오탐 프루닝 layer 1, issue #32): every ACTUAL injection appends one
-// line {ts, session, keywords(fired), path, mode: "full"|"link"} to
-// ~/.claude/context-stats/ (see lib/stats.mjs). Recording only, best-effort;
+// line {ts, session, keywords(fired), path, mode: "full"|"link", index} to
+// ~/.claude/context-stats/ (see lib/stats.mjs). `index` names the index file,
+// so per-instance analysis stays possible. Recording only, best-effort;
 // dedup-suppressed matches are not recorded (they cost no tokens).
 
 import { existsSync, readFileSync } from "node:fs";
@@ -53,81 +62,88 @@ function matcherFor(keyword, mode) {
   return (lower) => re.test(lower);
 }
 
-export default {
-  id: "keyword-docs",
-  events: ["UserPromptSubmit"],
-  defaultPriority: 50,
-  async run({ cwd, prompt, sessionId, params }) {
-    if (!prompt) return null;
+/** Build a named instance of the keyword-docs engine (see header). */
+export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {} }) {
+  return {
+    id,
+    events: ["UserPromptSubmit"],
+    defaultPriority,
+    async run({ cwd, prompt, sessionId, params }) {
+      if (!prompt) return null;
+      const p = { ...defaults, ...params }; // config params override instance defaults
 
-    let index;
-    try {
-      index = JSON.parse(readFileSync(join(cwd, params.index ?? ".claude/context-docs.json"), "utf8"));
-    } catch {
-      return null; // no / invalid index -> opt-in not configured for this project
-    }
-    if (!Array.isArray(index)) return null;
-
-    const mode = params.match ?? "word";
-    const lower = prompt.toLowerCase();
-    const words = new Set(lower.match(TOKEN) ?? []);
-
-    // Matched docs (with the keywords that fired — recorded to stats on
-    // injection), in index order, de-duplicated within this turn.
-    const candidates = [];
-    const seenPath = new Set();
-    for (const entry of index) {
-      if (!entry || typeof entry.path !== "string" || seenPath.has(entry.path)) continue;
-      const keywords = Array.isArray(entry.keywords) ? entry.keywords : [];
-      const matched = keywords.filter((k) => matcherFor(k, mode)(lower, words));
-      if (matched.length === 0) continue;
-      seenPath.add(entry.path);
-      const precision = Number.isFinite(Number(entry.precision)) ? Number(entry.precision) : 1;
-      candidates.push({ path: entry.path, matched, precision });
-    }
-    if (candidates.length === 0) return null; // common case: no ledger I/O at all
-
-    // Cross-turn dedup: skip docs already injected in this session within the TTL.
-    const dedup = params.dedup !== false;
-    const ttlMs = params.dedupTtlMs ?? 15 * 60 * 1000;
-    const now = Date.now();
-    let led, sess;
-    if (dedup) {
-      led = loadLedger(cwd);
-      const sid = sessionId || "nosession";
-      sess = led.sessions[sid] ?? (led.sessions[sid] = { paths: {}, ts: now });
-      sess.ts = now;
-    }
-
-    const maxDocs = params.maxDocs ?? 2;
-    const maxCharsEach = params.maxCharsEach ?? 1200;
-    const blocks = [];
-    for (const { path, matched, precision } of candidates) {
-      if (blocks.length >= maxDocs) break;
-      if (dedup && sess.paths[path] && now - sess.paths[path] < ttlMs) continue; // still fresh in context
-
-      // Low precision -> pointer only, the model Reads the doc if it matters.
-      if (precision < 1) {
-        if (!existsSync(join(cwd, path))) continue; // never point at a missing file
-        blocks.push(`→ ${path} — related doc (matched: ${matched.join(", ")}); Read it if relevant.`);
-        if (dedup) sess.paths[path] = now;
-        recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "link" });
-        continue;
-      }
-
-      let body;
+      const idxRel = p.index ?? ".claude/context-docs.json";
+      let index;
       try {
-        body = readFileSync(join(cwd, path), "utf8").slice(0, maxCharsEach);
+        index = JSON.parse(readFileSync(join(cwd, idxRel), "utf8"));
       } catch {
-        continue; // matched an entry whose file is missing / unreadable
+        return null; // no / invalid index -> opt-in not configured for this project
       }
-      if (!body.trim()) continue;
-      blocks.push(`--- ${path} ---\n${body}`);
-      if (dedup) sess.paths[path] = now;
-      recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "full" });
-    }
+      if (!Array.isArray(index)) return null;
 
-    if (dedup) saveLedger(cwd, led);
-    return blocks.length ? { text: blocks.join("\n\n") } : null;
-  },
-};
+      const mode = p.match ?? "word";
+      const lower = prompt.toLowerCase();
+      const words = new Set(lower.match(TOKEN) ?? []);
+
+      // Matched docs (with the keywords that fired — recorded to stats on
+      // injection), in index order, de-duplicated within this turn.
+      const candidates = [];
+      const seenPath = new Set();
+      for (const entry of index) {
+        if (!entry || typeof entry.path !== "string" || seenPath.has(entry.path)) continue;
+        const keywords = Array.isArray(entry.keywords) ? entry.keywords : [];
+        const matched = keywords.filter((k) => matcherFor(k, mode)(lower, words));
+        if (matched.length === 0) continue;
+        seenPath.add(entry.path);
+        const precision = Number.isFinite(Number(entry.precision)) ? Number(entry.precision) : 1;
+        candidates.push({ path: entry.path, matched, precision });
+      }
+      if (candidates.length === 0) return null; // common case: no ledger I/O at all
+
+      // Cross-turn dedup: skip docs already injected in this session within the TTL.
+      const dedup = p.dedup !== false;
+      const ttlMs = p.dedupTtlMs ?? 15 * 60 * 1000;
+      const now = Date.now();
+      let led, sess;
+      if (dedup) {
+        led = loadLedger(cwd);
+        const sid = sessionId || "nosession";
+        sess = led.sessions[sid] ?? (led.sessions[sid] = { paths: {}, ts: now });
+        sess.ts = now;
+      }
+
+      const maxDocs = p.maxDocs ?? 2;
+      const maxCharsEach = p.maxCharsEach ?? 1200;
+      const blocks = [];
+      for (const { path, matched, precision } of candidates) {
+        if (blocks.length >= maxDocs) break;
+        if (dedup && sess.paths[path] && now - sess.paths[path] < ttlMs) continue; // still fresh in context
+
+        // Low precision -> pointer only, the model Reads the doc if it matters.
+        if (precision < 1) {
+          if (!existsSync(join(cwd, path))) continue; // never point at a missing file
+          blocks.push(`→ ${path} — related doc (matched: ${matched.join(", ")}); Read it if relevant.`);
+          if (dedup) sess.paths[path] = now;
+          recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "link", index: idxRel });
+          continue;
+        }
+
+        let body;
+        try {
+          body = readFileSync(join(cwd, path), "utf8").slice(0, maxCharsEach);
+        } catch {
+          continue; // matched an entry whose file is missing / unreadable
+        }
+        if (!body.trim()) continue;
+        blocks.push(`--- ${path} ---\n${body}`);
+        if (dedup) sess.paths[path] = now;
+        recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "full", index: idxRel });
+      }
+
+      if (dedup) saveLedger(cwd, led);
+      return blocks.length ? { text: blocks.join("\n\n") } : null;
+    },
+  };
+}
+
+export default makeKeywordDocsProvider({ id: "keyword-docs" });
