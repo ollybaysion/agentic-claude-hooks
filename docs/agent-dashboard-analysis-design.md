@@ -134,7 +134,9 @@ LIMIT ?;
 - 탭: **Live**(기존 그대로) | **Sessions** | **Tools** (+ stage 9에서 **Guards**).
   `location.hash` 라우팅(`#live` 등), 탭 활성화 때 fetch + 30초 재갱신.
 - 상단 **fleet 스트립**(모든 탭 공통): 활성 세션당 한 줄 —
-  `source_app · 마지막 이벤트 타입/툴 · n초 전`. `/stats/sessions?window=1h`를 15초 폴링.
+  `source_app · 세션 앞8자 · 마지막 이벤트 타입/툴 · n초 전`. 폴링이 아니라 **이미 열려 있는
+  SSE 피드로 실시간 갱신**하고, `/stats/sessions?window=1h` 시드를 30초마다
+  재로드한다(초기 상태와 SSE 누락 보정). "n초 전" 표시는 5초마다 다시 그린다.
 
 ### 5.2 렌더링 원칙 (기존 유지)
 
