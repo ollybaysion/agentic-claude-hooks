@@ -18,10 +18,16 @@
 // topic on consecutive turns does not re-inject what is already in context. It
 // re-injects on a new session or after the TTL (when the doc has likely scrolled
 // off). State is per-session in os.tmpdir() (see lib/ledger.mjs), best-effort.
+//
+// Stats (오탐 프루닝 layer 1, issue #32): every ACTUAL injection appends one
+// line {ts, session, keywords(fired), path} to ~/.claude/context-stats/ (see
+// lib/stats.mjs). Recording only, best-effort; dedup-suppressed matches are
+// not recorded (they cost no tokens).
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadLedger, saveLedger } from "../ledger.mjs";
+import { recordInjection } from "../stats.mjs";
 
 const TOKEN = /[a-z0-9_]+/g;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -58,15 +64,17 @@ export default {
     const lower = prompt.toLowerCase();
     const words = new Set(lower.match(TOKEN) ?? []);
 
-    // Matched doc paths, in index order, de-duplicated within this turn.
+    // Matched docs (with the keywords that fired — recorded to stats on
+    // injection), in index order, de-duplicated within this turn.
     const candidates = [];
     const seenPath = new Set();
     for (const entry of index) {
       if (!entry || typeof entry.path !== "string" || seenPath.has(entry.path)) continue;
       const keywords = Array.isArray(entry.keywords) ? entry.keywords : [];
-      if (!keywords.some((k) => matcherFor(k, mode)(lower, words))) continue;
+      const matched = keywords.filter((k) => matcherFor(k, mode)(lower, words));
+      if (matched.length === 0) continue;
       seenPath.add(entry.path);
-      candidates.push(entry.path);
+      candidates.push({ path: entry.path, matched });
     }
     if (candidates.length === 0) return null; // common case: no ledger I/O at all
 
@@ -85,7 +93,7 @@ export default {
     const maxDocs = params.maxDocs ?? 2;
     const maxCharsEach = params.maxCharsEach ?? 1200;
     const blocks = [];
-    for (const path of candidates) {
+    for (const { path, matched } of candidates) {
       if (blocks.length >= maxDocs) break;
       if (dedup && sess.paths[path] && now - sess.paths[path] < ttlMs) continue; // still fresh in context
       let body;
@@ -97,6 +105,7 @@ export default {
       if (!body.trim()) continue;
       blocks.push(`--- ${path} ---\n${body}`);
       if (dedup) sess.paths[path] = now;
+      recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path });
     }
 
     if (dedup) saveLedger(cwd, led);

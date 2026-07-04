@@ -203,6 +203,7 @@ core/context/
 │   ├── registry.mjs         # id → 프로바이더 (상대경로 정적 import)
 │   ├── budget.mjs           # 순수 함수: 우선순위·예산 반영해 자르기
 │   ├── ledger.mjs           # os.tmpdir() 상태(keyword-docs dedup 등). §10
+│   ├── stats.mjs            # 주입 기록(오탐 프루닝 layer 1) — ~/.claude/context-stats/
 │   └── providers/
 │       ├── git.mjs          # SessionStart: 브랜치·SHA·dirty·최근 커밋
 │       ├── project-files.mjs# SessionStart: 표준 파일 첫 존재분 (옵트인)
@@ -440,6 +441,13 @@ export default {
   `dedupTtlMs`(기본 15분) 안엔 재주입하지 않는다(연속 턴에 같은 주제를 말해도 이미
   컨텍스트에 있는 걸 또 안 넣음). 새 세션이거나 TTL 경과(스크롤아웃 추정) 후 재주입.
   상태는 `lib/ledger.mjs`가 세션별로 `os.tmpdir()`에 둔다(best-effort, §10).
+- **주입 stats — 오탐 프루닝 layer 1** (이슈 #32): 실제 주입마다
+  `{ts, session, 발화 키워드, path}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
+  append(`lib/stats.mjs`). 오탐 1회 = ~500토큰인데 주입이 조용해서 유저가 못 보므로,
+  **키워드 단위 누적**으로 반복 오탐을 가시화하는 것이 목적. **기록만** 한다 — 판정
+  신호(layer 2)·리포트/mute(layer 3)는 후속. dedup으로 억제된 매치는 기록하지
+  않는다(토큰을 안 썼으므로). ledger와 달리 `os.tmpdir()`가 **아닌** 이유: 몇 주
+  누적이 목적이라 재부팅 생존이 필요하다. best-effort — stats 실패가 주입을 막지 않는다.
 
 ```js
 // core/context/lib/providers/keyword-docs.mjs (요지 — 실제 구현엔 매칭 모드·세션 dedup 추가)

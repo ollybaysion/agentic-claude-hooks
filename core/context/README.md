@@ -80,6 +80,21 @@ the prompt mentions them:
   within `params.dedupTtlMs` (default 15m); it returns after the TTL or in a new
   session. No match injects nothing (no tokens).
 
+### Injection stats (false-positive pruning, layer 1)
+
+Every actual injection appends one JSON line to
+`~/.claude/context-stats/<project-hash>.jsonl`:
+
+```json
+{ "ts": 1751600000000, "session": "abc", "keywords": ["mcp"], "path": "docs/x.md" }
+```
+
+`keywords` holds the keyword(s) that fired — accumulate a few weeks and
+repeated false positives become visible ("`mcp` fired 14 times, never
+relevant"), so index pruning is data-driven. Recording only (best-effort,
+never blocks injection; rolling cap ~4000 lines); outcome judging and a
+report/mute command are follow-ups — see issue #32.
+
 ## Testing locally
 
 ```bash
