@@ -40,7 +40,8 @@ cover it; see DESIGN.md §12.)
 ## Configuration (optional)
 
 Zero config required — the defaults above work out of the box. To customize, add
-`<project>/.claude/context.json`:
+`<project>/.claude/context.json` (project layer) and/or `~/.claude/context.json`
+(user layer, same schema — for cwd-independent personal setup):
 
 ```json
 {
@@ -52,8 +53,12 @@ Zero config required — the defaults above work out of the box. To customize, a
 }
 ```
 
-- Missing or invalid file → built-in defaults (`git` + `time`).
-- `{ "providers": [] }` → kill switch (inject nothing, exit 0).
+- `providers` merge **by id** across defaults → user → project (later layer
+  wins per id), so a user file never silently disables `git`/`time` elsewhere.
+  Disable one provider with `{ "id": "...", "enabled": false }`.
+- Missing or invalid files → built-in defaults (`git` + `time`).
+- Project-level `{ "providers": [] }` → kill switch (inject nothing, exit 0,
+  all layers including bundled). A user-level empty array contributes nothing.
 - Unknown provider ids are ignored, so referencing a not-yet-shipped provider is
   a harmless no-op.
 
@@ -114,11 +119,34 @@ its own `## <id>` header — enable any subset:
 | `domain-docs` | `.claude/context-docs.domain.json` | domain terms (`tsum`, `interlock`) |
 
 All engine features apply per instance (match modes, dedup, `precision`,
-stats — lines carry an `index` field for per-instance analysis). Keywords are
-lowercased before matching, so `TSUM` in a prompt matches keyword `"tsum"`.
+stats — lines carry `index` + `layer` fields for per-instance / per-layer
+analysis). Keywords are lowercased before matching, so `TSUM` in a prompt
+matches keyword `"tsum"`.
 **Adding a doc = appending one index entry — it takes effect on the next turn,
 no reload.** Adding a whole new category = one thin provider file calling
 `makeKeywordDocsProvider` + one registry line.
+
+#### Index layers — project / user-designated / plugin-bundled
+
+Each instance reads up to three indexes per turn, in precedence order (a
+keyword claimed by a higher layer is shadowed in lower ones):
+
+| layer | index location | ships via |
+| --- | --- | --- |
+| project | `<cwd>`-resolved `params.index` (defaults above) | committed to the repo |
+| user | `params.index` in `~/.claude/context.json` (absolute / `~` paths OK; default `~/.claude/context-docs*.json`) | stays on the machine — private docs never touch git |
+| bundle | `${CLAUDE_PLUGIN_ROOT}/context-docs/<id>.json` | installed/updated with the plugin |
+
+A doc entry's `path` resolves against **the folder containing its index file**
+(a folder named `.claude` delegates to its parent, so the classic
+`<cwd>/.claude` layout is unchanged). An index + docs folder is therefore
+self-contained: point `params.index` at e.g. `~/eqp-docs/msg-format.json` and
+injection works from any directory you launch Claude in.
+
+A bundled index **auto-enables its instance** with zero config (that is the
+point of shipping docs with the plugin); opt out per id with
+`{ "enabled": false }`, or entirely with the project kill switch. Without
+`CLAUDE_PLUGIN_ROOT` (non-plugin execution) the bundle layer is skipped.
 
 ### Injection stats (false-positive pruning, layer 1)
 
@@ -126,7 +154,7 @@ Every actual injection appends one JSON line to
 `~/.claude/context-stats/<project-hash>.jsonl`:
 
 ```json
-{ "ts": 1751600000000, "session": "abc", "keywords": ["mcp"], "path": "docs/x.md", "mode": "full", "index": ".claude/context-docs.json" }
+{ "ts": 1751600000000, "session": "abc", "keywords": ["mcp"], "path": "docs/x.md", "mode": "full", "index": "/home/u/proj/.claude/context-docs.json", "layer": "project" }
 ```
 
 `keywords` holds the keyword(s) that fired — accumulate a few weeks and

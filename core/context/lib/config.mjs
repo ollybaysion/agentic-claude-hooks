@@ -1,15 +1,31 @@
-// core/context/lib/config.mjs — load/validate <project>/.claude/context.json.
+// core/context/lib/config.mjs — load & merge layered context config.
 //
-// Zero-config by design: a missing or invalid file runs the built-in
-// DEFAULT_PROFILE (never inactive). An explicit empty providers array is the
-// kill switch. See DESIGN.md §4.
+// Two config files, merged (issue #47):
+//   user    ~/.claude/context.json      — personal, cwd-independent
+//   project <cwd>/.claude/context.json  — repo-specific, wins on conflict
+//
+// Merge rules:
+//   - providers: union by id over DEFAULT_PROFILE -> user -> project (later
+//     layer replaces the whole entry for the same id). DEFAULT_PROFILE is
+//     always the base, so creating a user file never silently kills git/time
+//     in unconfigured projects. Turn one provider off with
+//     { "id": "...", "enabled": false }.
+//   - charBudget: shallow key merge, project wins.
+//   - kill switch: PROJECT "providers": [] disables everything (all layers,
+//     including plugin-bundled indexes). A user-level empty array contributes
+//     nothing (it is not a global kill switch).
+//
+// The raw per-layer configs are returned as cfg.layers so layer-aware
+// providers (keyword-docs engine) can resolve per-layer index files.
+// Zero-config unchanged: no files at all -> DEFAULT_PROFILE. See DESIGN.md §4.
 
 import { readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 
 // Only git + time — the two things CLAUDE.md fundamentally cannot do (live git
-// state, current time). keyword-docs (shipped) and db-schema / tool-time
-// (planned) are opt-in (see DESIGN.md §1, §12).
+// state, current time). keyword-docs and its named instances are opt-in
+// (config or a plugin-bundled index; see DESIGN.md §1, §8, §12).
 export const DEFAULT_PROFILE = {
   providers: [
     { id: "git", priority: 90 },
@@ -17,19 +33,45 @@ export const DEFAULT_PROFILE = {
   ],
 };
 
-export function loadConfig(cwd) {
-  let raw;
+function readLayerFile(path) {
   try {
-    raw = JSON.parse(readFileSync(join(cwd, ".claude", "context.json"), "utf8"));
+    const raw = JSON.parse(readFileSync(path, "utf8"));
+    return raw && typeof raw === "object" ? raw : null;
   } catch {
-    return { providers: DEFAULT_PROFILE.providers, disabled: false }; // missing/invalid -> defaults
+    return null; // missing/invalid layer -> absent
   }
-  if (Array.isArray(raw.providers) && raw.providers.length === 0) {
-    return { providers: [], disabled: true }; // explicit kill switch
+}
+
+function mergeById(...lists) {
+  const byId = new Map();
+  for (const list of lists) {
+    if (!Array.isArray(list)) continue;
+    for (const e of list) {
+      if (e && typeof e.id === "string") byId.set(e.id, e);
+    }
   }
+  return [...byId.values()];
+}
+
+export function loadConfig(cwd) {
+  const user = readLayerFile(join(homedir(), ".claude", "context.json"));
+  const project = readLayerFile(join(cwd, ".claude", "context.json"));
+  const layers = { user, project };
+
+  if (project && Array.isArray(project.providers) && project.providers.length === 0) {
+    return { providers: [], disabled: true, layers }; // explicit project kill switch
+  }
+
+  const providers = mergeById(
+    DEFAULT_PROFILE.providers,
+    user?.providers,
+    project?.providers
+  ).filter((e) => e.enabled !== false);
+
   return {
-    charBudget: raw.charBudget,
-    providers: Array.isArray(raw.providers) ? raw.providers : DEFAULT_PROFILE.providers,
+    charBudget: { ...user?.charBudget, ...project?.charBudget },
+    providers,
     disabled: false,
+    layers,
   };
 }

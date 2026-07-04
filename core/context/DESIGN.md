@@ -140,7 +140,7 @@ SessionStart (startup/resume/clear/compact)   UserPromptSubmit (매 턴)
 
 ---
 
-## 4. 설정 표면 — `<project>/.claude/context.json`
+## 4. 설정 표면 — `<project>/.claude/context.json` (+ 유저 레벨 `~/.claude/context.json`)
 
 에이전트/사용자가 만지는 유일한 표면. 자매 모듈 `gate`의 `.claude/gates.json`과
 같은 자리, 같은 철학(**프로젝트가 자기 의도를 선언한다**).
@@ -166,10 +166,23 @@ SessionStart (startup/resume/clear/compact)   UserPromptSubmit (매 턴)
 
 동작 규칙:
 
-- **파일 없음/파싱 실패** → `DEFAULT_PROFILE` 사용(아래). 트랜스크립트에 메모만 남긴다.
-- **파일 있음** → 프로바이더 집합·우선순위·예산·`params`를 **덮어쓰기/확장**.
-- **`{"providers": []}`(빈 배열)** → 명시적 **킬 스위치**. 조용히 `pass()`.
-  (모듈을 아예 끄고 싶지만 언인스톨은 싫을 때.)
+- **파일 없음/파싱 실패** → 그 레이어 부재로 취급. 둘 다 없으면 `DEFAULT_PROFILE`(아래).
+- **`{"providers": []}`(빈 배열, 프로젝트 레이어)** → 명시적 **킬 스위치**. 조용히
+  `pass()` — 번들 레이어(§8)까지 포함해 전부 끈다. (모듈을 아예 끄고 싶지만
+  언인스톨은 싫을 때.)
+
+### 레이어 병합 (#47) — 유저 레벨 `~/.claude/context.json`
+
+같은 스키마의 **유저 레벨 파일**을 함께 읽어 병합한다. cwd와 무관한 개인/사내
+문서 인덱스를 어느 세션에서든 쓰기 위한 표면이다 (§8 레이어 참조).
+
+- `providers`: **id 단위 union** — `DEFAULT_PROFILE` → 유저 → 프로젝트 순.
+  같은 id는 나중 레이어의 entry가 통째로 이긴다. DEFAULT가 항상 바닥에 깔리므로
+  유저 파일을 만들어도 설정 없는 프로젝트에서 git/time이 꺼지지 않는다.
+- 개별 끄기: `{ "id": "...", "enabled": false }` (어느 레이어에서든).
+- `charBudget`: 키 단위 병합, 프로젝트 우선.
+- 유저 레벨의 빈 `providers` 배열은 킬 스위치가 **아니라** 무기여로 취급한다
+  (킬 스위치는 프로젝트 전용 — 프로젝트가 최종 결정권자).
 
 ```jsonc
 // 내장 DEFAULT_PROFILE (config.mjs 상단 상수 — bash-guard처럼 "코드 위 const" 편집 가능)
@@ -416,6 +429,18 @@ export default {
   (`→ path — related doc …; Read it if relevant`, ~20토큰) — 관련이 진짜면 모델이
   직접 Read한다. 넓어서 못 믿지만 지우긴 아까운 키워드의 중간 지대: 오탐 비용이
   ~500토큰에서 ~20토큰으로 준다. 존재하지 않는 파일은 포인터도 안 낸다. dedup 동일 적용.
+- **레이어** (#47): 인스턴스마다 인덱스를 최대 3곳에서 읽는다 — 우선순위대로
+  **프로젝트**(`<cwd>` 기준 `params.index`, 기본 `.claude/context-docs*.json`) >
+  **유저**(`~/.claude/context.json` entry의 `params.index`, 기본
+  `~/.claude/<기본 인덱스 basename>`; 절대경로·`~` 허용) >
+  **번들**(`${CLAUDE_PLUGIN_ROOT}/context-docs/<id>.json` — 플러그인과 함께
+  배포되는 범용 지식. 존재하면 **설정 없이도 인스턴스 자동 활성화**(registry),
+  env 없으면 레이어 스킵 fail-open). 문서 `path`는 **자기 인덱스가 있는 폴더
+  기준**으로 해석한다(폴더명이 `.claude`면 그 부모 — 기존 `<cwd>/.claude`
+  레이아웃 하위 호환; 절대경로는 통과). 인덱스+문서 폴더가 자기완결이므로
+  `params.index`를 아무 데나(예: 사내 문서 폴더 `~/eqp-docs/`) 가리켜도 어느
+  cwd에서든 동작한다. 같은 키워드는 **먼저 스캔된 항목이 가린다**(한 인덱스
+  안에서도, 레이어 간에도 — 프로젝트가 번들을 가림).
 - **상속 인스턴스** (`makeKeywordDocsProvider` 팩토리): 같은 엔진에 자기 인덱스
   파일·id·우선순위만 다른 명명 인스턴스를 얇은 파일 하나로 만든다. v1 인스턴스 3종
   (전부 옵트인): `msg-format`(설비 커맨드→메시지 포맷, prio 65) ·
@@ -425,7 +450,7 @@ export default {
   **인덱스는 매 턴 다시 읽으므로 문서 추가 = 인덱스 한 줄 append, 즉시 적용.**
   새 카테고리 추가 = 팩토리 호출 파일 하나 + registry 한 줄.
 - **주입 stats — 오탐 프루닝 layer 1** (이슈 #32): 실제 주입마다
-  `{ts, session, 발화 키워드, path, mode: full|link, index}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
+  `{ts, session, 발화 키워드, path, mode: full|link, index(해석된 절대 경로), layer(project|user|bundle)}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
   append(`lib/stats.mjs`). 오탐 1회 = ~500토큰인데 주입이 조용해서 유저가 못 보므로,
   **키워드 단위 누적**으로 반복 오탐을 가시화하는 것이 목적. **기록만** 한다 — 판정
   신호(layer 2)·리포트/mute(layer 3)는 후속. dedup으로 억제된 매치는 기록하지
@@ -433,7 +458,7 @@ export default {
   누적이 목적이라 재부팅 생존이 필요하다. best-effort — stats 실패가 주입을 막지 않는다.
 
 ```js
-// core/context/lib/providers/keyword-docs.mjs (요지 — 실제 구현엔 매칭 모드·세션 dedup 추가)
+// core/context/lib/providers/keyword-docs.mjs (요지 — 실제 구현엔 매칭 모드·세션 dedup·레이어(#47) 추가)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 export default {

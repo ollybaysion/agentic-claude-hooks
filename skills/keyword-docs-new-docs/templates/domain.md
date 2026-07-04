@@ -1,7 +1,7 @@
 <!--
 category: domain-docs
-인덱스: .claude/context-docs.domain.json
-저장 경로: .claude/docs/domain/<용어 소문자>.md
+인덱스: 프로젝트 .claude/context-docs.domain.json · 개인 지정 ~/.claude/context.json의 params.index · 번들 context-docs/domain-docs.json
+저장 경로: domain/<용어 소문자>.md — 레이어별 위치: 프로젝트 .claude/docs/ · 개인 지정 <인덱스 폴더>/ · 번들 context-docs/docs/
 필수 슬롯: 용어, 정의, 관련 코드 위치
 선택 슬롯: 동작/계산식, 불변조건, 엣지케이스, 배경
 키워드 기본값: 용어 소문자 + 영문 동의어/풀네임 (예: "tsum", "total sum") — ASCII 소문자만, 한글 단독 키워드는 매치되지 않음
