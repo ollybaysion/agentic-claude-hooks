@@ -15,6 +15,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
 import { readHookInput, pass, failOpen } from "../../lib/hook-io.mjs";
 import { configFile } from "../../lib/obs-paths.mjs";
 
@@ -34,10 +35,33 @@ function readToken() {
   return null;
 }
 
-// A human-friendly label for the source: explicit override, else the project
-// directory name, else a constant.
+// A human-friendly label for the source: explicit override, else the tmux
+// window name, else the project directory name, else a constant.
+//
+// The tmux step exists because several claude sessions run from the SAME
+// directory (issue #45): basename(cwd) collapses them all into one label,
+// while the tmux window name is maintained per task. Best-effort only — any
+// failure (no tmux, dead pane, timeout) falls through silently.
+function tmuxWindowName() {
+  if (!process.env.TMUX || !process.env.TMUX_PANE) return null;
+  try {
+    const r = spawnSync(
+      "tmux",
+      ["display-message", "-p", "-t", process.env.TMUX_PANE, "#{window_name}"],
+      { encoding: "utf8", timeout: 200 }
+    );
+    if (r.status !== 0 || !r.stdout) return null;
+    const name = r.stdout.trim();
+    return name || null;
+  } catch {
+    return null;
+  }
+}
+
 function sourceApp(input) {
   if (process.env.OBS_SOURCE_APP) return process.env.OBS_SOURCE_APP;
+  const win = tmuxWindowName();
+  if (win) return win;
   const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
   return path.basename(cwd) || "claude-code";
 }
