@@ -40,6 +40,7 @@ claude-hooks/
 ├── core/<module>/         # one self-contained module per hook
 ├── skills/<name>/         # one self-contained skill (SKILL.md) per workflow
 ├── lib/hook-io.mjs        # shared stdin/decision helpers
+├── lib/shell-lex.mjs      # shared quote-aware argv lexer (git-guard, bash-guard)
 └── README.md
 ```
 

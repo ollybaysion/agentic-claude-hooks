@@ -7,7 +7,8 @@
 - **Requirement**: Node.js (PATH). 스타일 넛지는 대상 도구가 PATH에 있어야 함 — **rg, fd, nc**
 - **Fail-open**: 훅 자체 오류는 차단하지 않음 (`failOpen`)
 - **복합명령 분리**: `;` `&&` `||` `|` 줄바꿈으로 쪼개 각 조각 검사 → `echo x && rm -rf /` 우회 방지
-- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`(안전·deny) / `ASK_RULES`(파괴적 git·ask) / `STYLE_RULES`(스타일 넛지·deny)에 `[정규식, 사유]` 한 줄 추가
+- **rm 스캔은 argv 기반** (#36): quote-aware 렉서(`lib/shell-lex.mjs`, git-guard와 공유)로 세그먼트별 argv를 얻어, `rm` 토큰 **이후의 옵션 토큰에서만** `-r`/`-f` 의도를 읽는다. `git rm`은 면제(인덱스 삭제·복구 가능, git 삭제 정책은 git-guard 소관) — 커밋 메시지·하이픈 경로 조각이 세그먼트를 넘어 조합되는 오탐 없음
+- **규칙 추가**: `bash-guard.mjs`의 `BLOCK_RULES`(안전·deny) / `ASK_RULES`(파괴적 git·ask) / `STYLE_RULES`(스타일 넛지·deny)에 `[정규식, 사유]` 한 줄 추가. 회귀 테스트는 `test.mjs`
 
 > 구현됨: `bash-guard.mjs`. 1~5번 **차단(deny)**, 스타일 넛지 7종, 6번 파괴적 git **확인(ask)** 적용. 7번(전역설치) 차단은 범위 밖(보류). force-push/보호브랜치는 별도 git-guard 모듈 담당.
 
@@ -17,7 +18,7 @@
 
 | 정규식 | 차단 이유 |
 | --- | --- |
-| `rm` + (`-r`계열 AND `-f`계열) | 재귀 강제 삭제 (`-rf`,`-fr`,`-r -f`,`--recursive --force` 모두) |
+| `rm` argv에 `-r`계열 AND `-f`계열 | 재귀 강제 삭제 (`-rf`,`-fr`,`-r -f`,`--recursive --force`, `sudo`/`xargs`/`find -exec`/`bash -c`/`eval` 경유 포함). `git rm`·`--` 이후 피연산자는 면제 (#36) |
 | `rm -rf /` / `~` / `.` / `*` | 루트·홈·현재디렉토리·와일드카드 통삭제 |
 | `>\s*/dev/sd[a-z]` | 디스크에 직접 쓰기 |
 | `dd\s+.*of=/dev/` | dd로 디스크 덮어쓰기 |
@@ -120,6 +121,8 @@
 
 ```bash
 cd claude-hooks
+# 회귀 테스트 일괄 실행 (#36 오탐 케이스 + rm/규칙 전반)
+node core/bash-guard/test.mjs
 # 차단 (deny JSON + exit 0)
 echo '{"tool_name":"Bash","tool_input":{"command":"rm -rf /"}}' | node core/bash-guard/bash-guard.mjs
 # 우회 시도도 차단
