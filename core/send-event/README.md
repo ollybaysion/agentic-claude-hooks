@@ -30,7 +30,12 @@ the local [`observability`](../observability/README.md) collector.
 | env | default | meaning |
 | --- | --- | --- |
 | `OBS_HOST` / `OBS_PORT` | `127.0.0.1` / `4090` | collector address |
-| `OBS_SOURCE_APP` | basename of `cwd` | label shown as `source_app` |
+| `OBS_SOURCE_APP` | _(unset)_ | explicit `source_app` label override |
+
+`source_app` resolution order (issue #45 — several sessions can share one cwd):
+`OBS_SOURCE_APP` → **tmux window name** (best-effort `tmux display-message` when
+`$TMUX_PANE` is set; 200 ms cap, silent fallthrough) → basename of `cwd`.
+Existing stored rows are not backfilled.
 | `OBS_TOKEN` | _(unset)_ | bearer token, if the collector requires one |
 
 ## Test locally
