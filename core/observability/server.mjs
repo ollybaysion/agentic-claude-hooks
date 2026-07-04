@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.4.0"; // 0.2: stats API (7) · 0.3: analysis UI (8) · 0.4: token usage (10a)
+const VERSION = "0.5.0"; // 0.3: analysis UI (8) · 0.4: token usage (10a) · 0.5: tokens UI (10b)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1098,7 +1098,15 @@ function handleStatsTokens(req, res, u) {
           key: k, input: 0, output: 0, cache_create: 0, cache_read: 0,
           total: 0, messages: 0, subagent_total: 0, subagent_messages: 0,
         }));
-        if (group === "session" && !a.source_app) a.source_app = r.source_app;
+        if (group === "session") {
+          if (!a.source_app) a.source_app = r.source_app;
+          // context = the LATEST main-chain message's input+cache sums — what
+          // the next turn will resend (compaction-pressure signal for the UI).
+          if (!Number(r.sidechain) && Number(r.ts) >= (a.last_ts || 0)) {
+            a.last_ts = Number(r.ts);
+            a.context = Number(r.input) + Number(r.cache_create) + Number(r.cache_read);
+          }
+        }
         const t = Number(r.input) + Number(r.output) + Number(r.cache_create) + Number(r.cache_read);
         if (Number(r.sidechain)) { a.subagent_total += t; a.subagent_messages++; }
         else {
@@ -1164,7 +1172,8 @@ select{background:#11161f;color:#c8d0dc;border:1px solid #1c2230;border-radius:4
 #drill details{border:1px solid #1c2230;border-radius:6px;margin:8px 0;background:#0d1119}
 #drill summary{cursor:pointer;padding:6px 12px;color:#e6edf3}
 #drill th{position:static}
-h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 4px}
+h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;margin:14px 16px 4px}
+#drill h2{margin:14px 0 4px}
 </style></head>
 <body>
 <header>
@@ -1173,6 +1182,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <a href="#live" id="tab-live">live</a>
     <a href="#sessions" id="tab-sessions">sessions</a>
     <a href="#tools" id="tab-tools">tools</a>
+    <a href="#tokens" id="tab-tokens">tokens</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
@@ -1191,7 +1201,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <span class="dim">click a row for the turn timeline</span>
   </div>
   <table>
-    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th></tr></thead>
+    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">tokens</th></tr></thead>
     <tbody id="sess-rows"></tbody>
   </table>
   <div id="drill"></div>
@@ -1205,6 +1215,23 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <tbody id="tools-rows"></tbody>
   </table>
 </section>
+<section id="view-tokens">
+  <div class="cards" id="tok-cards"></div>
+  <div class="toolbar">window
+    <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
+    <span class="dim">per-tool figures are attributed approximations (see README)</span>
+  </div>
+  <h2>by app</h2>
+  <table>
+    <thead><tr><th>app</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">cache read</th><th class="num">msgs</th><th class="num">subagent</th></tr></thead>
+    <tbody id="tok-app-rows"></tbody>
+  </table>
+  <h2>by tool</h2>
+  <table>
+    <thead><tr><th>tool</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">in+cache</th><th class="num">calls</th></tr></thead>
+    <tbody id="tok-tool-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
@@ -1216,6 +1243,7 @@ const DASHBOARD_JS = `(function(){
   function fmtDT(ms){ try{var d=new Date(ms);return (d.getMonth()+1)+"/"+d.getDate()+" "+d.toLocaleTimeString();}catch(e){return "";} }
   function fmtDur(ms){ if(ms==null||isNaN(ms))return ""; if(ms<1000)return Math.round(ms)+"ms"; var s=Math.round(ms/1000); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"+(s%60>0?(s%60)+"s":""); return Math.floor(m/60)+"h"+(m%60)+"m"; }
   function fmtAgo(ms){ var s=Math.max(0,Math.round((Date.now()-ms)/1000)); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"; return Math.floor(m/60)+"h"; }
+  function fmtTok(n){ n=Number(n)||0; if(n>=1e9)return (n/1e9).toFixed(1)+"G"; if(n>=1e6)return (n/1e6).toFixed(1)+"M"; if(n>=1e3)return Math.round(n/1e3)+"k"; return String(n); }
   function el(tag,cls,text){ var e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=String(text); return e; }
   function cell(text,cls){ return el("td",cls,text==null?"":text); }
   function preview(p,n){ try{var s=JSON.stringify(p); return s.length>n?s.slice(0,n)+"…":s;}catch(e){return "";} }
@@ -1225,12 +1253,13 @@ const DASHBOARD_JS = `(function(){
   function hbar(v,max,w,h){ var s=svgEl("svg",{width:w,height:h}); s.appendChild(svgEl("rect",{x:0,y:1,height:h-2,rx:1,"class":"bar",width:max>0?Math.max(1,Math.round(v/max*w)):0})); return s; }
   function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
 
-  // ── tabs (#live | #sessions | #tools) — hash routing
-  var TABS=["live","sessions","tools"];
+  // ── tabs (#live | #sessions | #tools | #tokens) — hash routing
+  var TABS=["live","sessions","tools","tokens"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
-    if(name==="tools")loadTools(); }
+    if(name==="tools")loadTools();
+    if(name==="tokens")loadTokens(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
   // ── live tail (stage 5 behaviour, unchanged)
@@ -1277,12 +1306,17 @@ const DASHBOARD_JS = `(function(){
       c.appendChild(el("span","dim",sid.slice(0,8)));
       if(f.what)c.appendChild(el("span","what",f.what));
       c.appendChild(el("span","ago",fmtAgo(f.last_at)));
+      if(f.ctx)c.appendChild(el("span","dim","ctx "+fmtTok(f.ctx)));
       box.appendChild(c); }); }
   function fleetSeed(){ getJson("/stats/sessions?window=1h&limit=50").then(function(d){
       (d.sessions||[]).forEach(function(s){ var f=fleet[s.session_id]||(fleet[s.session_id]={what:""});
         if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; }
         if(s.ended)f.ended=true; });
-      renderFleet(); }).catch(function(){ renderFleet(); }); }
+      renderFleet(); }).catch(function(){ renderFleet(); });
+    // context size per session (compaction pressure) — best-effort, wider window
+    getJson("/stats/tokens?window=6h&group=session").then(function(d){
+      (d.rows||[]).forEach(function(t){ var f=fleet[t.key]; if(f&&t.context)f.ctx=t.context; });
+      renderFleet(); }).catch(function(){}); }
   fleetSeed(); setInterval(renderFleet,5000); setInterval(fleetSeed,30000);
 
   // ── sessions tab
@@ -1294,7 +1328,12 @@ const DASHBOARD_JS = `(function(){
       sp.appendChild(spark((o.buckets||[]).map(function(b){return b.count;}),180,28)); box.appendChild(sp);
     }).catch(function(){}); }
   function loadSessions(){ var w=$("sess-window").value; loadOverview(w);
-    getJson("/stats/sessions?window="+w+"&limit=100").then(function(d){ var tb=$("sess-rows"); tb.textContent="";
+    Promise.all([
+      getJson("/stats/sessions?window="+w+"&limit=100"),
+      getJson("/stats/tokens?window="+w+"&group=session").catch(function(){ return { rows: [] }; })
+    ]).then(function(rr){ var d=rr[0], tok={};
+      (rr[1].rows||[]).forEach(function(t){ tok[t.key]=t; });
+      var tb=$("sess-rows"); tb.textContent="";
       (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess");
         tr.appendChild(cell(s.active?"●":(s.ended?"✓":"·"),s.active?"ok":"dim"));
         tr.appendChild(cell(s.source_app));
@@ -1306,6 +1345,8 @@ const DASHBOARD_JS = `(function(){
         tr.appendChild(cell(s.errors,"num"+(s.errors?" err":"")));
         tr.appendChild(cell(s.precompacts,"num"+(s.precompacts?" warn":"")));
         tr.appendChild(cell(s.subagents,"num"));
+        var tk=tok[s.session_id];
+        tr.appendChild(cell(tk?fmtTok(tk.total+(tk.subagent_total||0)):"","num"));
         tr.addEventListener("click",function(){ drill(s); });
         tb.appendChild(tr); }); }).catch(function(){}); }
   $("sess-window").addEventListener("change",loadSessions);
@@ -1366,8 +1407,48 @@ const DASHBOARD_JS = `(function(){
         tb.appendChild(tr); }); }).catch(function(){}); }
   $("tools-window").addEventListener("change",loadTools);
 
+  // ── tokens tab (stage 10b — /stats/tokens)
+  function loadTokens(){ var w=$("tok-window").value;
+    getJson("/stats/tokens?window="+w+"&group=app").then(function(d){
+      var rows=d.rows||[];
+      var box=$("tok-cards"); box.textContent="";
+      var sum=function(f){ return rows.reduce(function(a,r){ return a+(Number(r[f])||0); },0); };
+      box.appendChild(card("total",fmtTok(sum("total"))));
+      box.appendChild(card("output",fmtTok(sum("output"))));
+      box.appendChild(card("cache read",fmtTok(sum("cache_read"))));
+      box.appendChild(card("subagent",fmtTok(sum("subagent_total"))));
+      getJson("/stats/tokens?window="+w+"&group=bucket").then(function(b){
+        var sp=el("div","card"); sp.appendChild(el("div","k","tokens over time"));
+        sp.appendChild(spark((b.rows||[]).map(function(x){ return x.total; }),180,28));
+        box.appendChild(sp); }).catch(function(){});
+      var tb=$("tok-app-rows"); tb.textContent=""; var max=0;
+      rows.forEach(function(r){ if(r.total>max)max=r.total; });
+      rows.forEach(function(r){ var tr=document.createElement("tr");
+        tr.appendChild(cell(r.key));
+        tr.appendChild(cell(fmtTok(r.total),"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(r.total,max,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(fmtTok(r.output),"num"));
+        tr.appendChild(cell(fmtTok(r.cache_read),"num"));
+        tr.appendChild(cell(r.messages,"num"));
+        tr.appendChild(cell(fmtTok(r.subagent_total),"num"));
+        tb.appendChild(tr); }); }).catch(function(){});
+    getJson("/stats/tokens?window="+w+"&group=tool").then(function(d){
+      var rows=(d.rows||[]).slice(0,20);
+      var tb=$("tok-tool-rows"); tb.textContent=""; var max=0;
+      rows.forEach(function(r){ if(r.total>max)max=r.total; });
+      rows.forEach(function(r){ var tr=document.createElement("tr");
+        tr.appendChild(cell(r.key));
+        tr.appendChild(cell(fmtTok(r.total),"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(r.total,max,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(fmtTok(r.output),"num"));
+        tr.appendChild(cell(fmtTok(r.input_cache),"num"));
+        tr.appendChild(cell(r.calls,"num"));
+        tb.appendChild(tr); }); }).catch(function(){});
+  }
+  $("tok-window").addEventListener("change",loadTokens);
+
   // 30s refresh of whichever analytics tab is visible
-  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); },30000);
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); },30000);
 
   showTab(location.hash.slice(1));
 })();`;

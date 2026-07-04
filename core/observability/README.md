@@ -8,10 +8,10 @@ live to a dashboard. Full design: [`docs/agent-dashboard-collector-design.md`](.
 > SQLite(WAL) storage + retention (2), redaction (3), live SSE (4), query API +
 > dashboard (5), auto-start via [`obs-lazy-start`](../obs-lazy-start/README.md)
 > (6), the read-only stats aggregation API (7), the tabbed analysis UI (8),
-> and token-usage collection from CC transcripts (10a — one row per API
-> message, numbers only, never content; design:
+> and token analytics from CC transcripts (10a collection + 10b Tokens UI —
+> one row per API message, numbers only, never content; design:
 > [`docs/agent-dashboard-analysis-design.md`](../../docs/agent-dashboard-analysis-design.md)
-> and the issue #38 comment). Next: the Tokens UI (10b), then guard observability (9).
+> and the issue #38 comment). Next: guard observability (stage 9).
 
 This is **code, bundled in the plugin**, but all **state** (db / config / pid)
 lives under `$XDG_STATE_HOME/claude-observability` (never under
@@ -45,7 +45,7 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
 | GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool` (tool attribution is a documented approximation) |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + turn drill-down), Tools (latency/error bars), fleet strip (strict CSP, same-origin, inline-SVG charts) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + turn drill-down), Tools (latency/error bars), Tokens (by app/tool + trend), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
