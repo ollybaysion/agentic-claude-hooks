@@ -8,8 +8,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 // Only git + time — the two things CLAUDE.md fundamentally cannot do (live git
-// state, current time). project-files / keyword-docs / db-schema / tool-time
-// providers are opt-in and shipped separately (see DESIGN.md §1, §12).
+// state, current time). keyword-docs (shipped) and db-schema / tool-time
+// (planned) are opt-in (see DESIGN.md §1, §12).
 export const DEFAULT_PROFILE = {
   providers: [
     { id: "git", priority: 90 },
