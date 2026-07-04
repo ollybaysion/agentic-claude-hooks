@@ -5,8 +5,9 @@
 // This file is built in stages (see docs/agent-dashboard-collector-design.md §10
 // for 0-6 and docs/agent-dashboard-analysis-design.md for 7+). Implemented here:
 // skeleton + lifecycle (0), non-blocking ingest (1), SQLite WAL storage (2),
-// redaction (3), SSE (4), query API + dashboard (5), and the read-only stats
-// aggregation API (7). Auto-start (6) lives in core/obs-lazy-start/.
+// redaction (3), SSE (4), query API + dashboard (5), read-only stats
+// aggregation API (7), and the tabbed analysis UI (8 — Live | Sessions | Tools
+// + fleet strip). Auto-start (6) lives in core/obs-lazy-start/.
 //
 // Invariants held from the start (design §2, §11):
 //   • single monotonic seq (ingest seq = future store PK = future SSE id = cursor)
@@ -27,7 +28,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.2.0"; // 0.2: stats/aggregation API (stage 7)
+const VERSION = "0.3.0"; // 0.2: stats API (stage 7) · 0.3: analysis UI (stage 8)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -884,40 +885,114 @@ const DASHBOARD_HTML = `<!doctype html>
 :root{color-scheme:dark}
 *{box-sizing:border-box}
 body{margin:0;font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#0b0e14;color:#c8d0dc}
-header{display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid #1c2230;position:sticky;top:0;background:#0b0e14;z-index:1}
+header{display:flex;align-items:center;gap:14px;padding:10px 16px;border-bottom:1px solid #1c2230;position:sticky;top:0;background:#0b0e14;z-index:2}
 header h1{font-size:13px;margin:0;font-weight:600;color:#e6edf3;letter-spacing:.02em}
+nav{display:flex;gap:2px}
+nav a{color:#6b7686;text-decoration:none;padding:3px 10px;border-radius:4px}
+nav a.on{color:#e6edf3;background:#1a2130}
 #status{font-size:12px}
 #status.ok{color:#3fb950}#status.warn{color:#d29922}#status.err{color:#f85149}
 #meta{margin-left:auto;color:#6b7686;font-size:12px}
+#fleet{display:flex;flex-wrap:wrap;gap:8px;padding:8px 16px;border-bottom:1px solid #141a26;background:#0d1119}
+#fleet .car{display:flex;gap:8px;align-items:baseline;padding:2px 10px;border:1px solid #1c2230;border-radius:4px;font-size:12px}
+#fleet .dot{color:#3fb950}
+#fleet .app{color:#e6edf3;font-weight:600}
+#fleet .what{color:#79c0ff}
+#fleet .ago,#fleet .none{color:#6b7686}
+section{display:none}
+section.on{display:block}
 table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:4px 10px;border-bottom:1px solid #141a26;vertical-align:top;white-space:nowrap}
 th{position:sticky;top:41px;background:#0b0e14;color:#6b7686;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.04em}
 td.evt{color:#79c0ff}
+td.num,th.num{text-align:right}
 td.pay{white-space:pre-wrap;word-break:break-word;max-width:60vw;color:#8b949e}
 tbody tr:hover{background:#11161f}
+tbody tr.sess{cursor:pointer}
+.bar{fill:#2f6feb}
+.spark{stroke:#3fb950;fill:none;stroke-width:1.5}
+.err{color:#f85149}.warn{color:#d29922}.ok{color:#3fb950}.dim{color:#6b7686}
+.cards{display:flex;gap:12px;padding:10px 16px;flex-wrap:wrap;align-items:stretch}
+.card{border:1px solid #1c2230;border-radius:6px;padding:8px 14px;min-width:100px}
+.card .k{font-size:11px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em}
+.card .v{font-size:18px;color:#e6edf3}
+.toolbar{display:flex;gap:10px;align-items:center;padding:8px 16px;color:#6b7686;font-size:12px}
+select{background:#11161f;color:#c8d0dc;border:1px solid #1c2230;border-radius:4px;font:inherit;padding:2px 6px}
+#drill{padding:0 16px 24px}
+#drill details{border:1px solid #1c2230;border-radius:6px;margin:8px 0;background:#0d1119}
+#drill summary{cursor:pointer;padding:6px 12px;color:#e6edf3}
+#drill th{position:static}
+h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 4px}
 </style></head>
 <body>
 <header>
-  <h1>claude observability</h1>
+  <h1>claude obs</h1>
+  <nav>
+    <a href="#live" id="tab-live">live</a>
+    <a href="#sessions" id="tab-sessions">sessions</a>
+    <a href="#tools" id="tab-tools">tools</a>
+  </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
 </header>
+<div id="fleet"></div>
+<section id="view-live" class="on">
 <table>
   <thead><tr><th>seq</th><th>time</th><th>event</th><th>app</th><th>session</th><th>tool</th><th>payload</th></tr></thead>
   <tbody id="rows"></tbody>
 </table>
+</section>
+<section id="view-sessions">
+  <div class="cards" id="ov-cards"></div>
+  <div class="toolbar">window
+    <select id="sess-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
+    <span class="dim">click a row for the turn timeline</span>
+  </div>
+  <table>
+    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th></tr></thead>
+    <tbody id="sess-rows"></tbody>
+  </table>
+  <div id="drill"></div>
+</section>
+<section id="view-tools">
+  <div class="toolbar">window
+    <select id="tools-window"><option>1h</option><option>6h</option><option selected>24h</option><option>7d</option></select>
+  </div>
+  <table>
+    <thead><tr><th>tool</th><th class="num">calls</th><th></th><th class="num">errs</th><th class="num">orphans</th><th class="num">pend</th><th class="num">p50</th><th class="num">p95</th><th class="num">max</th></tr></thead>
+    <tbody id="tools-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
 const DASHBOARD_JS = `(function(){
   var KNOWN=["PreToolUse","PostToolUse","UserPromptSubmit","Notification","Stop","SubagentStop","PreCompact","SessionStart","SessionEnd"];
-  var tbody=document.getElementById("rows");
-  var statusEl=document.getElementById("status");
-  var metaEl=document.getElementById("meta");
+  var $=function(id){return document.getElementById(id);};
   var MAX_ROWS=500, seen=0;
   function fmt(ms){ try{return new Date(ms).toLocaleTimeString();}catch(e){return "";} }
-  function cell(text,cls){ var td=document.createElement("td"); if(cls)td.className=cls; td.textContent=(text==null?"":String(text)); return td; }
-  function preview(p){ try{var s=JSON.stringify(p); return s.length>400?s.slice(0,400)+"…":s;}catch(e){return "";} }
+  function fmtDT(ms){ try{var d=new Date(ms);return (d.getMonth()+1)+"/"+d.getDate()+" "+d.toLocaleTimeString();}catch(e){return "";} }
+  function fmtDur(ms){ if(ms==null||isNaN(ms))return ""; if(ms<1000)return Math.round(ms)+"ms"; var s=Math.round(ms/1000); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"+(s%60>0?(s%60)+"s":""); return Math.floor(m/60)+"h"+(m%60)+"m"; }
+  function fmtAgo(ms){ var s=Math.max(0,Math.round((Date.now()-ms)/1000)); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"; return Math.floor(m/60)+"h"; }
+  function el(tag,cls,text){ var e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=String(text); return e; }
+  function cell(text,cls){ return el("td",cls,text==null?"":text); }
+  function preview(p,n){ try{var s=JSON.stringify(p); return s.length>n?s.slice(0,n)+"…":s;}catch(e){return "";} }
+  function getJson(p){ return fetch(p).then(function(r){ if(!r.ok)throw new Error(p+" -> "+r.status); return r.json(); }); }
+  var SVGNS="http://www.w3.org/2000/svg";
+  function svgEl(t,attrs){ var e=document.createElementNS(SVGNS,t); for(var k in attrs)e.setAttribute(k,attrs[k]); return e; }
+  function hbar(v,max,w,h){ var s=svgEl("svg",{width:w,height:h}); s.appendChild(svgEl("rect",{x:0,y:1,height:h-2,rx:1,"class":"bar",width:max>0?Math.max(1,Math.round(v/max*w)):0})); return s; }
+  function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
+
+  // ── tabs (#live | #sessions | #tools) — hash routing
+  var TABS=["live","sessions","tools"];
+  function showTab(name){ if(TABS.indexOf(name)<0)name="live";
+    TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
+    if(name==="sessions")loadSessions();
+    if(name==="tools")loadTools(); }
+  window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
+
+  // ── live tail (stage 5 behaviour, unchanged)
+  var tbody=$("rows"), statusEl=$("status"), metaEl=$("meta");
   function addRow(ev,prepend){
     var tr=document.createElement("tr");
     tr.appendChild(cell(ev.seq));
@@ -926,7 +1001,7 @@ const DASHBOARD_JS = `(function(){
     tr.appendChild(cell(ev.source_app));
     tr.appendChild(cell(ev.session_id));
     tr.appendChild(cell(ev.tool_name));
-    tr.appendChild(cell(preview(ev.payload),"pay"));
+    tr.appendChild(cell(preview(ev.payload,400),"pay"));
     if(prepend&&tbody.firstChild)tbody.insertBefore(tr,tbody.firstChild); else tbody.appendChild(tr);
     while(tbody.childNodes.length>MAX_ROWS)tbody.removeChild(tbody.lastChild);
     seen++; metaEl.textContent=seen+" events";
@@ -936,11 +1011,123 @@ const DASHBOARD_JS = `(function(){
     (d.events||[]).forEach(function(ev){ addRow(ev,false); });
   }).catch(function(){ setStatus("history unavailable","err"); });
   var es=new EventSource("/stream");
-  function onData(e){ try{ addRow(JSON.parse(e.data),true); }catch(x){} }
+  function onData(e){ try{ var ev=JSON.parse(e.data); addRow(ev,true); fleetNote(ev); }catch(x){} }
   KNOWN.forEach(function(name){ es.addEventListener(name,onData); });
   es.addEventListener("_ready",function(){ setStatus("● live","ok"); });
   es.addEventListener("_bye",function(){ setStatus("○ server stopped","err"); });
   es.onerror=function(){ setStatus("○ reconnecting…","warn"); };
+
+  // ── fleet strip — seeded from /stats/sessions, then updated live off the SSE feed
+  var FLEET_IDLE=600000;
+  var fleet={};
+  function fleetNote(ev){ if(!ev.session_id)return; var f=fleet[ev.session_id]||(fleet[ev.session_id]={what:""});
+    f.app=ev.source_app; f.last_at=ev.received_at||Date.now();
+    f.what=ev.hook_event_type+(ev.tool_name?" "+ev.tool_name:"");
+    if(ev.hook_event_type==="SessionEnd")f.ended=true;
+    renderFleet(); }
+  function renderFleet(){ var box=$("fleet"), now=Date.now(); box.textContent="";
+    var ids=Object.keys(fleet).filter(function(k){ var f=fleet[k]; return !f.ended&&now-f.last_at<FLEET_IDLE; })
+      .sort(function(a,b){ return fleet[b].last_at-fleet[a].last_at; });
+    if(!ids.length){ box.appendChild(el("span","none","no active sessions")); return; }
+    ids.forEach(function(sid){ var f=fleet[sid], c=el("span","car");
+      c.appendChild(el("span","dot","●"));
+      c.appendChild(el("span","app",f.app||"?"));
+      c.appendChild(el("span","dim",sid.slice(0,8)));
+      if(f.what)c.appendChild(el("span","what",f.what));
+      c.appendChild(el("span","ago",fmtAgo(f.last_at)));
+      box.appendChild(c); }); }
+  function fleetSeed(){ getJson("/stats/sessions?window=1h&limit=50").then(function(d){
+      (d.sessions||[]).forEach(function(s){ var f=fleet[s.session_id]||(fleet[s.session_id]={what:""});
+        if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; }
+        if(s.ended)f.ended=true; });
+      renderFleet(); }).catch(function(){ renderFleet(); }); }
+  fleetSeed(); setInterval(renderFleet,5000); setInterval(fleetSeed,30000);
+
+  // ── sessions tab
+  function card(k,v){ var c=el("div","card"); c.appendChild(el("div","k",k)); c.appendChild(el("div","v",v)); return c; }
+  function loadOverview(w){ getJson("/stats/overview?window="+w).then(function(o){ var box=$("ov-cards"); box.textContent="";
+      box.appendChild(card("events",o.events)); box.appendChild(card("errors",o.errors));
+      box.appendChild(card("sessions",o.sessions)); box.appendChild(card("active",o.sessions_active));
+      var sp=el("div","card"); sp.appendChild(el("div","k","activity"));
+      sp.appendChild(spark((o.buckets||[]).map(function(b){return b.count;}),180,28)); box.appendChild(sp);
+    }).catch(function(){}); }
+  function loadSessions(){ var w=$("sess-window").value; loadOverview(w);
+    getJson("/stats/sessions?window="+w+"&limit=100").then(function(d){ var tb=$("sess-rows"); tb.textContent="";
+      (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess");
+        tr.appendChild(cell(s.active?"●":(s.ended?"✓":"·"),s.active?"ok":"dim"));
+        tr.appendChild(cell(s.source_app));
+        tr.appendChild(cell(s.session_id.slice(0,8),"dim"));
+        tr.appendChild(cell(fmtDT(s.started_at)));
+        tr.appendChild(cell(fmtDur(s.duration_ms)));
+        tr.appendChild(cell(s.turns,"num"));
+        tr.appendChild(cell(s.tool_calls,"num"));
+        tr.appendChild(cell(s.errors,"num"+(s.errors?" err":"")));
+        tr.appendChild(cell(s.precompacts,"num"+(s.precompacts?" warn":"")));
+        tr.appendChild(cell(s.subagents,"num"));
+        tr.addEventListener("click",function(){ drill(s); });
+        tb.appendChild(tr); }); }).catch(function(){}); }
+  $("sess-window").addEventListener("change",loadSessions);
+
+  // ── session drill-down: turn-grouped timeline, client-side (design §5.3)
+  function fetchSession(sid){ var out=[],since=null,pages=0;
+    function page(){ var q="/events?session_id="+encodeURIComponent(sid)+"&order=asc&limit=1000"+(since!=null?"&since="+since:"");
+      return getJson(q).then(function(d){ out=out.concat(d.events||[]); since=d.next_cursor;
+        if(d.count===1000&&++pages<5)return page();
+        return out; }); }
+    return page(); }
+  function drill(s){ var box=$("drill"); box.textContent="";
+    box.appendChild(el("h2",null,"session "+s.session_id+" · "+s.source_app));
+    fetchSession(s.session_id).then(function(evs){
+      var turns=[],cur=null;
+      evs.forEach(function(ev){
+        if(ev.hook_event_type==="UserPromptSubmit"||!cur){
+          var pr="(before first prompt)";
+          if(ev.hook_event_type==="UserPromptSubmit"){ try{ pr=String((ev.payload&&ev.payload.prompt)||""); }catch(e){ pr=""; } }
+          cur={prompt:pr.slice(0,120),start:ev.received_at,end:ev.received_at,tools:0,errors:0,events:[]};
+          turns.push(cur); }
+        cur.events.push(ev); cur.end=ev.received_at;
+        if(ev.hook_event_type==="PreToolUse")cur.tools++;
+        if(ev.hook_event_type==="PostToolUse"&&ev.error!=null)cur.errors++; });
+      if(!turns.length){ box.appendChild(el("div","dim","no events in window")); return; }
+      turns.forEach(function(t,i){ var d=document.createElement("details"),sm=document.createElement("summary");
+        sm.appendChild(el("span","dim","#"+(i+1)+"  "));
+        sm.appendChild(el("span",null,t.prompt||"(empty prompt)"));
+        sm.appendChild(el("span","dim","  ·  "+fmtDur(t.end-t.start)+" · "+t.tools+" tools "));
+        if(t.errors)sm.appendChild(el("span","err",t.errors+" errors"));
+        d.appendChild(sm);
+        var tbl=document.createElement("table"),tb2=document.createElement("tbody");
+        t.events.forEach(function(ev){ var tr=document.createElement("tr");
+          tr.appendChild(cell(fmt(ev.received_at),"dim"));
+          tr.appendChild(cell(ev.hook_event_type,"evt"));
+          tr.appendChild(cell(ev.tool_name));
+          tr.appendChild(cell(ev.error?String(ev.error).slice(0,120):"","err"));
+          tr.appendChild(cell(preview(ev.payload,200),"pay"));
+          tb2.appendChild(tr); });
+        tbl.appendChild(tb2); d.appendChild(tbl); box.appendChild(d); });
+      box.scrollIntoView({behavior:"smooth"});
+    }).catch(function(e){ box.appendChild(el("div","err","load failed: "+e.message)); }); }
+
+  // ── tools tab
+  function loadTools(){ var w=$("tools-window").value;
+    getJson("/stats/tools?window="+w).then(function(d){ var tb=$("tools-rows"); tb.textContent=""; var max=0;
+      (d.tools||[]).forEach(function(t){ if(t.calls>max)max=t.calls; });
+      (d.tools||[]).forEach(function(t){ var tr=document.createElement("tr");
+        tr.appendChild(cell(t.tool_name));
+        tr.appendChild(cell(t.calls,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(t.calls,max,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(t.errors,"num"+(t.errors?" err":"")));
+        tr.appendChild(cell(t.orphans,"num"+(t.orphans?" warn":"")));
+        tr.appendChild(cell(t.pending,"num"));
+        tr.appendChild(cell(t.p50_ms==null?"":fmtDur(t.p50_ms),"num"));
+        tr.appendChild(cell(t.p95_ms==null?"":fmtDur(t.p95_ms),"num"));
+        tr.appendChild(cell(t.max_ms==null?"":fmtDur(t.max_ms),"num"));
+        tb.appendChild(tr); }); }).catch(function(){}); }
+  $("tools-window").addEventListener("change",loadTools);
+
+  // 30s refresh of whichever analytics tab is visible
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); },30000);
+
+  showTab(location.hash.slice(1));
 })();`;
 
 function handleDashboard(req, res) {

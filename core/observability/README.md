@@ -4,12 +4,13 @@ Single-file HTTP collector that receives every Claude Code hook event (sent by
 the [`send-event`](../send-event/README.md) hook), stores it, and streams it
 live to a dashboard. Full design: [`docs/agent-dashboard-collector-design.md`](../../docs/agent-dashboard-collector-design.md).
 
-> **Status:** Stages 0–7 implemented — lifecycle + non-blocking ingest (0–1),
+> **Status:** Stages 0–8 implemented — lifecycle + non-blocking ingest (0–1),
 > SQLite(WAL) storage + retention (2), redaction (3), live SSE (4), query API +
 > dashboard (5), auto-start via [`obs-lazy-start`](../obs-lazy-start/README.md)
-> (6), and the read-only stats aggregation API (7 — design:
+> (6), the read-only stats aggregation API (7), and the tabbed analysis UI (8)
+> — Live | Sessions | Tools + a fleet strip of active sessions (design:
 > [`docs/agent-dashboard-analysis-design.md`](../../docs/agent-dashboard-analysis-design.md)).
-> Next: the dashboard analysis UI (stage 8).
+> Next: guard observability (stage 9).
 
 This is **code, bundled in the plugin**, but all **state** (db / config / pid)
 lives under `$XDG_STATE_HOME/claude-observability` (never under
@@ -41,7 +42,7 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard (strict CSP, same-origin) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + turn drill-down), Tools (latency/error bars), fleet strip (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
