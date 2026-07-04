@@ -1,10 +1,27 @@
 // keyword-docs context provider (UserPromptSubmit, prio 50) — OPT-IN, default OFF.
 //
-// Local RAG-lite: match the submitted prompt against a hand-curated index
-// (<project>/.claude/context-docs.json, an array of { keywords, path }) and
-// inject the matched docs (each clipped to maxCharsEach, at most maxDocs). No
-// match -> null, so most turns inject nothing (0 tokens) with zero ledger I/O.
-// Deterministic — no vector DB / embeddings. See DESIGN.md §8.
+// Local RAG-lite: match the submitted prompt against hand-curated indexes
+// (arrays of { keywords, path }) and inject the matched docs (each clipped to
+// maxCharsEach, at most maxDocs). No match -> null, so most turns inject
+// nothing (0 tokens) with zero ledger I/O. Deterministic — no vector DB /
+// embeddings. See DESIGN.md §8.
+//
+// Layers (issue #47) — each instance reads up to three indexes per turn, in
+// precedence order (a keyword already claimed by a higher layer is shadowed
+// in lower ones; same-keyword entries within one index shadow the same way):
+//   project  <cwd>-resolved params.index (default .claude/context-docs*.json)
+//   user     ~/.claude/context.json entry params.index
+//            (default ~/.claude/<basename of the instance default>)
+//   bundle   ${CLAUDE_PLUGIN_ROOT}/context-docs/<id>.json — ships with the
+//            plugin; env var absent -> layer skipped (fail-open)
+//
+// Path resolution: params.index accepts absolute paths and ~; a doc entry's
+// `path` resolves against the folder CONTAINING ITS INDEX FILE — except when
+// that folder is named `.claude`, where the base is its parent (so the
+// long-standing "<cwd>/.claude/index + cwd-relative docs" layout keeps
+// working unchanged). Absolute doc paths pass through. An index+docs folder
+// is therefore self-contained: point params.index anywhere (company docs
+// outside any repo) and injection works from any cwd.
 //
 // Matching (params.match, default "word"):
 //   "word"      - word-boundary match, plural-tolerant: keyword "migration"
@@ -15,34 +32,28 @@
 //
 // Dedup (params.dedup, default true): a doc already injected in THIS session
 // within params.dedupTtlMs (default 15m) is skipped, so mentioning the same
-// topic on consecutive turns does not re-inject what is already in context. It
-// re-injects on a new session or after the TTL (when the doc has likely scrolled
-// off). State is per-session in os.tmpdir() (see lib/ledger.mjs), best-effort.
+// topic on consecutive turns does not re-inject what is already in context.
+// State is per-session in os.tmpdir() (see lib/ledger.mjs), keyed by the
+// RESOLVED absolute doc path (consistent across layers), best-effort.
 //
-// Precision (per index entry, default 1): how confident the keyword→doc
-// mapping is, and therefore how much to inject.
-//   precision 1 (or omitted) - inject the doc content (clipped slice).
-//   precision < 1 (e.g. 0.5) - inject only a one-line LINK ("this doc is
-//                              related — Read it if relevant"), ~20 tokens.
-// Low-confidence keywords stay useful without paying the full-slice cost on
-// every misfire; the model pulls the doc itself only when actually relevant.
+// Precision (per index entry, default 1): 1 injects the clipped doc slice;
+// < 1 (e.g. 0.5) injects only a one-line pointer (~20 tokens) telling the
+// model to Read the doc if relevant.
 //
 // Inheritance: makeKeywordDocsProvider({ id, defaultPriority, defaults })
-// builds a NAMED INSTANCE of this engine with its own index file and param
-// defaults — msg-format / db-schema / domain-docs are such instances (one
-// thin file + one registry line each; see DESIGN.md §8). Instances share the
-// engine, the dedup ledger (path-keyed), and the stats format. Every instance
-// re-reads its index on each turn, so adding a doc to an index file takes
-// effect immediately — no reload.
+// builds a NAMED INSTANCE of this engine with its own index files and param
+// defaults — msg-format / db-schema / domain-docs are such instances. Every
+// index is re-read each turn, so appending an entry takes effect immediately.
 //
 // Stats (오탐 프루닝 layer 1, issue #32): every ACTUAL injection appends one
-// line {ts, session, keywords(fired), path, mode: "full"|"link", index} to
-// ~/.claude/context-stats/ (see lib/stats.mjs). `index` names the index file,
-// so per-instance analysis stays possible. Recording only, best-effort;
-// dedup-suppressed matches are not recorded (they cost no tokens).
+// line {ts, session, keywords(fired), path, mode: "full"|"link", index, layer}
+// to ~/.claude/context-stats/ (see lib/stats.mjs). `index` is the resolved
+// absolute index path and `layer` its source, so per-instance AND per-layer
+// analysis stays possible. Recording only, best-effort.
 
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, join, relative } from "node:path";
 import { loadLedger, saveLedger } from "../ledger.mjs";
 import { recordInjection } from "../stats.mjs";
 
@@ -62,41 +73,107 @@ function matcherFor(keyword, mode) {
   return (lower) => re.test(lower);
 }
 
+const expandTilde = (p) =>
+  p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
+
+// Base folder for a doc `path` inside the index at indexPath: the index's own
+// folder, except a folder literally named `.claude` delegates to its parent
+// (backward compat with the <cwd>/.claude layout).
+function docBaseFor(indexPath) {
+  const dir = dirname(indexPath);
+  return basename(dir) === ".claude" ? dirname(dir) : dir;
+}
+
+function readIndex(path) {
+  try {
+    const arr = JSON.parse(readFileSync(path, "utf8"));
+    return Array.isArray(arr) ? arr : null;
+  } catch {
+    return null; // missing/invalid index -> this layer contributes nothing
+  }
+}
+
+// The config entry for this instance in one raw layer config.
+const entryFor = (layerCfg, id) =>
+  layerCfg?.providers?.find?.((e) => e && e.id === id) ?? null;
+
 /** Build a named instance of the keyword-docs engine (see header). */
 export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {} }) {
   return {
     id,
     events: ["UserPromptSubmit"],
     defaultPriority,
-    async run({ cwd, prompt, sessionId, params }) {
+    async run({ cwd, prompt, sessionId, params, layers }) {
       if (!prompt) return null;
       const p = { ...defaults, ...params }; // config params override instance defaults
 
-      const idxRel = p.index ?? ".claude/context-docs.json";
-      let index;
-      try {
-        index = JSON.parse(readFileSync(join(cwd, idxRel), "utf8"));
-      } catch {
-        return null; // no / invalid index -> opt-in not configured for this project
+      const defIdx = defaults.index ?? ".claude/context-docs.json";
+
+      // Per-layer index files, precedence order: project > user > bundle.
+      // `layers` is absent on direct calls (tests) — merged params then act as
+      // the project layer, matching the pre-#47 behavior.
+      const sources = [];
+      {
+        const projSpec = layers !== undefined ? (entryFor(layers?.project, id)?.params?.index ?? defIdx) : (p.index ?? defIdx);
+        const spec = expandTilde(String(projSpec));
+        sources.push({ layer: "project", path: isAbsolute(spec) ? spec : join(cwd, spec) });
       }
-      if (!Array.isArray(index)) return null;
+      if (layers !== undefined) {
+        const userSpec = entryFor(layers?.user, id)?.params?.index;
+        const spec = userSpec
+          ? expandTilde(String(userSpec))
+          : join(homedir(), ".claude", basename(defIdx));
+        sources.push({ layer: "user", path: isAbsolute(spec) ? spec : join(homedir(), spec) });
+      }
+      if (process.env.CLAUDE_PLUGIN_ROOT) {
+        sources.push({
+          layer: "bundle",
+          path: join(process.env.CLAUDE_PLUGIN_ROOT, "context-docs", `${id}.json`),
+        });
+      }
+
+      // Flatten all layers' entries in precedence order, resolving each doc
+      // path against its own index's folder.
+      const entries = [];
+      for (const src of sources) {
+        const arr = readIndex(src.path);
+        if (!arr) continue;
+        const base = docBaseFor(src.path);
+        for (const entry of arr) {
+          if (!entry || typeof entry.path !== "string") continue;
+          entries.push({
+            entry,
+            abs: isAbsolute(entry.path) ? entry.path : join(base, entry.path),
+            layer: src.layer,
+            index: src.path,
+          });
+        }
+      }
+      if (entries.length === 0) return null;
 
       const mode = p.match ?? "word";
       const lower = prompt.toLowerCase();
       const words = new Set(lower.match(TOKEN) ?? []);
 
-      // Matched docs (with the keywords that fired — recorded to stats on
-      // injection), in index order, de-duplicated within this turn.
+      // Matched docs in precedence order. A keyword claimed by an earlier
+      // entry is shadowed in later ones (within an index and across layers),
+      // so "project > user > bundle" falls out of the scan order.
       const candidates = [];
       const seenPath = new Set();
-      for (const entry of index) {
-        if (!entry || typeof entry.path !== "string" || seenPath.has(entry.path)) continue;
+      const seenKw = new Set();
+      for (const { entry, abs, layer, index } of entries) {
+        if (seenPath.has(abs)) continue;
         const keywords = Array.isArray(entry.keywords) ? entry.keywords : [];
-        const matched = keywords.filter((k) => matcherFor(k, mode)(lower, words));
+        const matched = keywords
+          .filter((k) => matcherFor(k, mode)(lower, words))
+          .filter((k) => !seenKw.has(String(k).toLowerCase()));
         if (matched.length === 0) continue;
-        seenPath.add(entry.path);
+        seenPath.add(abs);
+        for (const k of matched) seenKw.add(String(k).toLowerCase());
         const precision = Number.isFinite(Number(entry.precision)) ? Number(entry.precision) : 1;
-        candidates.push({ path: entry.path, matched, precision });
+        const rel = relative(cwd, abs);
+        const display = rel.startsWith("..") || isAbsolute(rel) ? abs : rel;
+        candidates.push({ abs, display, matched, precision, layer, index });
       }
       if (candidates.length === 0) return null; // common case: no ledger I/O at all
 
@@ -115,29 +192,29 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
       const maxDocs = p.maxDocs ?? 2;
       const maxCharsEach = p.maxCharsEach ?? 1200;
       const blocks = [];
-      for (const { path, matched, precision } of candidates) {
+      for (const { abs, display, matched, precision, layer, index } of candidates) {
         if (blocks.length >= maxDocs) break;
-        if (dedup && sess.paths[path] && now - sess.paths[path] < ttlMs) continue; // still fresh in context
+        if (dedup && sess.paths[abs] && now - sess.paths[abs] < ttlMs) continue; // still fresh in context
 
         // Low precision -> pointer only, the model Reads the doc if it matters.
         if (precision < 1) {
-          if (!existsSync(join(cwd, path))) continue; // never point at a missing file
-          blocks.push(`→ ${path} — related doc (matched: ${matched.join(", ")}); Read it if relevant.`);
-          if (dedup) sess.paths[path] = now;
-          recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "link", index: idxRel });
+          if (!existsSync(abs)) continue; // never point at a missing file
+          blocks.push(`→ ${display} — related doc (matched: ${matched.join(", ")}); Read it if relevant.`);
+          if (dedup) sess.paths[abs] = now;
+          recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path: display, mode: "link", index, layer });
           continue;
         }
 
         let body;
         try {
-          body = readFileSync(join(cwd, path), "utf8").slice(0, maxCharsEach);
+          body = readFileSync(abs, "utf8").slice(0, maxCharsEach);
         } catch {
           continue; // matched an entry whose file is missing / unreadable
         }
         if (!body.trim()) continue;
-        blocks.push(`--- ${path} ---\n${body}`);
-        if (dedup) sess.paths[path] = now;
-        recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path, mode: "full", index: idxRel });
+        blocks.push(`--- ${display} ---\n${body}`);
+        if (dedup) sess.paths[abs] = now;
+        recordInjection(cwd, { ts: now, session: sessionId ?? null, keywords: matched, path: display, mode: "full", index, layer });
       }
 
       if (dedup) saveLedger(cwd, led);

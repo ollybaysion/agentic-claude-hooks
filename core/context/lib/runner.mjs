@@ -35,7 +35,8 @@ export async function runContext(event) {
     };
 
     const cfg = loadConfig(base.cwd);
-    if (cfg.disabled) pass(); // {"providers": []} kill switch
+    if (cfg.disabled) pass(); // project {"providers": []} kill switch
+    base.layers = cfg.layers; // per-layer raw configs, for layer-aware providers
 
     const providers = selectProviders(cfg, event);
     if (providers.length === 0) pass();
