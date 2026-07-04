@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.6.0"; // 0.4: token usage (10a) · 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53)
+const VERSION = "0.7.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1179,6 +1179,54 @@ function handleStatsTokens(req, res, u) {
   } catch (e) { logSafe("stats tokens", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── GET /stats/guards (stage 9) ─────────────────────────────────────────────
+// Roll up GuardDecision events (guard deny/ask/warn — design §6). This is the
+// ONLY stats query that reads the payload column: GuardDecision rows are few
+// (tens/day) so per-row json_extract over the idx_type_time range is cheap.
+// The command is already redacted by the collector's post-ack path.
+function handleStatsGuards(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  if (!db) return json(res, 200, { window_ms, count: 0, by_guard: [], by_rule: [], by_app: [], top_commands: [] });
+  const since = Date.now() - window_ms;
+  try {
+    const rows = db.impl.prepare(
+      `SELECT source_app,
+              json_extract(payload, '$.guard')    guard,
+              json_extract(payload, '$.rule')     rule,
+              json_extract(payload, '$.decision') decision,
+              json_extract(payload, '$.command')  command
+       FROM events
+       WHERE hook_event_type = 'GuardDecision' AND received_at >= ?`
+    ).all(since);
+    const guards = new Map(), rules = new Map(), apps = new Map(), cmds = new Map();
+    for (const r of rows) {
+      const guard = r.guard || "(unknown)";
+      const rule = r.rule || "(unknown)";
+      const decision = r.decision || "(unknown)";
+      const app = r.source_app || "unknown";
+      let g = guards.get(guard);
+      if (!g) guards.set(guard, (g = { guard, total: 0, deny: 0, ask: 0, warn: 0 }));
+      g.total++;
+      if (decision === "deny" || decision === "ask" || decision === "warn") g[decision]++;
+      const rk = `${guard} ${rule} ${decision}`;
+      let rr = rules.get(rk);
+      if (!rr) rules.set(rk, (rr = { guard, rule, decision, count: 0 }));
+      rr.count++;
+      apps.set(app, (apps.get(app) || 0) + 1);
+      if (typeof r.command === "string" && r.command) cmds.set(r.command, (cmds.get(r.command) || 0) + 1);
+    }
+    json(res, 200, {
+      window_ms, count: rows.length,
+      by_guard: [...guards.values()].sort((a, b) => b.total - a.total),
+      by_rule: [...rules.values()].sort((a, b) => b.count - a.count),
+      by_app: [...apps.entries()].map(([app, count]) => ({ app, count })).sort((a, b) => b.count - a.count),
+      top_commands: [...cmds.entries()].map(([command, count]) => ({ command, count }))
+        .sort((a, b) => b.count - a.count).slice(0, 20),
+    });
+  } catch (e) { logSafe("stats guards", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
 // Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
 // renders every value via textContent (never innerHTML), so attacker-influenced
@@ -1241,6 +1289,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <a href="#sessions" id="tab-sessions">sessions</a>
     <a href="#tools" id="tab-tools">tools</a>
     <a href="#tokens" id="tab-tokens">tokens</a>
+    <a href="#guards" id="tab-guards">guards</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
@@ -1300,6 +1349,28 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <tbody id="tok-tool-rows"></tbody>
   </table>
 </section>
+<section id="view-guards">
+  <div class="cards" id="guard-cards"></div>
+  <div class="toolbar">window
+    <select id="guard-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span class="dim">only deny/ask are recorded (allow is not emitted); commands are redacted server-side</span>
+  </div>
+  <h2>by guard × rule</h2>
+  <table>
+    <thead><tr><th>guard</th><th>rule</th><th>decision</th><th class="num">count</th><th></th></tr></thead>
+    <tbody id="guard-rule-rows"></tbody>
+  </table>
+  <h2>top blocked commands</h2>
+  <table>
+    <thead><tr><th class="num">count</th><th>command</th></tr></thead>
+    <tbody id="guard-cmd-rows"></tbody>
+  </table>
+  <h2>by app</h2>
+  <table>
+    <thead><tr><th>app</th><th class="num">count</th><th></th></tr></thead>
+    <tbody id="guard-app-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
@@ -1323,13 +1394,14 @@ const DASHBOARD_JS = `(function(){
   function hbar(v,max,w,h){ var s=svgEl("svg",{width:w,height:h}); s.appendChild(svgEl("rect",{x:0,y:1,height:h-2,rx:1,"class":"bar",width:max>0?Math.max(1,Math.round(v/max*w)):0})); return s; }
   function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
 
-  // ── tabs (#live | #sessions | #tools | #tokens) — hash routing
-  var TABS=["live","sessions","tools","tokens"];
+  // ── tabs (#live | #sessions | #tools | #tokens | #guards) — hash routing
+  var TABS=["live","sessions","tools","tokens","guards"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
     if(name==="tools")loadTools();
-    if(name==="tokens")loadTokens(); }
+    if(name==="tokens")loadTokens();
+    if(name==="guards")loadGuards(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
   // ── live tail (stage 5 behaviour, unchanged)
@@ -1547,8 +1619,42 @@ const DASHBOARD_JS = `(function(){
   }
   $("tok-window").addEventListener("change",loadTokens);
 
+  // ── guards tab (stage 9 — /stats/guards): what the git/bash guards blocked
+  function loadGuards(){ var w=$("guard-window").value;
+    getJson("/stats/guards?window="+w).then(function(d){
+      var box=$("guard-cards"); box.textContent="";
+      var deny=0,ask=0; (d.by_guard||[]).forEach(function(g){ deny+=g.deny||0; ask+=g.ask||0; });
+      box.appendChild(card("decisions",d.count||0));
+      box.appendChild(card("denied",deny));
+      box.appendChild(card("asked",ask));
+      (d.by_guard||[]).forEach(function(g){ box.appendChild(card(g.guard,g.total)); });
+      var rr=$("guard-rule-rows"); rr.textContent=""; var max=0;
+      (d.by_rule||[]).forEach(function(r){ if(r.count>max)max=r.count; });
+      (d.by_rule||[]).forEach(function(r){ var tr=document.createElement("tr");
+        tr.appendChild(cell(r.guard,"dim"));
+        tr.appendChild(cell(r.rule));
+        tr.appendChild(cell(r.decision,r.decision==="deny"?"err":"warn"));
+        tr.appendChild(cell(r.count,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(r.count,max,120,12)); tr.appendChild(td);
+        rr.appendChild(tr); });
+      if(!(d.by_rule||[]).length){ var etr=document.createElement("tr"),etd=el("td","dim","no guard decisions in window"); etd.colSpan=5; etr.appendChild(etd); rr.appendChild(etr); }
+      var cr=$("guard-cmd-rows"); cr.textContent="";
+      (d.top_commands||[]).forEach(function(c){ var tr=document.createElement("tr");
+        tr.appendChild(cell(c.count,"num"));
+        tr.appendChild(cell(c.command,"pay"));
+        cr.appendChild(tr); });
+      var ar=$("guard-app-rows"); ar.textContent=""; var amax=0;
+      (d.by_app||[]).forEach(function(a){ if(a.count>amax)amax=a.count; });
+      (d.by_app||[]).forEach(function(a){ var tr=document.createElement("tr");
+        tr.appendChild(cell(a.app));
+        tr.appendChild(cell(a.count,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(a.count,amax,120,12)); tr.appendChild(td);
+        ar.appendChild(tr); });
+    }).catch(function(){}); }
+  $("guard-window").addEventListener("change",loadGuards);
+
   // 30s refresh of whichever analytics tab is visible
-  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); },30000);
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); },30000);
 
   showTab(location.hash.slice(1));
 })();`;
@@ -1596,6 +1702,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/sessions") return handleStatsSessions(req, res, u);
       if (pathname === "/stats/tools") return handleStatsTools(req, res, u);
       if (pathname === "/stats/tokens") return handleStatsTokens(req, res, u);
+      if (pathname === "/stats/guards") return handleStatsGuards(req, res, u);
       return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {
