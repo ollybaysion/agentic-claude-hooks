@@ -27,6 +27,7 @@ and are auto-discovered by the plugin loader.
 | --- | --- | --- | --- |
 | [`agentic-coding-git-workflow`](skills/agentic-coding-git-workflow/README.md) | `/claude-hooks:agentic-coding-git-workflow` | ✅ active | Personal issue→PR→cleanup flow in one skill, from an existing issue (`#N`, never creates issues): view issue → plan → update main → feat branch + worktree (`setup`), commit → push → PR (`finish`), then remove worktree → update main after merge (`cleanup`). The happy-path for what `git-guard` enforces. |
 | [`keyword-docs-prune`](skills/keyword-docs-prune/SKILL.md) | `/claude-hooks:keyword-docs-prune [days]` | ✅ active | Analyze keyword-docs injection stats, join transcripts for follow-up rates, and propose index pruning (remove/narrow noisy keywords). User-invoked only (`disable-model-invocation`); applies changes only after explicit approval. |
+| [`keyword-docs-add`](skills/keyword-docs-add/SKILL.md) | `/claude-hooks:keyword-docs-add [doc-path]` | ✅ active | Register a doc into a keyword-docs index: read the doc → pick the instance (from the project's actual config) → propose trigger keywords → collision-check every index file → set precision → append after approval. The pair of `keyword-docs-prune` (add = 넣기, prune = 빼기). |
 
 ## Layout
 
