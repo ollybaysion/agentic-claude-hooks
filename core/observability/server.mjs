@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.5.1"; // 0.3: analysis UI (8) · 0.4: token usage (10a) · 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51)
+const VERSION = "0.6.0"; // 0.4: token usage (10a) · 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -775,7 +775,7 @@ function handleEventById(req, res, idStr) {
 // Same gates as the query API; degraded (db=null) answers empty-but-200; and no
 // query here ever SELECTs the payload column (the widest one). The hot path
 // (POST /events) is untouched by this whole section.
-const WINDOW_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000 };
+const WINDOW_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 };
 
 function statsGate(req, res) {
   if (!hostOk(req)) { json(res, 421, { error: "bad host" }); return false; }
@@ -1030,26 +1030,68 @@ function parseTranscriptTail(sessionId, tPath, appHint) {
   } finally { try { fs.closeSync(fd); } catch {} }
 }
 
+// ── model pricing (#53) ─────────────────────────────────────────────────────
+// USD per MTok, official API rates as of 2026-07-04. Longest matching prefix of
+// the transcript's message.model wins. cache_write assumes the 5-minute TTL
+// (1.25× input — Claude Code's default); 1h-TTL writes (2×) are undercounted.
+// Extend or correct via {"pricing": {"<prefix>": {input, output, cache_write,
+// cache_read}}} in config.json (set a prefix to null to unprice it).
+const DEFAULT_PRICING = {
+  "claude-fable-5": { input: 10, output: 50, cache_write: 12.5, cache_read: 1 },
+  "claude-mythos-5": { input: 10, output: 50, cache_write: 12.5, cache_read: 1 },
+  "claude-opus-4-8": { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 },
+  "claude-opus-4-7": { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 },
+  "claude-opus-4-6": { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 },
+  "claude-opus-4-5": { input: 5, output: 25, cache_write: 6.25, cache_read: 0.5 },
+  "claude-opus-4": { input: 15, output: 75, cache_write: 18.75, cache_read: 1.5 }, // Opus 4 / 4.1 dated ids
+  "claude-sonnet-5": { input: 2, output: 10, cache_write: 2.5, cache_read: 0.2 }, // intro; 3/15 from 2026-09-01
+  "claude-sonnet-4": { input: 3, output: 15, cache_write: 3.75, cache_read: 0.3 },
+  "claude-haiku-4-5": { input: 1, output: 5, cache_write: 1.25, cache_read: 0.1 },
+  "claude-3-5-haiku": { input: 0.8, output: 4, cache_write: 1, cache_read: 0.08 },
+};
+const PRICING = { ...DEFAULT_PRICING }; // + config.json overrides (loadPricing)
+const priceMemo = new Map(); // model -> rates | null
+function priceOf(model) {
+  if (!model) return null;
+  if (priceMemo.has(model)) return priceMemo.get(model);
+  let best = null, bestLen = -1;
+  for (const k in PRICING)
+    if (PRICING[k] && model.startsWith(k) && k.length > bestLen) { best = PRICING[k]; bestLen = k.length; }
+  priceMemo.set(model, best);
+  return best;
+}
+function costOf(p, input, output, cacheCreate, cacheRead) {
+  return (input * p.input + output * p.output + cacheCreate * p.cache_write + cacheRead * p.cache_read) / 1e6;
+}
+const roundUsd = (n) => Math.round(n * 1e4) / 1e4;
+
 // ── GET /stats/tokens (stage 10a) ───────────────────────────────────────────
-// group=session|app|bucket|tool. Non-tool groups are exact sums of the usage
+// group=session|app|bucket|tool|model. Non-tool groups are exact sums of the usage
 // rows; group=tool is the DOCUMENTED APPROXIMATION: a message's output is split
 // across the tool calls it emitted, its input+cache_create across the calls it
 // follows (tool results feed the next call's input). No emitted → "(response)",
 // no follows → "(prompt)" (or "(subagent)" for sidechain rows).
 function tokensByTool(rows) {
-  const perId = new Map(); // tool_use_id -> {out, inp}
-  const named = new Map(); // bucket name -> {out, inp}
-  const bumpId = (id, f, v) => { let o = perId.get(id); if (!o) perId.set(id, (o = { out: 0, inp: 0 })); o[f] += v; };
-  const bumpName = (n, f, v) => { let o = named.get(n); if (!o) named.set(n, (o = { out: 0, inp: 0 })); o[f] += v; };
+  const perId = new Map(); // tool_use_id -> {out, inp, oc, ic}
+  const named = new Map(); // bucket name -> {out, inp, oc, ic}
+  const bump = (map, k, f, v, c, cv) => {
+    let o = map.get(k); if (!o) map.set(k, (o = { out: 0, inp: 0, oc: 0, ic: 0 }));
+    o[f] += v; o[c] += cv;
+  };
   for (const r of rows) {
     let emitted = [], follows = [];
     try { emitted = JSON.parse(r.emitted_tool_ids) || []; } catch {}
     try { follows = JSON.parse(r.follows_tool_ids) || []; } catch {}
     const out = Number(r.output), inp = Number(r.input) + Number(r.cache_create);
-    if (emitted.length) for (const id of emitted) bumpId(id, "out", out / emitted.length);
-    else bumpName("(response)", "out", out);
-    if (follows.length) for (const id of follows) bumpId(id, "inp", inp / follows.length);
-    else bumpName(Number(r.sidechain) ? "(subagent)" : "(prompt)", "inp", inp);
+    // cost rides the same split as the tokens (same documented approximation);
+    // cache_read stays unattributed here, exactly like the token figures.
+    const p = priceOf(r.model);
+    const outCost = p ? out * p.output / 1e6 : 0;
+    const inpCost = p ? (Number(r.input) * p.input + Number(r.cache_create) * p.cache_write) / 1e6 : 0;
+    if (emitted.length) for (const id of emitted) bump(perId, id, "out", out / emitted.length, "oc", outCost / emitted.length);
+    else bump(named, "(response)", "out", out, "oc", outCost);
+    if (follows.length) for (const id of follows) bump(perId, id, "inp", inp / follows.length, "ic", inpCost / follows.length);
+    else bump(named, Number(r.sidechain) ? "(subagent)" : "(prompt)", "inp", inp, "ic", inpCost);
   }
   const ids = [...perId.keys()], nameOf = new Map();
   for (let i = 0; i < ids.length; i += 400) {
@@ -1063,13 +1105,14 @@ function tokensByTool(rows) {
   const agg = new Map();
   const fold = (name, o, calls) => {
     let a = agg.get(name);
-    if (!a) agg.set(name, (a = { key: name, output: 0, input_cache: 0, total: 0, calls: 0 }));
+    if (!a) agg.set(name, (a = { key: name, output: 0, input_cache: 0, total: 0, calls: 0, cost_usd: 0 }));
     a.output += o.out; a.input_cache += o.inp; a.total += o.out + o.inp; a.calls += calls;
+    a.cost_usd += o.oc + o.ic;
   };
   for (const [id, o] of perId) fold(nameOf.get(id) || "(unknown)", o, 1);
   for (const [name, o] of named) fold(name, o, 0);
   return [...agg.values()]
-    .map((a) => ({ ...a, output: Math.round(a.output), input_cache: Math.round(a.input_cache), total: Math.round(a.total) }))
+    .map((a) => ({ ...a, output: Math.round(a.output), input_cache: Math.round(a.input_cache), total: Math.round(a.total), cost_usd: roundUsd(a.cost_usd) }))
     .sort((a, b) => b.total - a.total);
 }
 
@@ -1078,8 +1121,8 @@ function handleStatsTokens(req, res, u) {
   const window_ms = windowOf(u, "7d");
   const bucket_ms = window_ms <= WINDOW_MS["1h"] ? 60_000 : 3_600_000;
   const group = u.searchParams.get("group") || "session";
-  if (!["session", "app", "bucket", "tool"].includes(group))
-    return json(res, 400, { error: "bad group (session|app|bucket|tool)" });
+  if (!["session", "app", "bucket", "tool", "model"].includes(group))
+    return json(res, 400, { error: "bad group (session|app|bucket|tool|model)" });
   if (!db) return json(res, 200, { window_ms, bucket_ms, group, count: 0, rows: [] });
   const since = Date.now() - window_ms;
   const app = u.searchParams.get("source_app");
@@ -1087,7 +1130,7 @@ function handleStatsTokens(req, res, u) {
   const params = app ? [since, app] : [since];
   try {
     const rows = db.impl.prepare(
-      `SELECT session_id, source_app, ts, input, output, cache_create, cache_read,
+      `SELECT session_id, source_app, ts, model, input, output, cache_create, cache_read,
               sidechain, emitted_tool_ids, follows_tool_ids
        FROM usage WHERE ${where}`
     ).all(...params);
@@ -1096,6 +1139,7 @@ function handleStatsTokens(req, res, u) {
     else {
       const keyOf = group === "session" ? (r) => r.session_id
         : group === "app" ? (r) => r.source_app
+        : group === "model" ? (r) => r.model || "(unknown)"
         : (r) => Math.floor(Number(r.ts) / bucket_ms) * bucket_ms;
       const agg = new Map();
       for (const r of rows) {
@@ -1104,6 +1148,7 @@ function handleStatsTokens(req, res, u) {
         if (!a) agg.set(k, (a = {
           key: k, input: 0, output: 0, cache_create: 0, cache_read: 0,
           total: 0, messages: 0, subagent_total: 0, subagent_messages: 0,
+          cost_usd: 0, unpriced: 0,
         }));
         if (group === "session") {
           if (!a.source_app) a.source_app = r.source_app;
@@ -1115,6 +1160,11 @@ function handleStatsTokens(req, res, u) {
           }
         }
         const t = Number(r.input) + Number(r.output) + Number(r.cache_create) + Number(r.cache_read);
+        // cost counts main chain AND sidechain (real spend either way); tokens
+        // without a known price go to `unpriced` instead of a made-up $0 rate.
+        const p = priceOf(r.model);
+        if (p) a.cost_usd += costOf(p, Number(r.input), Number(r.output), Number(r.cache_create), Number(r.cache_read));
+        else a.unpriced += t;
         if (Number(r.sidechain)) { a.subagent_total += t; a.subagent_messages++; }
         else {
           a.input += Number(r.input); a.output += Number(r.output);
@@ -1123,6 +1173,7 @@ function handleStatsTokens(req, res, u) {
         }
       }
       out = [...agg.values()].sort(group === "bucket" ? (a, b) => a.key - b.key : (a, b) => b.total - a.total);
+      for (const a of out) a.cost_usd = roundUsd(a.cost_usd);
     }
     json(res, 200, { window_ms, bucket_ms, group, count: out.length, rows: out });
   } catch (e) { logSafe("stats tokens", e); json(res, 500, { error: "query failed" }); }
@@ -1208,7 +1259,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <span class="dim">click a row for the turn timeline</span>
   </div>
   <table>
-    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">tokens</th></tr></thead>
+    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">tokens</th><th class="num">cost</th></tr></thead>
     <tbody id="sess-rows"></tbody>
   </table>
   <div id="drill"></div>
@@ -1225,17 +1276,27 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 <section id="view-tokens">
   <div class="cards" id="tok-cards"></div>
   <div class="toolbar">window
-    <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
-    <span class="dim">per-tool figures are attributed approximations (see README)</span>
+    <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span class="dim">costs are estimates from official per-MTok rates (5m cache writes); per-tool figures are attributed approximations (see README)</span>
   </div>
+  <h2>daily</h2>
+  <table>
+    <thead><tr><th>day</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">cache read</th><th class="num">cost</th></tr></thead>
+    <tbody id="tok-day-rows"></tbody>
+  </table>
   <h2>by app</h2>
   <table>
-    <thead><tr><th>app</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">cache read</th><th class="num">msgs</th><th class="num">subagent</th></tr></thead>
+    <thead><tr><th>app</th><th class="num">total</th><th></th><th class="num">cost</th><th class="num">output</th><th class="num">cache read</th><th class="num">msgs</th><th class="num">subagent</th></tr></thead>
     <tbody id="tok-app-rows"></tbody>
+  </table>
+  <h2>by model</h2>
+  <table>
+    <thead><tr><th>model</th><th class="num">total</th><th></th><th class="num">cost</th><th class="num">output</th><th class="num">cache read</th><th class="num">msgs</th><th class="num">subagent</th></tr></thead>
+    <tbody id="tok-model-rows"></tbody>
   </table>
   <h2>by tool</h2>
   <table>
-    <thead><tr><th>tool</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">in+cache</th><th class="num">calls</th></tr></thead>
+    <thead><tr><th>tool</th><th class="num">total</th><th></th><th class="num">cost</th><th class="num">output</th><th class="num">in+cache</th><th class="num">calls</th></tr></thead>
     <tbody id="tok-tool-rows"></tbody>
   </table>
 </section>
@@ -1251,6 +1312,8 @@ const DASHBOARD_JS = `(function(){
   function fmtDur(ms){ if(ms==null||isNaN(ms))return ""; if(ms<1000)return Math.round(ms)+"ms"; var s=Math.round(ms/1000); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"+(s%60>0?(s%60)+"s":""); return Math.floor(m/60)+"h"+(m%60)+"m"; }
   function fmtAgo(ms){ var s=Math.max(0,Math.round((Date.now()-ms)/1000)); if(s<60)return s+"s"; var m=Math.floor(s/60); if(m<60)return m+"m"; return Math.floor(m/60)+"h"; }
   function fmtTok(n){ n=Number(n)||0; if(n>=1e9)return (n/1e9).toFixed(1)+"G"; if(n>=1e6)return (n/1e6).toFixed(1)+"M"; if(n>=1e3)return Math.round(n/1e3)+"k"; return String(n); }
+  function fmtUsd(n){ n=Number(n)||0; if(!n)return ""; if(n>=100)return "$"+Math.round(n); if(n>=1)return "$"+n.toFixed(2); return "$"+n.toFixed(3); }
+  function pad2(n){ return (n<10?"0":"")+n; }
   function el(tag,cls,text){ var e=document.createElement(tag); if(cls)e.className=cls; if(text!=null)e.textContent=String(text); return e; }
   function cell(text,cls){ return el("td",cls,text==null?"":text); }
   function preview(p,n){ try{var s=JSON.stringify(p); return s.length>n?s.slice(0,n)+"…":s;}catch(e){return "";} }
@@ -1353,6 +1416,7 @@ const DASHBOARD_JS = `(function(){
         tr.appendChild(cell(s.subagents,"num"));
         var tk=tok[s.session_id];
         tr.appendChild(cell(tk?fmtTok(tk.total+(tk.subagent_total||0)):"","num"));
+        tr.appendChild(cell(tk?fmtUsd(tk.cost_usd):"","num"));
         tr.addEventListener("click",function(){ drill(s); });
         tb.appendChild(tr); }); }).catch(function(){}); }
   $("sess-window").addEventListener("change",loadSessions);
@@ -1413,7 +1477,41 @@ const DASHBOARD_JS = `(function(){
         tb.appendChild(tr); }); }).catch(function(){}); }
   $("tools-window").addEventListener("change",loadTools);
 
-  // ── tokens tab (stage 10b — /stats/tokens)
+  // ── tokens tab (stage 10b — /stats/tokens; costs + daily/model views #53)
+  // grouped rows share one shape: key | total | bar | cost | output | cache read | msgs | subagent
+  function tokRow(r,max){ var tr=document.createElement("tr");
+    tr.appendChild(cell(r.key));
+    tr.appendChild(cell(fmtTok(r.total),"num"));
+    var td=document.createElement("td"); td.appendChild(hbar(r.total,max,120,12)); tr.appendChild(td);
+    tr.appendChild(cell(fmtUsd(r.cost_usd),"num"));
+    tr.appendChild(cell(fmtTok(r.output),"num"));
+    tr.appendChild(cell(fmtTok(r.cache_read),"num"));
+    tr.appendChild(cell(r.messages,"num"));
+    tr.appendChild(cell(fmtTok(r.subagent_total),"num"));
+    return tr; }
+  function fillTok(id,rows){ var tb=$(id); tb.textContent=""; var max=0;
+    rows.forEach(function(r){ if(r.total>max)max=r.total; });
+    rows.forEach(function(r){ tb.appendChild(tokRow(r,max)); }); }
+  // hourly buckets folded into LOCAL calendar days (the server is TZ-blind);
+  // daily total includes subagent tokens, matching cost_usd's scope.
+  function renderDaily(rows){ var tb=$("tok-day-rows"); tb.textContent="";
+    var days={},order=[];
+    rows.forEach(function(r){ var d=new Date(Number(r.key));
+      var k=d.getFullYear()+"-"+pad2(d.getMonth()+1)+"-"+pad2(d.getDate());
+      var a=days[k]; if(!a){ a=days[k]={total:0,output:0,cache_read:0,cost:0}; order.push(k); }
+      a.total+=(Number(r.total)||0)+(Number(r.subagent_total)||0);
+      a.output+=Number(r.output)||0; a.cache_read+=Number(r.cache_read)||0;
+      a.cost+=Number(r.cost_usd)||0; });
+    order.sort().reverse();
+    var max=0; order.forEach(function(k){ if(days[k].total>max)max=days[k].total; });
+    order.forEach(function(k){ var a=days[k],tr=document.createElement("tr");
+      tr.appendChild(cell(k));
+      tr.appendChild(cell(fmtTok(a.total),"num"));
+      var td=document.createElement("td"); td.appendChild(hbar(a.total,max,120,12)); tr.appendChild(td);
+      tr.appendChild(cell(fmtTok(a.output),"num"));
+      tr.appendChild(cell(fmtTok(a.cache_read),"num"));
+      tr.appendChild(cell(fmtUsd(a.cost),"num"));
+      tb.appendChild(tr); }); }
   function loadTokens(){ var w=$("tok-window").value;
     getJson("/stats/tokens?window="+w+"&group=app").then(function(d){
       var rows=d.rows||[];
@@ -1423,21 +1521,16 @@ const DASHBOARD_JS = `(function(){
       box.appendChild(card("output",fmtTok(sum("output"))));
       box.appendChild(card("cache read",fmtTok(sum("cache_read"))));
       box.appendChild(card("subagent",fmtTok(sum("subagent_total"))));
+      box.appendChild(card("cost (est.)",fmtUsd(sum("cost_usd"))||"$0"));
+      if(sum("unpriced")>0)box.appendChild(card("unpriced tok",fmtTok(sum("unpriced"))));
       getJson("/stats/tokens?window="+w+"&group=bucket").then(function(b){
         var sp=el("div","card"); sp.appendChild(el("div","k","tokens over time"));
         sp.appendChild(spark((b.rows||[]).map(function(x){ return x.total; }),180,28));
-        box.appendChild(sp); }).catch(function(){});
-      var tb=$("tok-app-rows"); tb.textContent=""; var max=0;
-      rows.forEach(function(r){ if(r.total>max)max=r.total; });
-      rows.forEach(function(r){ var tr=document.createElement("tr");
-        tr.appendChild(cell(r.key));
-        tr.appendChild(cell(fmtTok(r.total),"num"));
-        var td=document.createElement("td"); td.appendChild(hbar(r.total,max,120,12)); tr.appendChild(td);
-        tr.appendChild(cell(fmtTok(r.output),"num"));
-        tr.appendChild(cell(fmtTok(r.cache_read),"num"));
-        tr.appendChild(cell(r.messages,"num"));
-        tr.appendChild(cell(fmtTok(r.subagent_total),"num"));
-        tb.appendChild(tr); }); }).catch(function(){});
+        box.appendChild(sp);
+        renderDaily(b.rows||[]); }).catch(function(){});
+      fillTok("tok-app-rows",rows); }).catch(function(){});
+    getJson("/stats/tokens?window="+w+"&group=model").then(function(d){
+      fillTok("tok-model-rows",(d.rows||[]).filter(function(r){ return r.total+(r.subagent_total||0)>0; })); }).catch(function(){});
     getJson("/stats/tokens?window="+w+"&group=tool").then(function(d){
       var rows=(d.rows||[]).slice(0,20);
       var tb=$("tok-tool-rows"); tb.textContent=""; var max=0;
@@ -1446,6 +1539,7 @@ const DASHBOARD_JS = `(function(){
         tr.appendChild(cell(r.key));
         tr.appendChild(cell(fmtTok(r.total),"num"));
         var td=document.createElement("td"); td.appendChild(hbar(r.total,max,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(fmtUsd(r.cost_usd),"num"));
         tr.appendChild(cell(fmtTok(r.output),"num"));
         tr.appendChild(cell(fmtTok(r.input_cache),"num"));
         tr.appendChild(cell(r.calls,"num"));
@@ -1545,6 +1639,15 @@ function loadToken() {
   } catch {}
 }
 
+// config.json {pricing} overrides/extends DEFAULT_PRICING (fail-open: bad file
+// or key → defaults stand). Loaded once at boot; restart to pick up changes.
+function loadPricing() {
+  try {
+    const c = JSON.parse(fs.readFileSync(configFile(DATA_DIR), "utf8"));
+    if (c.pricing && typeof c.pricing === "object") Object.assign(PRICING, c.pricing);
+  } catch {}
+}
+
 function writePidfile() {
   const data = { pid: process.pid, host: HOST, port: PORT, startedAt: STARTED_AT, version: VERSION };
   try { fs.writeFileSync(pidFile(DATA_DIR), JSON.stringify(data), { mode: 0o600 }); }
@@ -1602,6 +1705,7 @@ async function startServer() {
   assertLoopback();
   ensureDataDir();
   loadToken();
+  loadPricing();
   EXPECT = TOKEN ? sha256(TOKEN) : null;
 
   await startBackend(); // open SQLite, migrate, seed SEQ (degrades to null on failure)

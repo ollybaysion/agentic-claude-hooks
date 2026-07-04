@@ -43,13 +43,16 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/overview` | window totals: events / errors / sessions (+active) per type + time buckets |
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
-| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool` (tool attribution is a documented approximation) |
+| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates, 5m cache writes) + `unpriced` (tokens of models missing from the pricing table) |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + turn drill-down), Tools (latency/error bars), Tokens (by app/tool + trend), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + turn drill-down), Tools (latency/error bars), Tokens (daily/by app/by model/by tool + cost + trend), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
 
-`/stats/*` params: `window=1h|6h|24h|7d` (whitelist; defaults 24h, sessions 7d),
+`/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
 the `payload` column and answer empty-but-200 when the DB backend is degraded.
+Cost pricing can be extended/corrected via `{"pricing": {"<model prefix>":
+{"input", "output", "cache_write", "cache_read"}}}` (USD per MTok) in
+config.json — longest prefix wins, loaded at boot.
 
 ## Config (env `OBS_*` > config.json > default)
 
