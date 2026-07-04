@@ -29,6 +29,7 @@
 import { spawnSync } from "node:child_process";
 import { readHookInput, denyPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
 import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
+import { emitGuardDecision } from "../../lib/obs-client.mjs";
 
 const PROTECTED = new Set(["main", "master"]);
 
@@ -152,7 +153,9 @@ function parseGh(tokens) {
   return { positionals, help, method };
 }
 
-function checkBash(command, branch) {
+// `deny(rule, reason)` emits a GuardDecision (best-effort) then hard-denies via
+// denyPreToolUse — which exits. Sites `return deny(...)` so the scan halts.
+async function checkBash(command, branch, deny) {
   // Analyse each real sub-command in isolation so a token in one segment can't
   // cross-trigger a rule meant for another, and so only an actual git/gh
   // subcommand — not a co-occurring word — fires a rule.
@@ -162,30 +165,30 @@ function checkBash(command, branch) {
       const { subcommand, args } = git;
 
       if (args.includes("--no-verify")) {
-        denyPreToolUse(
+        return deny("no-verify",
           "`--no-verify` 거부 — pre-commit/pre-push 훅(검사)을 건너뛰지 마라. 훅이 실패하면 원인을 고쳐라."
         );
       }
       if (subcommand === "push") {
         if (hasForce(args)) {
-          denyPreToolUse(
+          return deny("force-push",
             "force push 거부 — 히스토리를 덮어쓴다. 안전한 `git push --force-with-lease`를 " +
               "쓰거나, 정말 필요하면 사용자가 직접 실행해라."
           );
         }
         if (pushTargetsProtected(args, branch)) {
-          denyPreToolUse("main/master로 직접 push 거부 — 브랜치를 만들어 PR로 머지해라.");
+          return deny("protected-push", "main/master로 직접 push 거부 — 브랜치를 만들어 PR로 머지해라.");
         }
       }
       if (subcommand === "commit" && PROTECTED.has(branch)) {
-        denyPreToolUse(
+        return deny("protected-commit",
           `'${branch}'에 직접 커밋 거부 — feature/* 또는 fix/* 브랜치를 먼저 만들어라.`
         );
       }
       // Low-level merge into a protected branch (recovery flags are not a merge).
       if (subcommand === "merge" && PROTECTED.has(branch) &&
         !args.some((t) => MERGE_RECOVERY.has(t))) {
-        denyPreToolUse(
+        return deny("protected-merge",
           `'${branch}'에서 merge 거부 — 보호 브랜치 병합은 사람 몫이다. feature 브랜치에서 ` +
             "작업하거나, PR 머지는 사용자에게 요청해라."
         );
@@ -197,11 +200,11 @@ function checkBash(command, branch) {
     if (!gh) continue;
     const [p0, p1] = gh.positionals;
     // `gh pr merge` (every flag variant); `--help` is a query, not a merge.
-    if (p0 === "pr" && p1 === "merge" && !gh.help) denyPreToolUse(PR_MERGE_DENY);
+    if (p0 === "pr" && p1 === "merge" && !gh.help) return deny("pr-merge", PR_MERGE_DENY);
     // `gh api` PUT to a `pulls/<n>/merge` endpoint (a GET is a status check).
     if (p0 === "api" && p1 && MERGE_ENDPOINT.test(p1.split("?")[0]) &&
       (gh.method || "").toUpperCase() === "PUT") {
-      denyPreToolUse(PR_MERGE_DENY);
+      return deny("pr-merge", PR_MERGE_DENY);
     }
   }
 }
@@ -215,9 +218,16 @@ try {
   const cwd = input?.cwd ?? process.cwd();
   const branch = currentBranch(cwd);
 
+  // Emit a GuardDecision (best-effort, never blocks) then hard-deny. The emit
+  // failing/hanging/absent can NEVER change the decision — deny always runs.
+  const deny = async (rule, reason) => {
+    await emitGuardDecision(input, { guard: "git-guard", rule, decision: "deny", reason });
+    denyPreToolUse(reason);
+  };
+
   if (isEdit) {
     if (PROTECTED.has(branch)) {
-      denyPreToolUse(
+      await deny("protected-edit",
         `'${branch}' 브랜치에서 파일 수정 거부 — 작업용 feature/* 또는 fix/* 브랜치를 ` +
           "먼저 만들고(git switch -c) 진행해라."
       );
@@ -228,7 +238,7 @@ try {
   // tool === "Bash" from here.
   const command = input?.tool_input?.command;
   if (!command || !command.trim()) pass();
-  checkBash(command, branch);
+  await checkBash(command, branch, deny);
 
   pass(); // clean — defer to the normal permission flow
 } catch (err) {

@@ -13,11 +13,18 @@ import path from "node:path";
 
 const GUARD = path.join(path.dirname(fileURLToPath(import.meta.url)), "git-guard.mjs");
 
+// The guard now emits a GuardDecision to the collector on deny (stage 9). Point
+// it at a dead port so these hermetic unit tests never POST into a real running
+// collector (the production one listens on 4090) — the emit ECONNREFUSEs fast
+// and the decision is unchanged, which is exactly what we're asserting.
+const ENV = { ...process.env, OBS_PORT: "59999" };
+
 function decide(command) {
   const r = spawnSync(process.execPath, [GUARD], {
     input: JSON.stringify({ tool_name: "Bash", cwd: "/", tool_input: { command } }),
     encoding: "utf8",
     timeout: 10_000,
+    env: ENV,
   });
   if (r.status !== 0) return `exit ${r.status}: ${r.stderr}`;
   if (!r.stdout.trim()) return "pass";

@@ -12,59 +12,8 @@
 // everything else is best-effort. We promote the few fields the collector
 // indexes (tool_name, tool_use_id, …) to the top level when present.
 
-import http from "node:http";
-import fs from "node:fs";
-import path from "node:path";
-import { spawnSync } from "node:child_process";
 import { readHookInput, pass, failOpen } from "../../lib/hook-io.mjs";
-import { configFile } from "../../lib/obs-paths.mjs";
-
-const HOST = process.env.OBS_HOST || "127.0.0.1";
-const PORT = Number.isInteger(Number(process.env.OBS_PORT)) && Number(process.env.OBS_PORT) > 0
-  ? Number(process.env.OBS_PORT) : 4090;
-const TIMEOUT_MS = 5000;
-
-// Token: env wins; else config.json (written 0600 by the collector when auth is
-// on). Absent → POST without auth (collector trusts loopback by default).
-function readToken() {
-  if (process.env.OBS_TOKEN) return process.env.OBS_TOKEN;
-  try {
-    const c = JSON.parse(fs.readFileSync(configFile(), "utf8"));
-    if (typeof c.token === "string" && c.token) return c.token;
-  } catch {}
-  return null;
-}
-
-// A human-friendly label for the source: explicit override, else the tmux
-// window name, else the project directory name, else a constant.
-//
-// The tmux step exists because several claude sessions run from the SAME
-// directory (issue #45): basename(cwd) collapses them all into one label,
-// while the tmux window name is maintained per task. Best-effort only — any
-// failure (no tmux, dead pane, timeout) falls through silently.
-function tmuxWindowName() {
-  if (!process.env.TMUX || !process.env.TMUX_PANE) return null;
-  try {
-    const r = spawnSync(
-      "tmux",
-      ["display-message", "-p", "-t", process.env.TMUX_PANE, "#{window_name}"],
-      { encoding: "utf8", timeout: 200 }
-    );
-    if (r.status !== 0 || !r.stdout) return null;
-    const name = r.stdout.trim();
-    return name || null;
-  } catch {
-    return null;
-  }
-}
-
-function sourceApp(input) {
-  if (process.env.OBS_SOURCE_APP) return process.env.OBS_SOURCE_APP;
-  const win = tmuxWindowName();
-  if (win) return win;
-  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-  return path.basename(cwd) || "claude-code";
-}
+import { sourceApp, postEnvelope } from "../../lib/obs-client.mjs";
 
 function buildEnvelope(input) {
   const env = {
@@ -88,31 +37,12 @@ function buildEnvelope(input) {
   return env;
 }
 
-function post(body) {
-  return new Promise((resolve) => {
-    const headers = {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(body),
-      Host: "127.0.0.1", // collector requires a loopback Host (421 otherwise)
-    };
-    const token = readToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-    const req = http.request(
-      { host: HOST, port: PORT, path: "/events", method: "POST", headers, timeout: TIMEOUT_MS },
-      (res) => { res.resume(); res.on("end", resolve); res.on("error", resolve); }
-    );
-    req.on("error", resolve); // ECONNREFUSED (collector down) etc. — swallow
-    req.on("timeout", () => { req.destroy(); resolve(); });
-    req.end(body);
-  });
-}
-
 try {
   const input = await readHookInput();
   // Only forward real hook events. An empty/garbled stdin (no hook_event_name)
   // is dropped silently rather than POSTed as noise.
   if (!input || typeof input.hook_event_name !== "string" || !input.hook_event_name) pass();
-  await post(JSON.stringify(buildEnvelope(input)));
+  await postEnvelope(buildEnvelope(input));
   pass(); // observation is best-effort — never block the session
 } catch (err) {
   failOpen(`[claude-hooks/send-event] ${err?.message ?? err}`);

@@ -44,12 +44,16 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
 | GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates, 5m cache writes) + `unpriced` (tokens of models missing from the pricing table) |
+| GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. The one stats query that reads `payload` (json_extract) — GuardDecision rows are few |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + turn drill-down), Tools (latency/error bars), Tokens (daily/by app/by model/by tool + cost + trend), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + turn drill-down), Tools (latency/error bars), Tokens (daily/by app/by model/by tool + cost + trend), Guards (what the git/bash guards blocked), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
-the `payload` column and answer empty-but-200 when the DB backend is degraded.
+the `payload` column (the sole exception is `/stats/guards`, by design) and
+answer empty-but-200 when the DB backend is degraded. The git/bash guards emit a
+`GuardDecision` event on every deny/ask (never on allow) via `lib/obs-client.mjs`
+— fire-and-forget, so a slow or absent collector never changes a guard's ruling.
 Cost pricing can be extended/corrected via `{"pricing": {"<model prefix>":
 {"input", "output", "cache_write", "cache_read"}}}` (USD per MTok) in
 config.json — longest prefix wins, loaded at boot.

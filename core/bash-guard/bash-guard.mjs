@@ -16,6 +16,7 @@
 
 import { readHookInput, denyPreToolUse, askPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
 import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
+import { emitGuardDecision } from "../../lib/obs-client.mjs";
 
 const basename = (tok) => tok.slice(tok.lastIndexOf("/") + 1);
 
@@ -185,6 +186,18 @@ try {
   const command = input?.tool_input?.command;
   if (!command || !command.trim()) pass();
 
+  // Emit a GuardDecision (best-effort, never blocks) then decide. The emit
+  // failing/hanging/absent can NEVER change the outcome — the deny/ask always
+  // runs after. `allow`/pass is never emitted (design §6: volume/noise).
+  const deny = async (rule, reason) => {
+    await emitGuardDecision(input, { guard: "bash-guard", rule, decision: "deny", reason });
+    denyPreToolUse(reason);
+  };
+  const ask = async (rule, reason) => {
+    await emitGuardDecision(input, { guard: "bash-guard", rule, decision: "ask", reason });
+    askPreToolUse(reason);
+  };
+
   // Whole command first (keeps pipes intact), then each segment.
   const targets = [command, ...splitCommands(command)];
 
@@ -194,11 +207,11 @@ try {
   //    from different segments must not combine, while the per-segment scan
   //    still catches smuggling (`echo x && rm -rf ~`, `$( … )`, `bash -c`).
   if (dangerousRmCommand(command)) {
-    denyPreToolUse("파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
+    await deny("dangerous-rm", "파괴적 'rm -rf' 거부. 대상을 좁히거나 trash CLI를 써라.");
   }
   for (const target of targets) {
     for (const [pattern, reason] of BLOCK_RULES) {
-      if (pattern.test(target)) denyPreToolUse(reason);
+      if (pattern.test(target)) await deny("safety", reason);
     }
   }
 
@@ -206,19 +219,19 @@ try {
   //    (so a genuine safety violation still wins) and before style nudges.
   for (const target of targets) {
     for (const [pattern, reason] of ASK_RULES) {
-      if (pattern.test(target)) askPreToolUse(reason);
+      if (pattern.test(target)) await ask("destructive-git", reason);
     }
   }
 
   // 3. Style nudges across every target (so `... | grep x` still fires).
   for (const target of targets) {
     for (const [pattern, reason] of STYLE_RULES) {
-      if (pattern.test(target)) denyPreToolUse(reason);
+      if (pattern.test(target)) await deny("style-nudge", reason);
     }
   }
 
   // 4. File-viewing nudge — whole command only (see FILE_VIEW_RULE note).
-  if (FILE_VIEW_RULE[0].test(command)) denyPreToolUse(FILE_VIEW_RULE[1]);
+  if (FILE_VIEW_RULE[0].test(command)) await deny("file-view", FILE_VIEW_RULE[1]);
 
   pass(); // clean — defer to the normal permission flow
 } catch (err) {
