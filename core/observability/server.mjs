@@ -6,8 +6,9 @@
 // for 0-6 and docs/agent-dashboard-analysis-design.md for 7+). Implemented here:
 // skeleton + lifecycle (0), non-blocking ingest (1), SQLite WAL storage (2),
 // redaction (3), SSE (4), query API + dashboard (5), read-only stats
-// aggregation API (7), and the tabbed analysis UI (8 — Live | Sessions | Tools
-// + fleet strip). Auto-start (6) lives in core/obs-lazy-start/.
+// aggregation API (7), the tabbed analysis UI (8 — Live | Sessions | Tools
+// + fleet strip), and token-usage collection from CC transcripts (10a).
+// Auto-start (6) lives in core/obs-lazy-start/.
 //
 // Invariants held from the start (design §2, §11):
 //   • single monotonic seq (ingest seq = future store PK = future SSE id = cursor)
@@ -16,9 +17,11 @@
 //   • fail-open: process-level guards + explicit EADDRINUSE handling
 //   • boundary = loopback bind + Host allowlist + 0600/0700 + umask(0o077)
 //
-// CLI:  node server.mjs            start the server (default)
-//       node server.mjs status     probe /health and print it (never the token)
-//       node server.mjs stop       verify ours via /health, then SIGTERM
+// CLI:  node server.mjs                start the server (default)
+//       node server.mjs status         probe /health and print it (never the token)
+//       node server.mjs stop           verify ours via /health, then SIGTERM
+//       node server.mjs retain         one retention pass (ops/test)
+//       node server.mjs ingest-usage   backfill token usage from transcripts
 
 import http from "node:http";
 import fs from "node:fs";
@@ -28,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.3.0"; // 0.2: stats API (stage 7) · 0.3: analysis UI (stage 8)
+const VERSION = "0.4.0"; // 0.2: stats API (7) · 0.3: analysis UI (8) · 0.4: token usage (10a)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -232,7 +235,10 @@ async function handleEvents(req, res) {
       try { storeOne(safe); } catch (e) { logSafe("durable store", e); }
       stats.accepted++;
       ack();
-      setImmediate(() => { try { broadcast(safe); } catch (e) { logSafe("broadcast", e); } });
+      setImmediate(() => {
+        try { broadcast(safe); } catch (e) { logSafe("broadcast", e); }
+        try { maybeParseUsage(rec); } catch (e) { logSafe("usage", e); } // stage 10a
+      });
     } else {
       // default: ack first, then redact once → writer + broadcaster off-path.
       stats.accepted++;
@@ -258,6 +264,7 @@ function ingestPostAck(rec) {
   const safe = materialize(rec);
   enqueueWrite(safe); // stage 2 storage
   broadcast(safe); // stage 4 SSE
+  try { maybeParseUsage(rec); } catch (e) { logSafe("usage", e); } // stage 10a
 }
 
 // ── redaction (design §8) ───────────────────────────────────────────────────
@@ -352,7 +359,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 2;"); // v2 = + v_tool_calls view (stage 7)
+  impl.exec("PRAGMA user_version = 3;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -382,6 +389,27 @@ function initSchema(impl) {
     LEFT JOIN events post
       ON post.tool_use_id = pre.tool_use_id AND post.hook_event_type = 'PostToolUse'
     WHERE pre.hook_event_type = 'PreToolUse' AND pre.tool_use_id IS NOT NULL`);
+  // stage 10a: token usage parsed from CC transcripts — ONE row per API message
+  // (message.id; CC writes one transcript line per content block and duplicates
+  // usage on each, so per-line summing would double-count). Numbers/ids/model
+  // only, never transcript content. emitted/follows carry the tool-attribution
+  // id lists (analysis design / issue #38 comment).
+  impl.exec(`CREATE TABLE IF NOT EXISTS usage (
+    session_id TEXT NOT NULL, msg_id TEXT NOT NULL,
+    source_app TEXT NOT NULL, ts INTEGER NOT NULL, model TEXT,
+    input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
+    cache_create INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
+    sidechain INTEGER NOT NULL DEFAULT 0,
+    emitted_tool_ids TEXT NOT NULL DEFAULT '[]',
+    follows_tool_ids TEXT NOT NULL DEFAULT '[]',
+    UNIQUE(session_id, msg_id))`);
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)");
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id, ts)");
+  impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor (
+    session_id TEXT PRIMARY KEY, path TEXT NOT NULL,
+    offset INTEGER NOT NULL DEFAULT 0,
+    last_emitted TEXT NOT NULL DEFAULT '[]',
+    updated_at INTEGER NOT NULL)`);
 }
 
 function toRow(r) {
@@ -871,6 +899,220 @@ function handleStatsTools(req, res, u) {
   } catch (e) { logSafe("stats tools", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── token usage (transcript tail parser — stage 10a, issue #38) ─────────────
+// CC transcripts are append-only JSONL and every hook payload carries
+// transcript_path. On Stop/SubagentStop/SessionEnd we parse that session's file
+// from a per-session byte bookmark, off the response path. Rules: read-only,
+// per-line fail-open, sidechain rows kept but flagged. The format is CC's
+// internal contract — if it changes, parsing quietly stops and the rest of the
+// collector is unaffected.
+const USAGE_TRIGGERS = new Set(["Stop", "SubagentStop", "SessionEnd"]);
+const USAGE_CHUNK = 8 * 1024 * 1024; // bytes per read pass (loops until caught up)
+const usageBusy = new Set();
+
+function maybeParseUsage(rec) {
+  if (!USAGE_TRIGGERS.has(rec.hook_event_type)) return;
+  const p = rec.payload && rec.payload.transcript_path;
+  // source_app comes from the triggering event itself — the events row may not
+  // be flushed yet (50ms batch writer), so a DB lookup here would race.
+  if (typeof p === "string" && p) scheduleUsageParse(rec.session_id, p, rec.source_app);
+}
+
+function scheduleUsageParse(sessionId, tPath, app) {
+  if (!db || usageBusy.has(sessionId)) return;
+  usageBusy.add(sessionId);
+  setImmediate(() => {
+    try { parseTranscriptTail(sessionId, tPath, app); }
+    catch (e) { logSafe("usage parse", e); }
+    finally { usageBusy.delete(sessionId); }
+  });
+}
+
+// One pass of complete lines → usage rows. Lines of one API message are
+// adjacent and share message.id; we fold them into one row (merging tool_use
+// ids). follows = the PREVIOUS main-chain message's emitted ids — a tool result
+// feeds the NEXT call's input, so that is where its input cost lands.
+function ingestUsageLines(sessionId, app, text, lastEmitted) {
+  const ins = db.impl.prepare(`INSERT OR IGNORE INTO usage
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, sidechain, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const sel = db.impl.prepare("SELECT emitted_tool_ids FROM usage WHERE session_id = ? AND msg_id = ?");
+  const upd = db.impl.prepare("UPDATE usage SET emitted_tool_ids = ? WHERE session_id = ? AND msg_id = ?");
+  let cur = null, last = lastEmitted;
+  const flush = () => {
+    if (!cur) return;
+    try {
+      const info = ins.run(sessionId, cur.id, app, cur.ts, cur.model,
+        cur.input, cur.output, cur.cc, cur.cr, cur.side,
+        JSON.stringify(cur.emitted), JSON.stringify(cur.follows));
+      if (info.changes === 0 && cur.emitted.length) {
+        // message straddled a pass boundary → merge newly-seen tool ids
+        const row = sel.get(sessionId, cur.id);
+        let old = [];
+        if (row) { try { old = JSON.parse(row.emitted_tool_ids) || []; } catch {} }
+        upd.run(JSON.stringify([...new Set([...old, ...cur.emitted])]), sessionId, cur.id);
+      }
+    } catch (e) { logSafe("usage row", e); }
+    if (!cur.side) last = cur.emitted;
+    cur = null;
+  };
+  for (const line of text.split("\n")) {
+    if (!line) continue;
+    let e; try { e = JSON.parse(line); } catch { continue; } // fail-open per line
+    if (!e || e.type !== "assistant" || !e.message || !e.message.usage) continue;
+    const m = e.message;
+    if (typeof m.id !== "string" || !m.id) continue;
+    const ids = Array.isArray(m.content)
+      ? m.content.filter((b) => b && b.type === "tool_use" && typeof b.id === "string").map((b) => b.id)
+      : [];
+    if (cur && cur.id === m.id) {
+      for (const id of ids) if (!cur.emitted.includes(id)) cur.emitted.push(id);
+      continue;
+    }
+    flush();
+    const u = m.usage, side = e.isSidechain === true ? 1 : 0;
+    cur = {
+      id: m.id, ts: Date.parse(e.timestamp) || Date.now(), model: m.model ?? null,
+      input: u.input_tokens | 0, output: u.output_tokens | 0,
+      cc: u.cache_creation_input_tokens | 0, cr: u.cache_read_input_tokens | 0,
+      side, emitted: ids, follows: side ? [] : last,
+    };
+  }
+  flush();
+  return last;
+}
+
+function parseTranscriptTail(sessionId, tPath, appHint) {
+  if (!db) return;
+  const cur = db.impl.prepare("SELECT path, offset, last_emitted FROM transcript_cursor WHERE session_id = ?").get(sessionId);
+  let offset = cur && cur.path === tPath ? Number(cur.offset) : 0; // new/changed file → from the top
+  let lastEmitted = [];
+  if (cur) { try { lastEmitted = JSON.parse(cur.last_emitted) || []; } catch {} }
+  let app = appHint;
+  if (!app) { // CLI/backfill path: events are already flushed, lookup is safe
+    const appRow = db.impl.prepare("SELECT source_app FROM events WHERE session_id = ? LIMIT 1").get(sessionId);
+    app = appRow ? appRow.source_app : "unknown";
+  }
+  const saveCursor = db.impl.prepare(`INSERT INTO transcript_cursor (session_id, path, offset, last_emitted, updated_at)
+    VALUES (?,?,?,?,?)
+    ON CONFLICT(session_id) DO UPDATE SET path=excluded.path, offset=excluded.offset,
+      last_emitted=excluded.last_emitted, updated_at=excluded.updated_at`);
+  let fd;
+  try { fd = fs.openSync(tPath, "r"); } catch (e) { logSafe("usage open", e); return; }
+  try {
+    for (;;) {
+      const size = fs.fstatSync(fd).size;
+      if (size <= offset) break;
+      const len = Math.min(size - offset, USAGE_CHUNK);
+      const buf = Buffer.alloc(len);
+      const got = fs.readSync(fd, buf, 0, len, offset);
+      if (got <= 0) break;
+      const nl = buf.lastIndexOf(0x0a, got - 1);
+      if (nl < 0) break; // no complete line yet — wait for the next trigger
+      db.impl.exec("BEGIN IMMEDIATE");
+      try {
+        lastEmitted = ingestUsageLines(sessionId, app, buf.toString("utf8", 0, nl), lastEmitted);
+        offset += nl + 1;
+        saveCursor.run(sessionId, tPath, offset, JSON.stringify(lastEmitted.slice(0, 32)), Date.now());
+        db.impl.exec("COMMIT");
+      } catch (e) {
+        try { db.impl.exec("ROLLBACK"); } catch {}
+        throw e;
+      }
+    }
+  } finally { try { fs.closeSync(fd); } catch {} }
+}
+
+// ── GET /stats/tokens (stage 10a) ───────────────────────────────────────────
+// group=session|app|bucket|tool. Non-tool groups are exact sums of the usage
+// rows; group=tool is the DOCUMENTED APPROXIMATION: a message's output is split
+// across the tool calls it emitted, its input+cache_create across the calls it
+// follows (tool results feed the next call's input). No emitted → "(response)",
+// no follows → "(prompt)" (or "(subagent)" for sidechain rows).
+function tokensByTool(rows) {
+  const perId = new Map(); // tool_use_id -> {out, inp}
+  const named = new Map(); // bucket name -> {out, inp}
+  const bumpId = (id, f, v) => { let o = perId.get(id); if (!o) perId.set(id, (o = { out: 0, inp: 0 })); o[f] += v; };
+  const bumpName = (n, f, v) => { let o = named.get(n); if (!o) named.set(n, (o = { out: 0, inp: 0 })); o[f] += v; };
+  for (const r of rows) {
+    let emitted = [], follows = [];
+    try { emitted = JSON.parse(r.emitted_tool_ids) || []; } catch {}
+    try { follows = JSON.parse(r.follows_tool_ids) || []; } catch {}
+    const out = Number(r.output), inp = Number(r.input) + Number(r.cache_create);
+    if (emitted.length) for (const id of emitted) bumpId(id, "out", out / emitted.length);
+    else bumpName("(response)", "out", out);
+    if (follows.length) for (const id of follows) bumpId(id, "inp", inp / follows.length);
+    else bumpName(Number(r.sidechain) ? "(subagent)" : "(prompt)", "inp", inp);
+  }
+  const ids = [...perId.keys()], nameOf = new Map();
+  for (let i = 0; i < ids.length; i += 400) {
+    const chunk = ids.slice(i, i + 400);
+    const q = db.impl.prepare(
+      `SELECT tool_use_id, tool_name FROM events WHERE hook_event_type = 'PreToolUse'
+       AND tool_use_id IN (${chunk.map(() => "?").join(",")})`
+    ).all(...chunk);
+    for (const r of q) nameOf.set(r.tool_use_id, r.tool_name || "(unknown)");
+  }
+  const agg = new Map();
+  const fold = (name, o, calls) => {
+    let a = agg.get(name);
+    if (!a) agg.set(name, (a = { key: name, output: 0, input_cache: 0, total: 0, calls: 0 }));
+    a.output += o.out; a.input_cache += o.inp; a.total += o.out + o.inp; a.calls += calls;
+  };
+  for (const [id, o] of perId) fold(nameOf.get(id) || "(unknown)", o, 1);
+  for (const [name, o] of named) fold(name, o, 0);
+  return [...agg.values()]
+    .map((a) => ({ ...a, output: Math.round(a.output), input_cache: Math.round(a.input_cache), total: Math.round(a.total) }))
+    .sort((a, b) => b.total - a.total);
+}
+
+function handleStatsTokens(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  const bucket_ms = window_ms <= WINDOW_MS["1h"] ? 60_000 : 3_600_000;
+  const group = u.searchParams.get("group") || "session";
+  if (!["session", "app", "bucket", "tool"].includes(group))
+    return json(res, 400, { error: "bad group (session|app|bucket|tool)" });
+  if (!db) return json(res, 200, { window_ms, bucket_ms, group, count: 0, rows: [] });
+  const since = Date.now() - window_ms;
+  const app = u.searchParams.get("source_app");
+  const where = app ? "ts >= ? AND source_app = ?" : "ts >= ?";
+  const params = app ? [since, app] : [since];
+  try {
+    const rows = db.impl.prepare(
+      `SELECT session_id, source_app, ts, input, output, cache_create, cache_read,
+              sidechain, emitted_tool_ids, follows_tool_ids
+       FROM usage WHERE ${where}`
+    ).all(...params);
+    let out;
+    if (group === "tool") out = tokensByTool(rows);
+    else {
+      const keyOf = group === "session" ? (r) => r.session_id
+        : group === "app" ? (r) => r.source_app
+        : (r) => Math.floor(Number(r.ts) / bucket_ms) * bucket_ms;
+      const agg = new Map();
+      for (const r of rows) {
+        const k = keyOf(r);
+        let a = agg.get(k);
+        if (!a) agg.set(k, (a = {
+          key: k, input: 0, output: 0, cache_create: 0, cache_read: 0,
+          total: 0, messages: 0, subagent_total: 0, subagent_messages: 0,
+        }));
+        if (group === "session" && !a.source_app) a.source_app = r.source_app;
+        const t = Number(r.input) + Number(r.output) + Number(r.cache_create) + Number(r.cache_read);
+        if (Number(r.sidechain)) { a.subagent_total += t; a.subagent_messages++; }
+        else {
+          a.input += Number(r.input); a.output += Number(r.output);
+          a.cache_create += Number(r.cache_create); a.cache_read += Number(r.cache_read);
+          a.total += t; a.messages++;
+        }
+      }
+      out = [...agg.values()].sort(group === "bucket" ? (a, b) => a.key - b.key : (a, b) => b.total - a.total);
+    }
+    json(res, 200, { window_ms, bucket_ms, group, count: out.length, rows: out });
+  } catch (e) { logSafe("stats tokens", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
 // Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
 // renders every value via textContent (never innerHTML), so attacker-influenced
@@ -1172,6 +1414,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/overview") return handleStatsOverview(req, res, u);
       if (pathname === "/stats/sessions") return handleStatsSessions(req, res, u);
       if (pathname === "/stats/tools") return handleStatsTools(req, res, u);
+      if (pathname === "/stats/tokens") return handleStatsTokens(req, res, u);
       return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {
@@ -1336,8 +1579,32 @@ async function cliRetain() {
   process.exit(0);
 }
 
+// Backfill: parse the transcripts of every session the collector has seen.
+// Idempotent (per-message UNIQUE + cursor bookmarks) — safe to re-run.
+async function cliIngestUsage() {
+  await startBackend();
+  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
+  const sess = db.impl.prepare("SELECT DISTINCT session_id FROM events").all();
+  let parsed = 0, skipped = 0;
+  for (const { session_id } of sess) {
+    const row = db.impl.prepare(
+      "SELECT payload FROM events WHERE session_id = ? AND payload LIKE '%transcript_path%' ORDER BY seq DESC LIMIT 1"
+    ).get(session_id);
+    let p = null;
+    if (row) { try { p = JSON.parse(row.payload)?.transcript_path ?? null; } catch {} }
+    if (typeof p === "string" && p) {
+      try { parseTranscriptTail(session_id, p); parsed++; }
+      catch (e) { logSafe("ingest-usage", e); skipped++; }
+    } else skipped++;
+  }
+  const s = db.impl.prepare("SELECT COUNT(*) c, SUM(input+output+cache_create+cache_read) t FROM usage").get();
+  process.stdout.write(`usage backfill: sessions parsed=${parsed} skipped=${skipped}; msgs=${s.c} total_tokens=${s.t ?? 0}\n`);
+  process.exit(0);
+}
+
 const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
+else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a)
 else await startServer();
