@@ -93,8 +93,11 @@ Every actual injection appends one JSON line to
 `keywords` holds the keyword(s) that fired — accumulate a few weeks and
 repeated false positives become visible ("`mcp` fired 14 times, never
 relevant"), so index pruning is data-driven. Recording only (best-effort,
-never blocks injection; rolling cap ~4000 lines); outcome judging and a
-report/mute command are follow-ups — see issue #32.
+never blocks injection; rolling cap ~4000 lines).
+
+To act on the data, run `/claude-hooks:keyword-docs-prune [days]` — it
+aggregates per keyword, joins transcripts for follow-up rates, and proposes
+removals/narrowings; changes apply only after your approval.
 
 ## Testing locally
 
