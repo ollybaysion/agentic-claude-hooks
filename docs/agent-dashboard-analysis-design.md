@@ -43,13 +43,19 @@
 
 - GuardDecision 이벤트: guard가 deny할 때 수집기로 emit → 블록률/최다 블록 명령/리포별 분포. guard 튜닝의 피드백 루프.
 
-### Tier 3 — 보류 (stage 10, 별도 결정)
+### Tier 3 — 토큰 분석 (stage 10 — 2026-07-04 확정, 상세는 이슈 #38 코멘트)
 
-- 토큰/비용: hook payload의 `transcript_path`로 transcript JSONL 파싱. 포맷 실증 연구는
-  완료(usage 컨텍스트 계산식, compact_boundary, isSidechain 함정 — 메모리
-  `claude-code-transcript-format` 참고). 수집기가 파일시스템을 읽기 시작하는 결정이라 보류.
-  하게 되면 **읽기 전용 + fail-open**, isSidechain 제외 규칙 준수.
-- 에러 스파이크 알림, 주간 다이제스트.
+- 토큰: hook payload의 `transcript_path`로 transcript JSONL을 **증분 파싱**(세션별 바이트
+  북마크, Stop/SubagentStop/SessionEnd 트리거). **API 메시지(message.id)당 한 행** — CC가
+  한 응답을 content 블록별 라인으로 쪼개며 usage를 복제하므로 라인 단위 합산은 중복 계산이다.
+  규율: 읽기 전용 · 라인 단위 fail-open · isSidechain 분리 저장 · 숫자/id만 저장(본문 금지).
+- 도구호출별 귀속(근사): 메시지의 output은 그 메시지가 발행한 tool_use들에, input과
+  cache_create는 직전 main-chain 메시지가 발행한 tool_use들에 균등 분배(툴 결과가 다음
+  호출의 입력으로 들어가는 구조). 발행 없음 → `(response)`, follows 없음 → `(prompt)`
+  (sidechain은 `(subagent)`).
+- 10a = 파서 + `usage`/`transcript_cursor` 테이블(`user_version=3`) + `GET /stats/tokens`
+  (`group=session|app|bucket|tool`) + `ingest-usage` 백필 CLI. 10b = Tokens UI.
+- 에러 스파이크 알림, 주간 다이제스트는 계속 보류.
 
 ---
 
