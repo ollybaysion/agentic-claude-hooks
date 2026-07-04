@@ -28,9 +28,12 @@ description: >-
 
 - 파일이 없거나 비어 있으면: keyword-docs가 이 프로젝트에서 켜져 있는지
   (`.claude/context.json`), 주입이 실제로 있었는지 확인하라고 안내하고 **종료**.
-- 한 줄 형식: `{ "ts": ms, "session": "...", "keywords": ["발화한 것들"], "path": "문서", "mode": "full"|"link" }`
+- 한 줄 형식: `{ "ts": ms, "session": "...", "keywords": ["발화한 것들"], "path": "문서", "mode": "full"|"link", "index": "인덱스 파일" }`
   (`mode: "link"`는 한 줄 포인터만 주입된 것 — 오탐이어도 비용 ~20토큰이라 처방
-  우선순위가 낮다. 절감 계산 시 full ~400–600토큰과 구분할 것.)
+  우선순위가 낮다. 절감 계산 시 full ~400–600토큰과 구분할 것. `index`는 어느
+  인스턴스의 인덱스에서 발화했는지 — 집계·적용 모두 **인덱스 파일 단위로 나눠서**
+  보고하고, 수정도 해당 인덱스 파일에 한다: 기본 keyword-docs 외에 msg-format /
+  db-schema / domain-docs 인스턴스가 각자 다른 인덱스를 쓴다.)
 
 ## 2. 키워드 단위 집계
 
