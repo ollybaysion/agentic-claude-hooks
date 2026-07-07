@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.9.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56)
+const VERSION = "0.9.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1468,6 +1468,10 @@ select{background:#11161f;color:#c8d0dc;border:1px solid #1c2230;border-radius:4
 #drill th{position:static}
 h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;margin:14px 16px 4px}
 #drill h2{margin:14px 0 4px}
+.hint{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:5px;border:1px solid #2f3a4d;border-radius:50%;color:#6b7686;font:400 10px/1 ui-monospace,monospace;text-transform:none;letter-spacing:0;cursor:help;position:relative;vertical-align:middle;user-select:none}
+.hint:hover,.hint:focus{color:#e6edf3;border-color:#3d4a60;outline:none}
+.hint .tip{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:20;width:max-content;max-width:360px;white-space:pre-line;text-align:left;background:#141a26;border:1px solid #2f3a4d;border-radius:6px;padding:8px 11px;color:#c8d0dc;font:400 12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:none;letter-spacing:normal;box-shadow:0 6px 20px rgba(0,0,0,.55)}
+.hint:hover .tip,.hint:focus .tip{display:block}
 </style></head>
 <body>
 <header>
@@ -1484,6 +1488,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 </header>
 <div id="fleet"></div>
 <section id="view-live" class="on">
+  <div class="toolbar">live event tail<span data-help="live"></span></div>
 <table>
   <thead><tr><th>seq</th><th>time</th><th>event</th><th>app</th><th>session</th><th>tool</th><th>payload</th></tr></thead>
   <tbody id="rows"></tbody>
@@ -1493,6 +1498,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
   <div class="cards" id="ov-cards"></div>
   <div class="toolbar">window
     <select id="sess-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
+    <span data-help="sessions"></span>
     <span class="dim">click a row for the turn timeline</span>
   </div>
   <table>
@@ -1504,6 +1510,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 <section id="view-tools">
   <div class="toolbar">window
     <select id="tools-window"><option>1h</option><option>6h</option><option selected>24h</option><option>7d</option></select>
+    <span data-help="tools"></span>
   </div>
   <table>
     <thead><tr><th>tool</th><th class="num">calls</th><th></th><th class="num">errs</th><th class="num">orphans</th><th class="num">pend</th><th class="num">p50</th><th class="num">p95</th><th class="num">max</th></tr></thead>
@@ -1514,9 +1521,10 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
   <div class="cards" id="tok-cards"></div>
   <div class="toolbar">window
     <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span data-help="tokens"></span>
     <span class="dim">costs are estimates from official per-MTok rates (per-TTL cache writes); baseline / turn tax / switch rewrite are approximations (see README)</span>
   </div>
-  <h2>cost anatomy</h2>
+  <h2 data-help="tok-anat">cost anatomy</h2>
   <div class="cards" id="tok-anat-cards"></div>
   <table>
     <thead><tr><th>model</th><th></th><th class="num">input</th><th class="num">write</th><th class="num">read</th><th class="num">output</th><th class="num">cost</th></tr></thead>
@@ -1547,6 +1555,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
   <div class="cards" id="guard-cards"></div>
   <div class="toolbar">window
     <select id="guard-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span data-help="guards"></span>
     <span class="dim">only deny/ask are recorded (allow is not emitted); commands are redacted server-side</span>
   </div>
   <h2>by guard × rule</h2>
@@ -1587,6 +1596,23 @@ const DASHBOARD_JS = `(function(){
   function svgEl(t,attrs){ var e=document.createElementNS(SVGNS,t); for(var k in attrs)e.setAttribute(k,attrs[k]); return e; }
   function hbar(v,max,w,h){ var s=svgEl("svg",{width:w,height:h}); s.appendChild(svgEl("rect",{x:0,y:1,height:h-2,rx:1,"class":"bar",width:max>0?Math.max(1,Math.round(v/max*w)):0})); return s; }
   function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
+
+  // ── metric help tooltips (#61): per-screen + key derived metrics.
+  // hover/focus a ? badge; copy mirrors the README so definitions stay in sync.
+  var HELP={
+    live:"Raw event tail — every hook fired across all sessions, newest first (live via SSE).\\nseq: server sequence no.   event: hook type (PreToolUse / PostToolUse / Stop / PreCompact / SessionStart…).   payload: event body, redacted server-side.\\nThe strip above lists sessions active in the last 10 min (app · id · last event · context size).",
+    sessions:"One row per Claude Code session in the window.\\nturns: user prompts   tools: tool calls   errs: tool errors\\ncompacts: PreCompact events (context auto-summarized)   agents: subagents spawned\\navg ctx / peak: tokens re-sent to the model each turn (context size) — averaged / max\\nsw: mid-session model switches — each forces a cache rebuild\\ntokens / cost: total tokens & estimated USD (incl. subagents)\\n●mega: unusually heavy session (≥300 turns or ≥300k avg ctx)\\nClick a row for its turn timeline + context curve.",
+    tools:"One row per tool in the window.\\ncalls: invocations   errs: calls that returned an error\\norphans: PostToolUse with no matching PreToolUse (lost pairing)\\npend: started but no result seen yet\\np50 / p95 / max: call-duration percentiles.",
+    tokens:"Token usage & estimated cost over the window (official per-MTok rates).\\ntotal includes subagent tokens.   cache read = context re-read on later turns, billed 0.1× input.   cost is an estimate.   unpriced = tokens on a model with no rate table.",
+    "tok-anat":"Where the money goes — the 4 things Anthropic bills:\\ninput: fresh (uncached) prompt tokens\\ncache write: writing prompt into the cache (5m TTL = 1.25×, 1h TTL = 2× input)\\ncache read: re-reading cached context on later turns (0.1× input) — usually the biggest\\noutput: generated tokens (priciest per token)\\nturn tax: avg context re-sent per turn.   baseline ctx: rough fixed system/harness floor (Σ per-session min context).   switch rewrite: cache rebuild forced by mid-session model switches.\\nturn tax / baseline / switch rewrite are approximations.",
+    guards:"What the git/bash guards blocked. Only deny (blocked) and ask (prompted) are recorded — allow is not emitted; commands are redacted server-side.\\nCards show total decisions, denied, asked, then per-guard totals. Tables break it down by guard×rule, most-blocked command, and app.",
+    "sess-ctx":"Context size (tokens re-sent to the model) at each main-chain turn. It grows every turn until a /compact resets it — hence the sawtooth. 'compact' counts the sharp drops.",
+    "sess-whatif":"Hypothetical cache-read savings if this session had run /compact whenever context passed the cap.\\n@200k = cap at 200k tokens, @300k = 300k.\\nEvery turn re-reads the whole context at 0.1× input, so a big context bills over and over — this estimates how much a cap would have avoided. Approximate: ignores compaction's own cost."
+  };
+  function hint(key){ var txt=HELP[key]||""; var s=el("span","hint","?"); s.tabIndex=0;
+    s.setAttribute("aria-label",txt); s.appendChild(el("div","tip",txt)); return s; }
+  function initHints(){ var ns=document.querySelectorAll("[data-help]");
+    for(var i=0;i<ns.length;i++){ var k=ns[i].getAttribute("data-help"); if(HELP[k])ns[i].appendChild(hint(k)); } }
 
   // ── tabs (#live | #sessions | #tools | #tokens | #guards) — hash routing
   var TABS=["live","sessions","tools","tokens","guards"];
@@ -1705,11 +1731,11 @@ const DASHBOARD_JS = `(function(){
     getJson("/stats/tokens?group=timeline&session_id="+encodeURIComponent(s.session_id)).then(function(t){
       tlBox.textContent=""; if(!t.series||!t.series.length)return;
       var wrap=el("div","card");
-      wrap.appendChild(el("div","k","context growth · "+t.series.length+" msgs · "+((t.compact_markers||[]).length)+" compact"));
+      var wk=el("div","k","context growth · "+t.series.length+" msgs · "+((t.compact_markers||[]).length)+" compact"); wk.appendChild(hint("sess-ctx")); wrap.appendChild(wk);
       wrap.appendChild(spark(t.series.map(function(x){ return x.ctx; }),300,40));
       wrap.appendChild(el("div","dim","peak "+fmtTok(Math.max.apply(null,t.series.map(function(x){ return x.ctx; })))));
       tlBox.appendChild(wrap);
-      var wi=el("div","card"); wi.appendChild(el("div","k","compact what-if (cache-read saved)"));
+      var wi=el("div","card"); var wik=el("div","k","compact what-if (cache-read saved)"); wik.appendChild(hint("sess-whatif")); wi.appendChild(wik);
       wi.appendChild(el("div","v","@200k "+(fmtUsd(t.whatif&&t.whatif["200000"])||"$0")+"  ·  @300k "+(fmtUsd(t.whatif&&t.whatif["300000"])||"$0")));
       tlBox.appendChild(wi);
     }).catch(function(){ tlBox.textContent=""; });
@@ -1900,6 +1926,7 @@ const DASHBOARD_JS = `(function(){
   // 30s refresh of whichever analytics tab is visible
   setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); },30000);
 
+  initHints();
   showTab(location.hash.slice(1));
 })();`;
 
