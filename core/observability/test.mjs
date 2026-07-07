@@ -12,6 +12,9 @@
 // per-session diagnostics (group=session: avg/peak ctx, model switches +
 // rewrite est, mega flag), and the session timeline (group=timeline: context
 // series, compact markers, compact what-if).
+// #66 — session titles: /stats/sessions first_prompt derivation, the batch
+// `title-sessions` (LLM stubbed via OBS_TITLE_STUB), title→first_prompt fallback,
+// and the candidate filter (0-prompt skipped, titled-not-grown not re-titled).
 
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync, spawn } from "node:child_process";
@@ -92,6 +95,11 @@ const FIXTURE_SIZE = fs.statSync(TRANSCRIPT).size;
 // ── helpers ─────────────────────────────────────────────────────────────────
 function cli(...args) {
   const r = spawnSync("node", [...NODE_ARGS, SERVER, ...args], { env: baseEnv, encoding: "utf8" });
+  if (r.status !== 0) process.stdout.write(`  (cli ${args.join(" ")} exit ${r.status}: ${r.stderr})\n`);
+  return r.stdout || "";
+}
+function cliEnv(env, ...args) {
+  const r = spawnSync("node", [...NODE_ARGS, SERVER, ...args], { env: { ...baseEnv, ...env }, encoding: "utf8" });
   if (r.status !== 0) process.stdout.write(`  (cli ${args.join(" ")} exit ${r.status}: ${r.stderr})\n`);
   return r.stdout || "";
 }
@@ -247,6 +255,42 @@ check("what-if @200k ≈ 0.05, @300k = 0", tl.whatif && approx(tl.whatif["200000
 // timeline requires a session_id
 const tlBad = await statGet(45737, "/stats/tokens?group=timeline", null);
 check("timeline without session_id → error", !!tlBad.error, JSON.stringify(tlBad));
+
+// ══ #66 — session titles (first-prompt fallback + batch titler) ══════════════
+process.stdout.write("\n# session titles (first_prompt + title-sessions)\n");
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  const past = Date.now() - 3600000; // > ACTIVE_MS ago → idle → titler candidate
+  insE.run(100, "e100", "testapp", "sess-title", "UserPromptSubmit", past,        JSON.stringify({ prompt: "대시보드 세션 제목 만들기" }));
+  insE.run(101, "e101", "testapp", "sess-title", "PreToolUse",       past + 1000, JSON.stringify({}));
+  insE.run(102, "e102", "testapp", "sess-title", "UserPromptSubmit", past + 2000, JSON.stringify({ prompt: "두 번째 질문" }));
+  insE.run(110, "e110", "testapp", "sess-noprompt", "SessionStart",  past,        JSON.stringify({}));
+  db.close();
+}
+// first_prompt derived from the earliest UserPromptSubmit; title still null
+const st1 = await statGet(45738, "/stats/sessions?window=7d&limit=100", null);
+const stt = (st1.sessions || []).find((r) => r.session_id === "sess-title");
+const stn = (st1.sessions || []).find((r) => r.session_id === "sess-noprompt");
+check("first_prompt = earliest UserPromptSubmit", stt && stt.first_prompt === "대시보드 세션 제목 만들기", stt && JSON.stringify(stt.first_prompt));
+check("title null before titling", stt && stt.title === null, stt && JSON.stringify(stt.title));
+check("no prompt → first_prompt null", stn && stn.first_prompt === null, stn && JSON.stringify(stn.first_prompt));
+
+// batch titler with a stubbed LLM (OBS_TITLE_STUB) — deterministic, no claude spawn
+const tOut = cliEnv({ OBS_TITLE_STUB: "스텁 제목" }, "title-sessions");
+check("titler titled exactly 1 (only idle, ≥1 prompt, untitled)", /titled=1\b/.test(tOut), tOut.trim());
+const st2 = await statGet(45739, "/stats/sessions?window=7d&limit=100", null);
+const stt2 = (st2.sessions || []).find((r) => r.session_id === "sess-title");
+const stn2 = (st2.sessions || []).find((r) => r.session_id === "sess-noprompt");
+check("title set, overrides first_prompt", stt2 && stt2.title === "스텁 제목", stt2 && JSON.stringify(stt2.title));
+check("0-prompt session stays untitled", stn2 && stn2.title === null, stn2 && JSON.stringify(stn2.title));
+
+// re-run without growth → not re-titled (candidate filter excludes titled-not-grown)
+const tOut2 = cliEnv({ OBS_TITLE_STUB: "다른 제목" }, "title-sessions");
+check("no candidates on re-run (titled=0)", /titled=0\b/.test(tOut2), tOut2.trim());
+const st3 = await statGet(45740, "/stats/sessions?window=7d&limit=100", null);
+const stt3 = (st3.sessions || []).find((r) => r.session_id === "sess-title");
+check("existing title unchanged without growth", stt3 && stt3.title === "스텁 제목", stt3 && JSON.stringify(stt3.title));
 
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}

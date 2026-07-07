@@ -28,10 +28,11 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.9.3"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels)
+const VERSION = "0.10.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -366,7 +367,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 4;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57)
+  impl.exec("PRAGMA user_version = 5;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -427,6 +428,14 @@ function initSchema(impl) {
     offset INTEGER NOT NULL DEFAULT 0,
     last_emitted TEXT NOT NULL DEFAULT '[]',
     updated_at INTEGER NOT NULL)`);
+  // #66: human-readable session titles, generated offline by the `title-sessions`
+  // batch (a cheap LLM summary of the session's user prompts). Separate table so
+  // titling never touches the ingest hot path; prompt_count records how many
+  // prompts the title was built from, so the batch can re-title only when a
+  // session has grown.
+  impl.exec(`CREATE TABLE IF NOT EXISTS session_titles (
+    session_id TEXT PRIMARY KEY, title TEXT NOT NULL,
+    prompt_count INTEGER NOT NULL DEFAULT 0, generated_at INTEGER NOT NULL)`);
 }
 
 function toRow(r) {
@@ -866,7 +875,11 @@ function handleStatsSessions(req, res, u) {
          SUM(hook_event_type = 'PostToolUse' AND error IS NOT NULL) errors,
          SUM(hook_event_type = 'PreCompact')                      precompacts,
          SUM(hook_event_type = 'SubagentStop')                    subagents,
-         MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end
+         MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end,
+         (SELECT st.title FROM session_titles st WHERE st.session_id = events.session_id) title,
+         (SELECT json_extract(e2.payload, '$.prompt') FROM events e2
+            WHERE e2.session_id = events.session_id AND e2.hook_event_type = 'UserPromptSubmit'
+            ORDER BY e2.seq ASC LIMIT 1)                          first_prompt
        FROM events WHERE ${where}
        GROUP BY session_id ORDER BY last_at DESC LIMIT ?`
     ).all(...params, limit).map((r) => {
@@ -880,6 +893,8 @@ function handleStatsSessions(req, res, u) {
         precompacts: Number(r.precompacts), subagents: Number(r.subagents),
         ended,
         active: !ended && Number(r.last_at) >= now - ACTIVE_MS,
+        title: r.title ? String(r.title) : null,
+        first_prompt: r.first_prompt ? String(r.first_prompt).replace(/\s+/g, " ").trim().slice(0, 120) : null,
       };
     });
     json(res, 200, { window_ms, count: sessions.length, sessions });
@@ -1460,6 +1475,11 @@ tbody tr.sess{cursor:pointer}
 .card{border:1px solid #1c2230;border-radius:6px;padding:8px 14px;min-width:100px}
 .card .k{font-size:11px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em}
 .card .v{font-size:18px;color:#e6edf3}
+.stitle{max-width:46ch;overflow:hidden;text-overflow:ellipsis;color:#e6edf3}
+.stitle.prov{color:#8b949e;font-style:italic}
+.stitle.dim{color:#6b7686}
+.ssub{font-size:11px;color:#6b7686;margin-top:1px}
+#fleet .tt{display:inline-block;vertical-align:bottom;max-width:34ch;overflow:hidden;text-overflow:ellipsis;color:#d6deea}
 .toolbar{display:flex;gap:10px;align-items:center;padding:8px 16px;color:#6b7686;font-size:12px}
 select{background:#11161f;color:#c8d0dc;border:1px solid #1c2230;border-radius:4px;font:inherit;padding:2px 6px}
 #drill{padding:0 16px 24px}
@@ -1683,12 +1703,14 @@ const DASHBOARD_JS = `(function(){
       c.appendChild(el("span","dot","●"));
       c.appendChild(el("span","app",f.app||"?"));
       c.appendChild(el("span","dim",sid.slice(0,8)));
+      if(f.title)c.appendChild(el("span","tt",f.title));
       if(f.what)c.appendChild(el("span","what",f.what));
       c.appendChild(el("span","ago",fmtAgo(f.last_at)));
       if(f.ctx)c.appendChild(el("span","dim","ctx "+fmtTok(f.ctx)));
       box.appendChild(c); }); }
   function fleetSeed(){ getJson("/stats/sessions?window=1h&limit=50").then(function(d){
       (d.sessions||[]).forEach(function(s){ var f=fleet[s.session_id]||(fleet[s.session_id]={what:""});
+        f.title=s.title||s.first_prompt||f.title;
         if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; f.ended=!!s.ended; } });
       renderFleet(); }).catch(function(){ renderFleet(); });
     // context size per session (compaction pressure) — best-effort, wider window
@@ -1715,9 +1737,12 @@ const DASHBOARD_JS = `(function(){
       (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess"); var tk=tok[s.session_id];
         tr.appendChild(cell(s.active?"●":(s.ended?"✓":"·"),s.active?"ok":"dim"));
         tr.appendChild(cell(s.source_app));
-        var sc=el("td","dim"); sc.appendChild(el("span",null,s.session_id.slice(0,8)));
-        if(tk&&tk.mega)sc.appendChild(el("span","err"," ●mega"));
-        tr.appendChild(sc);
+        var sc=el("td"); var lbl=s.title||s.first_prompt;
+        var main=el("div","stitle"+(s.title?"":(s.first_prompt?" prov":" dim")),lbl||s.session_id.slice(0,8));
+        if(lbl)main.title=lbl; sc.appendChild(main);
+        var sub=el("div","ssub"); sub.appendChild(el("span",null,s.session_id.slice(0,8)));
+        if(tk&&tk.mega)sub.appendChild(el("span","err"," ●mega"));
+        sc.appendChild(sub); tr.appendChild(sc);
         tr.appendChild(cell(fmtDT(s.started_at)));
         tr.appendChild(cell(fmtDur(s.duration_ms)));
         tr.appendChild(cell(s.turns,"num"));
@@ -1742,7 +1767,7 @@ const DASHBOARD_JS = `(function(){
         return out; }); }
     return page(); }
   function drill(s){ var box=$("drill"); box.textContent="";
-    box.appendChild(el("h2",null,"session "+s.session_id+" · "+s.source_app));
+    box.appendChild(el("h2",null,(s.title||s.first_prompt||("session "+s.session_id.slice(0,8)))+" · "+s.source_app));
     // context growth curve + compact what-if (from the token timeline, #56)
     var tlBox=el("div","cards"); box.appendChild(tlBox);
     getJson("/stats/tokens?group=timeline&session_id="+encodeURIComponent(s.session_id)).then(function(t){
@@ -2217,9 +2242,90 @@ async function cliIngestUsage() {
   process.exit(0);
 }
 
+// ── #66 session titles: offline batch. Gather a session's user prompts and ask
+// a cheap model for a short human title. The LLM spawn is the ONLY external touch
+// (isolated in generateTitle; OBS_TITLE_STUB short-circuits it for tests).
+const TITLE_MODEL = process.env.OBS_TITLE_MODEL || "claude-haiku-4-5-20251001";
+const TITLE_MIN_GROWTH = intEnv("OBS_TITLE_MIN_GROWTH", 3); // re-title only after this many new prompts
+
+function sessionPromptRows(sid) {
+  return db.impl.prepare(
+    `SELECT json_extract(payload, '$.prompt') p FROM events
+       WHERE session_id = ? AND hook_event_type = 'UserPromptSubmit' ORDER BY seq ASC`
+  ).all(sid).map((r) => (r.p == null ? "" : String(r.p).replace(/\s+/g, " ").trim())).filter(Boolean);
+}
+
+function promptDigest(prompts, max = 4000) {
+  const joined = prompts.map((p, i) => `${i + 1}. ${p}`).join("\n");
+  return joined.length > max ? joined.slice(0, max) : joined;
+}
+
+// One-shot title via the claude CLI. Guarded with a dead OBS_PORT so the titler's
+// own hook events fail-open and never pollute the collector (guard-test trick).
+// Returns a clean one-line title, or null on any failure (titling is optional).
+function generateTitle(digest) {
+  if (process.env.OBS_TITLE_STUB) return process.env.OBS_TITLE_STUB.slice(0, 80); // tests
+  const instruction =
+    "다음은 한 코딩 세션에서 사용자가 순서대로 보낸 요청들이다. " +
+    "이 세션이 무엇에 관한 것인지 한국어로 8단어 이내 제목 한 줄로만 답하라. " +
+    "따옴표·마침표·설명 없이 제목만 출력:\n\n" + digest;
+  try {
+    const r = spawnSync("claude", ["-p", instruction, "--model", TITLE_MODEL], {
+      encoding: "utf8", timeout: 60000, maxBuffer: 1 << 20,
+      env: { ...process.env, OBS_PORT: "59999" },
+    });
+    if (r.status !== 0 || !r.stdout) return null;
+    const line = r.stdout.trim().split("\n").map((s) => s.trim()).filter(Boolean)[0];
+    return line ? line.replace(/^["'“”]+|["'“”.]+$/g, "").slice(0, 80) : null;
+  } catch (e) { logSafe("title gen", e); return null; }
+}
+
+// Sessions worth (re)titling: idle (no events for a gate), have >=1 prompt, and
+// are untitled OR grown by >= TITLE_MIN_GROWTH prompts since the last title.
+function titleCandidates(all = false, idleMs = ACTIVE_MS) {
+  const cutoff = Date.now() - idleMs;
+  return db.impl.prepare(
+    `SELECT e.session_id sid,
+            SUM(e.hook_event_type = 'UserPromptSubmit') prompts, MAX(e.received_at) last_at,
+            st.title title, st.prompt_count tpc
+       FROM events e LEFT JOIN session_titles st ON st.session_id = e.session_id
+       GROUP BY e.session_id HAVING prompts >= 1 AND last_at < ?`
+  ).all(cutoff).filter((r) =>
+    all || r.title == null || (Number(r.prompts) - Number(r.tpc || 0)) >= TITLE_MIN_GROWTH);
+}
+
+async function cliTitleSessions() {
+  await startBackend();
+  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
+  const all = process.argv.includes("--all");
+  const li = process.argv.indexOf("--limit");
+  const limit = li >= 0 ? Math.max(1, Number(process.argv[li + 1]) || 0) : Infinity;
+  const cands = titleCandidates(all);
+  const upsert = db.impl.prepare(
+    `INSERT INTO session_titles(session_id, title, prompt_count, generated_at) VALUES(?,?,?,?)
+       ON CONFLICT(session_id) DO UPDATE SET title = excluded.title,
+       prompt_count = excluded.prompt_count, generated_at = excluded.generated_at`
+  );
+  let titled = 0, skipped = 0, done = 0;
+  for (const c of cands) {
+    if (done >= limit) break;
+    done++;
+    const prompts = sessionPromptRows(c.sid);
+    if (!prompts.length) { skipped++; continue; }
+    const title = generateTitle(promptDigest(prompts));
+    if (!title) { skipped++; continue; }
+    upsert.run(c.sid, title, prompts.length, Date.now());
+    titled++;
+    process.stdout.write(`  ${c.sid.slice(0, 8)}  ${title}\n`);
+  }
+  process.stdout.write(`title-sessions: titled=${titled} skipped=${skipped} candidates=${cands.length}\n`);
+  process.exit(0);
+}
+
 const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
 else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
+else if (cmd === "title-sessions") await cliTitleSessions(); // #66: batch LLM session titles; --all re-titles, --limit N caps
 else await startServer();
