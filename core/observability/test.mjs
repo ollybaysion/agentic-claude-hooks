@@ -292,6 +292,66 @@ const st3 = await statGet(45740, "/stats/sessions?window=7d&limit=100", null);
 const stt3 = (st3.sessions || []).find((r) => r.session_id === "sess-title");
 check("existing title unchanged without growth", stt3 && stt3.title === "스텁 제목", stt3 && JSON.stringify(stt3.title));
 
+// ══ #63 — nudge observation (/stats/nudges: fires + join to outcomes) ════════
+process.stdout.write("\n# nudge observation (/stats/nudges)\n");
+const NT = Date.now();
+const FIRE_B_TS = NT + 1; // fire B has byteOffset null → outcome joins on this ts
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insN = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  // Fire A: priced terminal, byteOffset present → joins by (hash, byteOffset)
+  insN.run(200, "n200", "app-a", "sess-n", "NudgeFired", NT, JSON.stringify({
+    ts: NT, transcriptHash: "hashA", kind: "pr-create", template: "terminal",
+    keepLabel: "기능 X 구현", dropLabel: "PR #9", dropForm: "captured",
+    ctxTokens: 360000, byteOffset: 12345, estUsd: 0.42, model: "claude-fable-5", costShown: "on" }));
+  // Fire B: start, byteOffset NULL → must join by (hash, ts) fallback (F3)
+  insN.run(201, "n201", "app-a", "sess-n", "NudgeFired", FIRE_B_TS, JSON.stringify({
+    ts: FIRE_B_TS, transcriptHash: "hashB", kind: "branch-cleanup", template: "start",
+    keepLabel: "기능 Y", dropLabel: null, dropForm: null,
+    ctxTokens: 120000, byteOffset: null, estUsd: 0.1, model: "claude-fable-5", costShown: "on" }));
+  // Fire C: unpriced terminal, never gets an outcome
+  insN.run(202, "n202", "app-b", "sess-n2", "NudgeFired", NT + 2, JSON.stringify({
+    ts: NT + 2, transcriptHash: "hashC", kind: "pr-create", template: "terminal",
+    keepLabel: "기능 Z", dropLabel: "PR #10", dropForm: "inherited",
+    ctxTokens: 90000, byteOffset: 42, estUsd: null, model: "<synthetic>", costShown: "unpriced" }));
+  db.close();
+}
+// outcome-ABSENT case: fires present, no NudgeOutcome yet
+const nu1 = await statGet(45741, "/stats/nudges?window=7d", null);
+check("nudges: fires counted", nu1.count === 3, JSON.stringify(nu1.count));
+check("nudges: compliance null without outcomes", nu1.compliance === null, JSON.stringify(nu1.compliance));
+check("nudges: judgment n=0 without outcomes", nu1.judgment && nu1.judgment.n === 0, JSON.stringify(nu1.judgment));
+const kPr = (nu1.by_kind || []).find((k) => k.kind === "pr-create" && k.template === "terminal");
+check("nudges: by_kind × template groups", kPr && kPr.count === 2, JSON.stringify(kPr));
+check("nudges: recent complied null without outcomes", (nu1.recent || []).length === 3 && (nu1.recent || []).every((r) => r.complied === null), JSON.stringify((nu1.recent || []).map((r) => r.complied)));
+
+// push acp's outcomes (analyze — acp#29): A complied, B not; B joins via ts fallback
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insN = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  insN.run(210, "n210", "app-a", "sess-n", "NudgeOutcome", NT, JSON.stringify({
+    ref: { transcriptHash: "hashA", byteOffset: 12345, ts: NT }, complied: true,
+    horizon: "next-turn", baseRateWindow: 0.3, keepAudit: { misassigned: false } }));
+  insN.run(211, "n211", "app-a", "sess-n", "NudgeOutcome", NT, JSON.stringify({
+    ref: { transcriptHash: "hashB", byteOffset: null, ts: FIRE_B_TS }, complied: false,
+    baseRateWindow: 0.3, keepAudit: { misassigned: true } }));
+  db.close();
+}
+// outcome-PRESENT case: compliance rollup + join semantics
+const nu2 = await statGet(45742, "/stats/nudges?window=7d", null);
+check("nudges: outcomes joined", nu2.compliance && nu2.compliance.outcomes === 2, JSON.stringify(nu2.compliance));
+check("nudges: complied count", nu2.compliance && nu2.compliance.complied === 1, JSON.stringify(nu2.compliance));
+check("nudges: rate = complied/outcomes", nu2.compliance && approx(nu2.compliance.rate, 0.5), JSON.stringify(nu2.compliance));
+check("nudges: base rate carried through", nu2.compliance && nu2.compliance.base_rate === 0.3, JSON.stringify(nu2.compliance));
+check("nudges: keep misassign counted", nu2.compliance && nu2.compliance.keep_misassign === 1, JSON.stringify(nu2.compliance));
+check("nudges: judgment n=2 with outcomes", nu2.judgment && nu2.judgment.n === 2, JSON.stringify(nu2.judgment));
+const recB = (nu2.recent || []).find((r) => r.kind === "branch-cleanup");
+check("nudges: byteOffset-null fire joined by ts fallback (F3)", recB && recB.complied === false, JSON.stringify(recB));
+const recA = (nu2.recent || []).find((r) => r.dropLabel === "PR #9");
+check("nudges: complied fire marked ✓", recA && recA.complied === true, JSON.stringify(recA));
+const recC = (nu2.recent || []).find((r) => r.costShown === "unpriced");
+check("nudges: unmatched fire stays null", recC && recC.complied === null, JSON.stringify(recC));
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);
