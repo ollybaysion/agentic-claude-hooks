@@ -28,11 +28,11 @@ import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.11.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab)
+const VERSION = "0.11.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -2363,6 +2363,7 @@ async function startServer() {
 
   server.listen(PORT, HOST, () => {
     writePidfile();
+    startAutoTitler();
     process.stderr.write(`[obs] ${SERVICE} listening on http://${HOST}:${PORT} (pid ${process.pid})\n`);
   });
 
@@ -2442,6 +2443,16 @@ async function cliIngestUsage() {
 const TITLE_MODEL = process.env.OBS_TITLE_MODEL || "claude-haiku-4-5-20251001";
 const TITLE_MIN_GROWTH = intEnv("OBS_TITLE_MIN_GROWTH", 3); // re-title only after this many new prompts
 
+// Auto-titler (#66 follow-up): the collector titles recently-idle sessions on a
+// timer so the fleet strip shows a one-line summary instead of the raw first
+// prompt. It uses a SHORT idle gate (default 90s quiet) so active sessions get
+// titled soon after they pause, not just long-dead ones. On by default;
+// OBS_TITLE_AUTO=0 disables it.
+const TITLE_AUTO = process.env.OBS_TITLE_AUTO !== "0";
+const TITLE_AUTO_INTERVAL_MS = intEnv("OBS_TITLE_INTERVAL_SEC", 180) * 1000;
+const TITLE_AUTO_IDLE_MS = intEnv("OBS_TITLE_IDLE_SEC", 90) * 1000;
+const TITLE_AUTO_LIMIT = intEnv("OBS_TITLE_LIMIT", 8); // cap LLM spawns per tick
+
 function sessionPromptRows(sid) {
   return db.impl.prepare(
     `SELECT json_extract(payload, '$.prompt') p FROM events
@@ -2494,7 +2505,11 @@ async function cliTitleSessions() {
   const all = process.argv.includes("--all");
   const li = process.argv.indexOf("--limit");
   const limit = li >= 0 ? Math.max(1, Number(process.argv[li + 1]) || 0) : Infinity;
-  const cands = titleCandidates(all);
+  // --idle <sec>: how long a session must be quiet to be a candidate (the
+  // auto-titler passes a short value so recently-paused sessions get titled).
+  const ii = process.argv.indexOf("--idle");
+  const idleMs = ii >= 0 ? Math.max(0, Number(process.argv[ii + 1]) || 0) * 1000 : ACTIVE_MS;
+  const cands = titleCandidates(all, idleMs);
   const upsert = db.impl.prepare(
     `INSERT INTO session_titles(session_id, title, prompt_count, generated_at) VALUES(?,?,?,?)
        ON CONFLICT(session_id) DO UPDATE SET title = excluded.title,
@@ -2514,6 +2529,30 @@ async function cliTitleSessions() {
   }
   process.stdout.write(`title-sessions: titled=${titled} skipped=${skipped} candidates=${cands.length}\n`);
   process.exit(0);
+}
+
+// Periodic auto-titler. Spawns our OWN `title-sessions` CLI as a DETACHED child
+// rather than titling in-process: generateTitle is a blocking spawnSync(claude)
+// that would stall ingest/SSE for seconds. The child opens the shared DB (WAL +
+// busy_timeout make the concurrent write safe) and exits; it runs the CLI path,
+// which never starts its own auto-titler, so there is no recursion. Timers are
+// unref'd so they never hold the process open on their own.
+function startAutoTitler() {
+  if (!TITLE_AUTO) return;
+  const tick = () => {
+    try {
+      const child = spawn(process.execPath, [
+        "--disable-warning=ExperimentalWarning", process.argv[1],
+        "title-sessions",
+        "--idle", String(Math.round(TITLE_AUTO_IDLE_MS / 1000)),
+        "--limit", String(TITLE_AUTO_LIMIT),
+      ], { detached: true, stdio: "ignore", env: process.env });
+      child.on("error", (e) => logSafe("auto-title spawn", e));
+      child.unref();
+    } catch (e) { logSafe("auto-title", e); }
+  };
+  setTimeout(tick, Math.min(30_000, TITLE_AUTO_INTERVAL_MS)).unref(); // first pass soon after startup (≤30s)
+  setInterval(tick, TITLE_AUTO_INTERVAL_MS).unref();                  // then every interval
 }
 
 const cmd = process.argv[2];

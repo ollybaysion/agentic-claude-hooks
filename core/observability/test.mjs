@@ -40,7 +40,10 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "obs-ttl-"));
 const DB_PATH = path.join(DATA_DIR, "events.db");
 const TRANSCRIPT = path.join(DATA_DIR, "transcript.jsonl");
 const NOW = new Date().toISOString();
-const baseEnv = { ...process.env, OBS_DATA_DIR: DATA_DIR, OBS_TOKEN: "" };
+// OBS_TITLE_AUTO=0 pins off the server-side auto-titler so no spawned test server
+// fires a `title-sessions` child at a live claude (the CLI titler path below is
+// tested directly and is unaffected by this gate).
+const baseEnv = { ...process.env, OBS_DATA_DIR: DATA_DIR, OBS_TOKEN: "", OBS_TITLE_AUTO: "0" };
 
 // 3 assistant messages, all main-chain, same model:
 //   m_old  — mixed TTL, PRE-SEEDED into a v3 usage row (cache_create_1h missing)
@@ -291,6 +294,27 @@ check("no candidates on re-run (titled=0)", /titled=0\b/.test(tOut2), tOut2.trim
 const st3 = await statGet(45740, "/stats/sessions?window=7d&limit=100", null);
 const stt3 = (st3.sessions || []).find((r) => r.session_id === "sess-title");
 check("existing title unchanged without growth", stt3 && stt3.title === "스텁 제목", stt3 && JSON.stringify(stt3.title));
+
+// ══ auto-titler short idle gate (--idle) — recent sessions titled for the fleet ═
+process.stdout.write("\n# auto-titler short idle gate (--idle)\n");
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  const recent = Date.now() - 5000; // quiet only 5s → "active", excluded by the default 600s gate
+  insE.run(120, "e120", "testapp", "sess-recent", "UserPromptSubmit", recent, JSON.stringify({ prompt: "방금 시작한 활성 세션" }));
+  db.close();
+}
+// default gate (ACTIVE_MS=600s): the recent session is NOT a candidate → untitled
+cliEnv({ OBS_TITLE_STUB: "최근 스텁" }, "title-sessions");
+const stR1 = await statGet(45743, "/stats/sessions?window=7d&limit=100", null);
+const rr1 = (stR1.sessions || []).find((r) => r.session_id === "sess-recent");
+check("recent session untitled at default idle gate", rr1 && rr1.title === null, rr1 && JSON.stringify(rr1.title));
+// short idle (--idle 2 = 2s quiet): now a candidate → titled (what the auto-titler passes)
+const tShort = cliEnv({ OBS_TITLE_STUB: "최근 스텁" }, "title-sessions", "--idle", "2");
+check("short --idle titles the recent session", /sess-rec/.test(tShort), tShort.trim());
+const stR2 = await statGet(45744, "/stats/sessions?window=7d&limit=100", null);
+const rr2 = (stR2.sessions || []).find((r) => r.session_id === "sess-recent");
+check("recent session titled with short idle", rr2 && rr2.title === "최근 스텁", rr2 && JSON.stringify(rr2.title));
 
 // ══ #63 — nudge observation (/stats/nudges: fires + join to outcomes) ════════
 process.stdout.write("\n# nudge observation (/stats/nudges)\n");
