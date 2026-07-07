@@ -27,7 +27,7 @@ node core/observability/server.mjs stop      # verify ours via /health, then SIG
 node core/observability/server.mjs retain     # run one retention pass (ops)
 node core/observability/server.mjs ingest-usage           # backfill token usage from transcripts (idempotent)
 node core/observability/server.mjs ingest-usage --rescan  # drop cursors + re-read ALL transcripts (e.g. after the TTL-split migration)
-node core/observability/server.mjs title-sessions         # batch: LLM-summarise idle sessions into short titles (--all re-titles, --limit N caps)
+node core/observability/server.mjs title-sessions         # batch: LLM-summarise idle sessions into short titles (--all re-titles, --limit N caps, --idle SEC lowers the quiet-gate)
 ```
 
 Then open the dashboard at **<http://127.0.0.1:4090/>**. Node 24+ emits an
@@ -43,7 +43,7 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/events/:id` | one row by `seq` (numeric) or `id` (uuid); **404** if missing |
 | GET | `/stream` | live SSE; `Last-Event-ID`/`?since` resume, same filters as `/events` |
 | GET | `/stats/overview` | window totals: events / errors / sessions (+active) per type + time buckets |
-| GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active + `title` (from the `title-sessions` batch) and `first_prompt` (earliest `UserPromptSubmit`, the fallback label) |
+| GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active + `title` (auto-titled on a timer, or the `title-sessions` batch) and `first_prompt` (earliest `UserPromptSubmit`, the fallback label) |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
 | GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model\|anatomy\|timeline` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table). `group=session` rows also carry per-session diagnostics: `avg_ctx`/`peak_ctx` (context = input+cache), `model_switches` + `switch_rewrite_est` (the cache rewrite a mid-session model change forces), `mega` (hot-spot flag). `group=anatomy` returns per-model + `(all)` cost split into 4 components (`input`/`write`/`read`/`output` USD + `pct`) with `baseline_ctx` (est. harness fixed cost). `group=timeline&session_id=X` returns one session's main-chain context `series` + `compact_markers` (sharp ctx drops) + `whatif` (cache-read $ a 200k/300k cap would have saved) |
 | GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. Reads `payload` (json_extract) — GuardDecision rows are few |
@@ -93,6 +93,10 @@ boundaries / cache-read a cap would avoid) — diagnostic signals, not exact bil
 | `OBS_MEGA_CTX` | `300000` | mega-session flag: average context at/above this (config.json `{mega:{ctx}}` wins) |
 | `OBS_TITLE_MODEL` | `claude-haiku-4-5-20251001` | model the `title-sessions` batch calls (via the `claude` CLI) to summarise a session |
 | `OBS_TITLE_MIN_GROWTH` | `3` | `title-sessions`: re-title a session only after this many new prompts |
+| `OBS_TITLE_AUTO` | `1` | auto-titler: the running collector titles recently-idle sessions on a timer (spawns a detached `title-sessions` child so the blocking `claude` call never stalls ingest) → the fleet strip shows the summary, not the raw first prompt. `0` disables |
+| `OBS_TITLE_INTERVAL_SEC` | `180` | auto-titler tick interval |
+| `OBS_TITLE_IDLE_SEC` | `90` | auto-titler quiet-gate: a session must be idle this long before it's titled (avoids titling mid-turn) |
+| `OBS_TITLE_LIMIT` | `8` | auto-titler: max sessions titled per tick (caps `claude` spawns) |
 
 ## Guarantees (held from stage 0)
 
