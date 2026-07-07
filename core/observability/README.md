@@ -95,7 +95,7 @@ boundaries / cache-read a cap would avoid) — diagnostic signals, not exact bil
 | `OBS_TITLE_MIN_GROWTH` | `3` | `title-sessions`: re-title a session only after this many new prompts |
 | `OBS_TITLE_AUTO` | `1` | auto-titler: the running collector titles recently-idle sessions on a timer (spawns a detached `title-sessions` child so the blocking `claude` call never stalls ingest) → the fleet strip shows the summary, not the raw first prompt. `0` disables |
 | `OBS_TITLE_INTERVAL_SEC` | `180` | auto-titler tick interval |
-| `OBS_TITLE_IDLE_SEC` | `90` | auto-titler quiet-gate: a session must be idle this long before it's titled (avoids titling mid-turn) |
+| `OBS_TITLE_IDLE_SEC` | `30` | auto-titler quiet-gate: a session must be idle this long before it's titled (short, so active sessions get a title during natural pauses; avoids titling mid-turn) |
 | `OBS_TITLE_LIMIT` | `8` | auto-titler: max sessions titled per tick (caps `claude` spawns) |
 
 ## Guarantees (held from stage 0)

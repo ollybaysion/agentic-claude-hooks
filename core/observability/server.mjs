@@ -26,13 +26,14 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
+import os from "node:os";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.12.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt)
+const VERSION = "0.12.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -2450,7 +2451,7 @@ const TITLE_MIN_GROWTH = intEnv("OBS_TITLE_MIN_GROWTH", 3); // re-title only aft
 // OBS_TITLE_AUTO=0 disables it.
 const TITLE_AUTO = process.env.OBS_TITLE_AUTO !== "0";
 const TITLE_AUTO_INTERVAL_MS = intEnv("OBS_TITLE_INTERVAL_SEC", 180) * 1000;
-const TITLE_AUTO_IDLE_MS = intEnv("OBS_TITLE_IDLE_SEC", 90) * 1000;
+const TITLE_AUTO_IDLE_MS = intEnv("OBS_TITLE_IDLE_SEC", 30) * 1000; // quiet this long → titled (short, so active sessions get a title during natural pauses)
 const TITLE_AUTO_LIMIT = intEnv("OBS_TITLE_LIMIT", 8); // cap LLM spawns per tick
 
 function sessionPromptRows(sid) {
@@ -2465,9 +2466,14 @@ function promptDigest(prompts, max = 4000) {
   return joined.length > max ? joined.slice(0, max) : joined;
 }
 
-// One-shot title via the claude CLI. Guarded with a dead OBS_PORT so the titler's
-// own hook events fail-open and never pollute the collector (guard-test trick).
+// One-shot title via the claude CLI. The spawned claude runs its own Claude Code
+// hooks, so we ISOLATE its observability side effects two ways: OBS_PORT=59999
+// keeps its events off the live 4090 collector, and OBS_DATA_DIR=<void> makes the
+// sacrificial collector that obs-lazy-start spawns on 59999 write to a throwaway
+// DB — NOT the shared one. Without the void dir, that 59999 collector shares
+// dataDir() with 4090 and the titler's own prompts leak in as fake sessions.
 // Returns a clean one-line title, or null on any failure (titling is optional).
+const TITLE_VOID_DIR = path.join(os.tmpdir(), "obs-titler-void"); // throwaway DB for the titler's claude
 function generateTitle(digest) {
   if (process.env.OBS_TITLE_STUB) return process.env.OBS_TITLE_STUB.slice(0, 80); // tests
   const instruction =
@@ -2477,7 +2483,7 @@ function generateTitle(digest) {
   try {
     const r = spawnSync("claude", ["-p", instruction, "--model", TITLE_MODEL], {
       encoding: "utf8", timeout: 60000, maxBuffer: 1 << 20,
-      env: { ...process.env, OBS_PORT: "59999" },
+      env: { ...process.env, OBS_PORT: "59999", OBS_DATA_DIR: TITLE_VOID_DIR },
     });
     if (r.status !== 0 || !r.stdout) return null;
     const line = r.stdout.trim().split("\n").map((s) => s.trim()).filter(Boolean)[0];
