@@ -25,7 +25,8 @@ node --disable-warning=ExperimentalWarning core/observability/server.mjs   # sta
 node core/observability/server.mjs status    # probe /health, print it (no token)
 node core/observability/server.mjs stop      # verify ours via /health, then SIGTERM
 node core/observability/server.mjs retain     # run one retention pass (ops)
-node core/observability/server.mjs ingest-usage  # backfill token usage from transcripts (idempotent)
+node core/observability/server.mjs ingest-usage           # backfill token usage from transcripts (idempotent)
+node core/observability/server.mjs ingest-usage --rescan  # drop cursors + re-read ALL transcripts (e.g. after the TTL-split migration)
 ```
 
 Then open the dashboard at **<http://127.0.0.1:4090/>**. Node 24+ emits an
@@ -43,7 +44,7 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/overview` | window totals: events / errors / sessions (+active) per type + time buckets |
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
-| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates, 5m cache writes) + `unpriced` (tokens of models missing from the pricing table) |
+| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table) |
 | GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. The one stats query that reads `payload` (json_extract) — GuardDecision rows are few |
 | GET | `/health` | liveness + counters (single-instance probe) |
 | GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + turn drill-down), Tools (latency/error bars), Tokens (daily/by app/by model/by tool + cost + trend), Guards (what the git/bash guards blocked), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
@@ -55,8 +56,12 @@ answer empty-but-200 when the DB backend is degraded. The git/bash guards emit a
 `GuardDecision` event on every deny/ask (never on allow) via `lib/obs-client.mjs`
 — fire-and-forget, so a slow or absent collector never changes a guard's ruling.
 Cost pricing can be extended/corrected via `{"pricing": {"<model prefix>":
-{"input", "output", "cache_write", "cache_read"}}}` (USD per MTok) in
-config.json — longest prefix wins, loaded at boot.
+{"input", "output", "cache_write", "cache_write_1h", "cache_read"}}}` (USD per
+MTok) in config.json — longest prefix wins, loaded at boot. `cache_write` is the
+5m-TTL rate; `cache_write_1h` is the 1h rate (defaults to `input × 2` if omitted).
+A partial override **merges** onto the base entry (missing keys keep their
+defaults), so overriding just `cache_write` no longer wipes the other rates; set a
+prefix to `null` to unprice it.
 
 ## Config (env `OBS_*` > config.json > default)
 

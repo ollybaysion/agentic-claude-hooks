@@ -350,6 +350,7 @@ function pragmaScalar(impl, sql) {
 
 function initSchema(impl) {
   const exists = impl.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get();
+  const prevVersion = Number(pragmaScalar(impl, "PRAGMA user_version")) || 0; // read BEFORE overwrite (migration gate)
   impl.exec("PRAGMA journal_mode = WAL;");
   impl.exec(`PRAGMA synchronous = ${DURABLE ? "FULL" : "NORMAL"};`);
   impl.exec("PRAGMA busy_timeout = 5000;");
@@ -359,7 +360,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 3;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a)
+  impl.exec("PRAGMA user_version = 4;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -399,10 +400,20 @@ function initSchema(impl) {
     source_app TEXT NOT NULL, ts INTEGER NOT NULL, model TEXT,
     input INTEGER NOT NULL DEFAULT 0, output INTEGER NOT NULL DEFAULT 0,
     cache_create INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
+    cache_create_1h INTEGER NOT NULL DEFAULT 0,
     sidechain INTEGER NOT NULL DEFAULT 0,
     emitted_tool_ids TEXT NOT NULL DEFAULT '[]',
     follows_tool_ids TEXT NOT NULL DEFAULT '[]',
     UNIQUE(session_id, msg_id))`);
+  // v3→v4 (#57): cache_write TTL split. `cache_create` stays the TOTAL; the new
+  // `cache_create_1h` is the 1h-TTL subset (5m = total − 1h). An existing table
+  // predates the column — CREATE IF NOT EXISTS won't add it, so ALTER once. The
+  // subset defaults 0, so untouched old rows bill as all-5m (prior behaviour)
+  // until `ingest-usage --rescan` backfills the real split.
+  if (exists && prevVersion < 4) {
+    try { impl.exec("ALTER TABLE usage ADD COLUMN cache_create_1h INTEGER NOT NULL DEFAULT 0"); }
+    catch (e) { logSafe("migrate v4", e); } // already present → ignore
+  }
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id, ts)");
   impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor (
@@ -941,23 +952,34 @@ function scheduleUsageParse(sessionId, tPath, app) {
 // feeds the NEXT call's input, so that is where its input cost lands.
 function ingestUsageLines(sessionId, app, text, lastEmitted) {
   const ins = db.impl.prepare(`INSERT OR IGNORE INTO usage
-    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, sidechain, emitted_tool_ids, follows_tool_ids)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const sel = db.impl.prepare("SELECT emitted_tool_ids FROM usage WHERE session_id = ? AND msg_id = ?");
-  const upd = db.impl.prepare("UPDATE usage SET emitted_tool_ids = ? WHERE session_id = ? AND msg_id = ?");
+  // On conflict (rescan, or a message straddling a read boundary) refresh the
+  // token/TTL columns from this parse and UNION the tool ids. The numbers are
+  // stable per message (usage is duplicated across its content-block lines), so
+  // this is a no-op on a straddle and a real backfill on a --rescan of a row
+  // written before cache_create_1h existed (#57). follows_tool_ids is left as the
+  // first insert set it (unchanged from prior behaviour).
+  const upd = db.impl.prepare(`UPDATE usage SET
+    ts = ?, model = ?, input = ?, output = ?, cache_create = ?, cache_read = ?, cache_create_1h = ?,
+    emitted_tool_ids = ? WHERE session_id = ? AND msg_id = ?`);
   let cur = null, last = lastEmitted;
   const flush = () => {
     if (!cur) return;
     try {
       const info = ins.run(sessionId, cur.id, app, cur.ts, cur.model,
-        cur.input, cur.output, cur.cc, cur.cr, cur.side,
+        cur.input, cur.output, cur.cc, cur.cr, cur.cc1h, cur.side,
         JSON.stringify(cur.emitted), JSON.stringify(cur.follows));
-      if (info.changes === 0 && cur.emitted.length) {
-        // message straddled a pass boundary → merge newly-seen tool ids
+      if (info.changes === 0) {
+        // row already existed (rescan / straddled pass) → refresh columns and
+        // union any newly-seen tool ids onto the stored set
         const row = sel.get(sessionId, cur.id);
         let old = [];
         if (row) { try { old = JSON.parse(row.emitted_tool_ids) || []; } catch {} }
-        upd.run(JSON.stringify([...new Set([...old, ...cur.emitted])]), sessionId, cur.id);
+        const merged = cur.emitted.length ? [...new Set([...old, ...cur.emitted])] : old;
+        upd.run(cur.ts, cur.model, cur.input, cur.output, cur.cc, cur.cr, cur.cc1h,
+          JSON.stringify(merged), sessionId, cur.id);
       }
     } catch (e) { logSafe("usage row", e); }
     if (!cur.side) last = cur.emitted;
@@ -982,6 +1004,9 @@ function ingestUsageLines(sessionId, app, text, lastEmitted) {
       id: m.id, ts: Date.parse(e.timestamp) || Date.now(), model: m.model ?? null,
       input: u.input_tokens | 0, output: u.output_tokens | 0,
       cc: u.cache_creation_input_tokens | 0, cr: u.cache_read_input_tokens | 0,
+      // cc = TOTAL cache-write tokens; cc1h = the 1h-TTL subset (5m = cc − cc1h).
+      // Absent on pre-TTL-split transcripts → 0 → billed as all-5m (#57).
+      cc1h: (u.cache_creation && u.cache_creation.ephemeral_1h_input_tokens) | 0,
       side, emitted: ids, follows: side ? [] : last,
     };
   }
@@ -1030,12 +1055,15 @@ function parseTranscriptTail(sessionId, tPath, appHint) {
   } finally { try { fs.closeSync(fd); } catch {} }
 }
 
-// ── model pricing (#53) ─────────────────────────────────────────────────────
+// ── model pricing (#53, TTL split #57) ──────────────────────────────────────
 // USD per MTok, official API rates as of 2026-07-04. Longest matching prefix of
-// the transcript's message.model wins. cache_write assumes the 5-minute TTL
-// (1.25× input — Claude Code's default); 1h-TTL writes (2×) are undercounted.
+// the transcript's message.model wins. Cache writes are billed per TTL: 5m =
+// 1.25× input, 1h = 2× input (Anthropic's rates). `cache_write` here is the 5m
+// rate (back-compat); the 1h rate is `cache_write_1h` if given, else input × 2.
 // Extend or correct via {"pricing": {"<prefix>": {input, output, cache_write,
-// cache_read}}} in config.json (set a prefix to null to unprice it).
+// cache_write_1h, cache_read}}} in config.json — a PARTIAL override merges onto
+// the base entry (missing keys keep their defaults), a prefix set to null is
+// unpriced.
 const DEFAULT_PRICING = {
   "claude-fable-5": { input: 10, output: 50, cache_write: 12.5, cache_read: 1 },
   "claude-mythos-5": { input: 10, output: 50, cache_write: 12.5, cache_read: 1 },
@@ -1060,8 +1088,19 @@ function priceOf(model) {
   priceMemo.set(model, best);
   return best;
 }
-function costOf(p, input, output, cacheCreate, cacheRead) {
-  return (input * p.input + output * p.output + cacheCreate * p.cache_write + cacheRead * p.cache_read) / 1e6;
+// Cache-write rates per TTL, derived from the price entry (base input × 1.25 / 2
+// when not given explicitly). Single source for the TTL multipliers (#57).
+function writeRates(p) {
+  const w5m = p.cache_write_5m ?? p.cache_write ?? p.input * 1.25;
+  const w1h = p.cache_write_1h ?? p.input * 2;
+  return [w5m, w1h];
+}
+function costOf(p, input, output, cacheCreate, cacheRead, cacheCreate1h = 0) {
+  const [w5m, w1h] = writeRates(p);
+  const cc1h = Math.min(cacheCreate, Math.max(0, cacheCreate1h)); // 1h subset ≤ total
+  const cc5m = cacheCreate - cc1h;
+  return (input * p.input + output * p.output
+    + cc5m * w5m + cc1h * w1h + cacheRead * p.cache_read) / 1e6;
 }
 const roundUsd = (n) => Math.round(n * 1e4) / 1e4;
 
@@ -1087,7 +1126,13 @@ function tokensByTool(rows) {
     // cache_read stays unattributed here, exactly like the token figures.
     const p = priceOf(r.model);
     const outCost = p ? out * p.output / 1e6 : 0;
-    const inpCost = p ? (Number(r.input) * p.input + Number(r.cache_create) * p.cache_write) / 1e6 : 0;
+    let inpCost = 0;
+    if (p) {
+      const [w5m, w1h] = writeRates(p);
+      const cc1h = Math.min(Number(r.cache_create), Math.max(0, Number(r.cache_create_1h)));
+      const cc5m = Number(r.cache_create) - cc1h;
+      inpCost = (Number(r.input) * p.input + cc5m * w5m + cc1h * w1h) / 1e6;
+    }
     if (emitted.length) for (const id of emitted) bump(perId, id, "out", out / emitted.length, "oc", outCost / emitted.length);
     else bump(named, "(response)", "out", out, "oc", outCost);
     if (follows.length) for (const id of follows) bump(perId, id, "inp", inp / follows.length, "ic", inpCost / follows.length);
@@ -1130,7 +1175,7 @@ function handleStatsTokens(req, res, u) {
   const params = app ? [since, app] : [since];
   try {
     const rows = db.impl.prepare(
-      `SELECT session_id, source_app, ts, model, input, output, cache_create, cache_read,
+      `SELECT session_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h,
               sidechain, emitted_tool_ids, follows_tool_ids
        FROM usage WHERE ${where}`
     ).all(...params);
@@ -1163,7 +1208,7 @@ function handleStatsTokens(req, res, u) {
         // cost counts main chain AND sidechain (real spend either way); tokens
         // without a known price go to `unpriced` instead of a made-up $0 rate.
         const p = priceOf(r.model);
-        if (p) a.cost_usd += costOf(p, Number(r.input), Number(r.output), Number(r.cache_create), Number(r.cache_read));
+        if (p) a.cost_usd += costOf(p, Number(r.input), Number(r.output), Number(r.cache_create), Number(r.cache_read), Number(r.cache_create_1h));
         else a.unpriced += t;
         if (Number(r.sidechain)) { a.subagent_total += t; a.subagent_messages++; }
         else {
@@ -1751,7 +1796,15 @@ function loadToken() {
 function loadPricing() {
   try {
     const c = JSON.parse(fs.readFileSync(configFile(DATA_DIR), "utf8"));
-    if (c.pricing && typeof c.pricing === "object") Object.assign(PRICING, c.pricing);
+    if (!c.pricing || typeof c.pricing !== "object") return;
+    for (const k in c.pricing) {
+      const o = c.pricing[k];
+      if (o === null) { PRICING[k] = null; continue; } // explicit unprice
+      if (typeof o !== "object") continue;
+      // Field-level merge onto the base entry so a PARTIAL override (e.g. only
+      // cache_write) can't drop input/output/cache_read → NaN costs (#57).
+      PRICING[k] = { ...(PRICING[k] || {}), ...o };
+    }
   } catch {}
 }
 
@@ -1878,10 +1931,18 @@ async function cliRetain() {
 }
 
 // Backfill: parse the transcripts of every session the collector has seen.
-// Idempotent (per-message UNIQUE + cursor bookmarks) — safe to re-run.
+// Idempotent (per-message UNIQUE + cursor bookmarks) — safe to re-run. With
+// --rescan it drops the cursor bookmarks first so every transcript is re-read
+// from offset 0; the per-message upsert then refreshes existing rows (needed to
+// backfill cache_create_1h onto rows ingested before the TTL split — #57).
 async function cliIngestUsage() {
   await startBackend();
   if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
+  const rescan = process.argv.includes("--rescan");
+  if (rescan) {
+    try { db.impl.exec("DELETE FROM transcript_cursor"); }
+    catch (e) { logSafe("rescan reset", e); }
+  }
   const sess = db.impl.prepare("SELECT DISTINCT session_id FROM events").all();
   let parsed = 0, skipped = 0;
   for (const { session_id } of sess) {
@@ -1896,7 +1957,7 @@ async function cliIngestUsage() {
     } else skipped++;
   }
   const s = db.impl.prepare("SELECT COUNT(*) c, SUM(input+output+cache_create+cache_read) t FROM usage").get();
-  process.stdout.write(`usage backfill: sessions parsed=${parsed} skipped=${skipped}; msgs=${s.c} total_tokens=${s.t ?? 0}\n`);
+  process.stdout.write(`usage backfill${rescan ? " (rescan)" : ""}: sessions parsed=${parsed} skipped=${skipped}; msgs=${s.c} total_tokens=${s.t ?? 0}\n`);
   process.exit(0);
 }
 
@@ -1904,5 +1965,5 @@ const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
-else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a)
+else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
 else await startServer();
