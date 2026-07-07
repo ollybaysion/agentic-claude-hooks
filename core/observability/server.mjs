@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.9.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61)
+const VERSION = "0.9.2"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1598,16 +1598,16 @@ const DASHBOARD_JS = `(function(){
   function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
 
   // ── metric help tooltips (#61): per-screen + key derived metrics.
-  // hover/focus a ? badge; copy mirrors the README so definitions stay in sync.
+  // hover/focus a ? badge; Korean prose, English metric tokens (match the UI labels).
   var HELP={
-    live:"Raw event tail — every hook fired across all sessions, newest first (live via SSE).\\nseq: server sequence no.   event: hook type (PreToolUse / PostToolUse / Stop / PreCompact / SessionStart…).   payload: event body, redacted server-side.\\nThe strip above lists sessions active in the last 10 min (app · id · last event · context size).",
-    sessions:"One row per Claude Code session in the window.\\nturns: user prompts   tools: tool calls   errs: tool errors\\ncompacts: PreCompact events (context auto-summarized)   agents: subagents spawned\\navg ctx / peak: tokens re-sent to the model each turn (context size) — averaged / max\\nsw: mid-session model switches — each forces a cache rebuild\\ntokens / cost: total tokens & estimated USD (incl. subagents)\\n●mega: unusually heavy session (≥300 turns or ≥300k avg ctx)\\nClick a row for its turn timeline + context curve.",
-    tools:"One row per tool in the window.\\ncalls: invocations   errs: calls that returned an error\\norphans: PostToolUse with no matching PreToolUse (lost pairing)\\npend: started but no result seen yet\\np50 / p95 / max: call-duration percentiles.",
-    tokens:"Token usage & estimated cost over the window (official per-MTok rates).\\ntotal includes subagent tokens.   cache read = context re-read on later turns, billed 0.1× input.   cost is an estimate.   unpriced = tokens on a model with no rate table.",
-    "tok-anat":"Where the money goes — the 4 things Anthropic bills:\\ninput: fresh (uncached) prompt tokens\\ncache write: writing prompt into the cache (5m TTL = 1.25×, 1h TTL = 2× input)\\ncache read: re-reading cached context on later turns (0.1× input) — usually the biggest\\noutput: generated tokens (priciest per token)\\nturn tax: avg context re-sent per turn.   baseline ctx: rough fixed system/harness floor (Σ per-session min context).   switch rewrite: cache rebuild forced by mid-session model switches.\\nturn tax / baseline / switch rewrite are approximations.",
-    guards:"What the git/bash guards blocked. Only deny (blocked) and ask (prompted) are recorded — allow is not emitted; commands are redacted server-side.\\nCards show total decisions, denied, asked, then per-guard totals. Tables break it down by guard×rule, most-blocked command, and app.",
-    "sess-ctx":"Context size (tokens re-sent to the model) at each main-chain turn. It grows every turn until a /compact resets it — hence the sawtooth. 'compact' counts the sharp drops.",
-    "sess-whatif":"Hypothetical cache-read savings if this session had run /compact whenever context passed the cap.\\n@200k = cap at 200k tokens, @300k = 300k.\\nEvery turn re-reads the whole context at 0.1× input, so a big context bills over and over — this estimates how much a cap would have avoided. Approximate: ignores compaction's own cost."
+    live:"모든 세션에서 발생한 훅 이벤트 원본 — 최신순, SSE 실시간.\\nseq: 서버 시퀀스 번호   event: 훅 종류 (PreToolUse / PostToolUse / Stop / PreCompact / SessionStart…)   payload: 이벤트 본문(서버에서 민감정보 제거).\\n위 스트립은 최근 10분 내 활동한 세션 목록 (앱 · id · 마지막 이벤트 · 컨텍스트 크기).",
+    sessions:"윈도우 내 Claude Code 세션당 한 행.\\nturns: 사용자 프롬프트 수   tools: 도구 호출 수   errs: 도구 에러 수\\ncompacts: PreCompact 이벤트(컨텍스트 자동 요약)   agents: 생성된 서브에이전트 수\\navg ctx / peak: 매 턴 모델에 다시 실려가는 토큰(컨텍스트 크기) — 평균 / 최대\\nsw: 세션 중 모델 전환 횟수 — 전환마다 캐시 재작성 발생\\ntokens / cost: 총 토큰 & 추정 비용(USD, 서브에이전트 포함)\\n●mega: 비정상적으로 무거운 세션 (턴 ≥300 또는 avg ctx ≥300k)\\n행을 클릭하면 턴 타임라인 + 컨텍스트 곡선.",
+    tools:"윈도우 내 도구당 한 행.\\ncalls: 호출 수   errs: 에러를 반환한 호출\\norphans: 짝 PreToolUse가 없는 PostToolUse (짝 유실)\\npend: 시작됐지만 아직 결과가 안 온 호출\\np50 / p95 / max: 호출 소요시간 백분위.",
+    tokens:"윈도우 동안의 토큰 사용량 & 추정 비용 (공식 per-MTok 요율).\\ntotal은 서브에이전트 토큰 포함.   cache read = 이후 턴에서 다시 읽는 컨텍스트, input의 0.1×로 과금.   cost는 추정치.   unpriced = 요율표에 없는 모델의 토큰.",
+    "tok-anat":"돈이 어디로 새는지 — Anthropic이 과금하는 4가지:\\ninput: 캐시 안 된 새 프롬프트 토큰\\ncache write: 프롬프트를 캐시에 쓰기 (5m TTL = 1.25×, 1h TTL = 2× input)\\ncache read: 이후 턴에서 캐시된 컨텍스트 다시 읽기 (0.1× input) — 보통 가장 큼\\noutput: 생성된 토큰 (토큰당 가장 비쌈)\\nturn tax: 턴당 평균 재전송 컨텍스트.   baseline ctx: 대략적인 고정 시스템/하네스 바닥값 (Σ 세션별 최소 컨텍스트).   switch rewrite: 세션 중 모델 전환이 강제하는 캐시 재작성.\\nturn tax / baseline / switch rewrite은 근사치.",
+    guards:"git/bash 가드가 차단한 내역. deny(차단)와 ask(확인 요청)만 기록 — allow는 미기록; 명령은 서버에서 민감정보 제거.\\n카드는 총 결정 수, 차단(denied), 확인(asked), 그다음 가드별 합계. 표는 guard×rule · 가장 많이 차단된 명령 · 앱별로 분해.",
+    "sess-ctx":"각 메인체인 턴의 컨텍스트 크기(모델에 다시 실려가는 토큰). /compact로 초기화되기 전까지 매 턴 커져서 톱니 모양이 됨. 'compact'는 급락 지점 개수.",
+    "sess-whatif":"컨텍스트가 상한을 넘을 때마다 이 세션이 /compact를 돌렸다면 아꼈을 cache-read 비용 추정치.\\n@200k = 200k 토큰에서 상한, @300k = 300k.\\n매 턴 컨텍스트 전체를 input의 0.1×로 다시 읽으므로 큰 컨텍스트는 반복 과금됨 — 상한을 뒀다면 얼마나 피했을지 추정. 근사치: compact 자체 비용은 무시."
   };
   function hint(key){ var txt=HELP[key]||""; var s=el("span","hint","?"); s.tabIndex=0;
     s.setAttribute("aria-label",txt); s.appendChild(el("div","tip",txt)); return s; }
