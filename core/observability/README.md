@@ -46,16 +46,20 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active + `title` (from the `title-sessions` batch) and `first_prompt` (earliest `UserPromptSubmit`, the fallback label) |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
 | GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model\|anatomy\|timeline` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table). `group=session` rows also carry per-session diagnostics: `avg_ctx`/`peak_ctx` (context = input+cache), `model_switches` + `switch_rewrite_est` (the cache rewrite a mid-session model change forces), `mega` (hot-spot flag). `group=anatomy` returns per-model + `(all)` cost split into 4 components (`input`/`write`/`read`/`output` USD + `pct`) with `baseline_ctx` (est. harness fixed cost). `group=timeline&session_id=X` returns one session's main-chain context `series` + `compact_markers` (sharp ctx drops) + `whatif` (cache-read $ a 200k/300k cap would have saved) |
-| GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. The one stats query that reads `payload` (json_extract) — GuardDecision rows are few |
+| GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. Reads `payload` (json_extract) — GuardDecision rows are few |
+| GET | `/stats/nudges` | ctx-budget boundary-nudge rollup: `by_kind` (kind×template) / `by_cost_shown` / `by_app` / `series` / `recent` fires, plus `compliance` (rate + base rate + keep-misassign, when `NudgeOutcome` events are present — acp#29) and kill-judgment progress (`n`/20 outcomes over `days`/30). Joins `NudgeFired`↔`NudgeOutcome` on `(transcriptHash, byteOffset)`, degrading to `(transcriptHash, ts)` when byteOffset is null. Reads `payload`; nudge rows are few. Counts are an observed lower bound (a fire while the collector is down leaves a ledger line but no event) — acp's ledger report owns the exact rate |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + avg/peak ctx + mega badge + a human session title — generated title, else first prompt, else hash + turn drill-down with a context-growth curve & compact what-if), Tools (latency/error bars), Tokens (cost anatomy stack + baseline/turn-tax/switch-rewrite cards + daily/by app/by model/by tool + trend), Guards (what the git/bash guards blocked), fleet strip with per-session context size, per-screen `(?)` help tooltips for derived metrics (strict CSP, same-origin, inline-SVG charts) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + avg/peak ctx + mega badge + a human session title — generated title, else first prompt, else hash + turn drill-down with a context-growth curve & compact what-if), Tools (latency/error bars), Tokens (cost anatomy stack + baseline/turn-tax/switch-rewrite cards + daily/by app/by model/by tool + trend), Guards (what the git/bash guards blocked), Nudges (ctx-budget `/compact` boundary nudges + compliance), fleet strip with per-session context size, per-screen `(?)` help tooltips for derived metrics (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
-the `payload` column (the sole exception is `/stats/guards`, by design) and
-answer empty-but-200 when the DB backend is degraded. The git/bash guards emit a
-`GuardDecision` event on every deny/ask (never on allow) via `lib/obs-client.mjs`
-— fire-and-forget, so a slow or absent collector never changes a guard's ruling.
+the `payload` column (the exceptions are `/stats/guards` and `/stats/nudges`, by
+design — both roll up rare custom-event rows) and answer empty-but-200 when the
+DB backend is degraded. The git/bash guards emit a `GuardDecision` event on every
+deny/ask (never on allow) via `lib/obs-client.mjs` — fire-and-forget, so a slow or
+absent collector never changes a guard's ruling. ctx-budget emits `NudgeFired` on
+each boundary `/compact` nudge (and later `NudgeOutcome` with acp's compliance
+verdict — acp#29); both are custom events kept but not dropped by ingest.
 Cost pricing can be extended/corrected via `{"pricing": {"<model prefix>":
 {"input", "output", "cache_write", "cache_write_1h", "cache_read"}}}` (USD per
 MTok) in config.json — longest prefix wins, loaded at boot. `cache_write` is the

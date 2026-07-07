@@ -32,7 +32,7 @@ import { spawnSync } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.10.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5)
+const VERSION = "0.11.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1430,6 +1430,120 @@ function handleStatsGuards(req, res, u) {
   } catch (e) { logSafe("stats guards", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── GET /stats/nudges (#63) ─────────────────────────────────────────────────
+// Roll up ctx-budget boundary nudges: NudgeFired (fired) joined to NudgeOutcome
+// (acp's compliance verdict, when present). Same payload-read rationale as
+// /stats/guards — nudges are rare (cooldown + boundary gated), so per-row
+// json_extract over idx_type_time is cheap.
+//
+// JOIN KEY (F3): (transcriptHash, byteOffset). byteOffset can be null at fire
+// time (statSync failure on the acp side), so it degrades to (transcriptHash,
+// ts) — the fire row and its outcome must agree on the same fallback.
+//
+// The compliance VERDICT is acp-owned (analyze pushes NudgeOutcome — acp#29);
+// this endpoint only stores/aggregates/displays. And because a nudge fired while
+// the collector was down leaves a ledger line but no event (no retry), the
+// NudgeFired count here is an OBSERVED LOWER BOUND — acp's ledger report is the
+// single source of truth for the exact compliance rate (F4). The UI notes this.
+const KILL_N_TARGET = 20;   // acp kill-judgment window: n outcomes …
+const KILL_DAYS_TARGET = 30; // … over d days before retiring an ignored nudge
+function nudgeJoinKey(th, boff, ts) {
+  return `${th ?? ""} ${boff != null ? "b" + boff : "t" + (ts ?? "")}`;
+}
+function handleStatsNudges(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  const empty = {
+    window_ms, count: 0, by_kind: [], by_cost_shown: [], by_app: [],
+    series: [], recent: [], compliance: null,
+    judgment: { n: 0, n_target: KILL_N_TARGET, days: 0, days_target: KILL_DAYS_TARGET },
+  };
+  if (!db) return json(res, 200, empty);
+  const since = Date.now() - window_ms;
+  try {
+    const fires = db.impl.prepare(
+      `SELECT received_at, source_app,
+              json_extract(payload, '$.ts')             ts,
+              json_extract(payload, '$.transcriptHash') th,
+              json_extract(payload, '$.byteOffset')     boff,
+              json_extract(payload, '$.kind')           kind,
+              json_extract(payload, '$.template')       template,
+              json_extract(payload, '$.keepLabel')      keepLabel,
+              json_extract(payload, '$.dropLabel')      dropLabel,
+              json_extract(payload, '$.dropForm')       dropForm,
+              json_extract(payload, '$.ctxTokens')      ctxTokens,
+              json_extract(payload, '$.estUsd')         estUsd,
+              json_extract(payload, '$.model')          model,
+              json_extract(payload, '$.costShown')      costShown
+       FROM events
+       WHERE hook_event_type = 'NudgeFired' AND received_at >= ?`
+    ).all(since);
+    const outcomes = db.impl.prepare(
+      `SELECT json_extract(payload, '$.ref.transcriptHash')   th,
+              json_extract(payload, '$.ref.byteOffset')       boff,
+              json_extract(payload, '$.ref.ts')               ts,
+              json_extract(payload, '$.complied')             complied,
+              json_extract(payload, '$.baseRateWindow')       baseRate,
+              json_extract(payload, '$.keepAudit.misassigned') keepMis
+       FROM events
+       WHERE hook_event_type = 'NudgeOutcome' AND received_at >= ?`
+    ).all(since);
+    const outByKey = new Map();
+    for (const o of outcomes) outByKey.set(nudgeJoinKey(o.th, o.boff, o.ts), o);
+
+    const kinds = new Map(), costs = new Map(), apps = new Map(), buckets = new Map();
+    let outcomeCount = 0, complied = 0, keepMisassign = 0, baseRate = null, earliest = null;
+    const recent = [];
+    const DAY = 86400000;
+    for (const f of fires) {
+      const kind = f.kind || "(unknown)";
+      const template = f.template || "(unknown)";
+      const app = f.source_app || "unknown";
+      const kk = `${kind} ${template}`;
+      let k = kinds.get(kk);
+      if (!k) kinds.set(kk, (k = { kind, template, count: 0, outcomes: 0, complied: 0 }));
+      k.count++;
+      costs.set(f.costShown || "(unknown)", (costs.get(f.costShown || "(unknown)") || 0) + 1);
+      apps.set(app, (apps.get(app) || 0) + 1);
+      const day = Math.floor(f.received_at / DAY) * DAY;
+      buckets.set(day, (buckets.get(day) || 0) + 1);
+      if (earliest == null || f.received_at < earliest) earliest = f.received_at;
+
+      const o = outByKey.get(nudgeJoinKey(f.th, f.boff, f.ts));
+      let compliedFlag = null;
+      if (o) {
+        outcomeCount++; k.outcomes++;
+        compliedFlag = !!o.complied;
+        if (compliedFlag) { complied++; k.complied++; }
+        if (o.keepMis) keepMisassign++;
+        if (typeof o.baseRate === "number") baseRate = o.baseRate;
+      }
+      recent.push({
+        ts: f.ts ?? f.received_at, kind, template,
+        keepLabel: f.keepLabel, dropLabel: f.dropLabel, dropForm: f.dropForm,
+        ctxTokens: f.ctxTokens, estUsd: f.estUsd, costShown: f.costShown,
+        complied: compliedFlag,
+      });
+    }
+    recent.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+    const days = earliest != null ? Math.round(((Date.now() - earliest) / DAY) * 10) / 10 : 0;
+
+    json(res, 200, {
+      window_ms, count: fires.length,
+      by_kind: [...kinds.values()].sort((a, b) => b.count - a.count),
+      by_cost_shown: [...costs.entries()].map(([costShown, count]) => ({ costShown, count }))
+        .sort((a, b) => b.count - a.count),
+      by_app: [...apps.entries()].map(([app, count]) => ({ app, count })).sort((a, b) => b.count - a.count),
+      series: [...buckets.entries()].map(([t, count]) => ({ t, count })).sort((a, b) => a.t - b.t),
+      recent: recent.slice(0, 100),
+      compliance: outcomeCount > 0
+        ? { outcomes: outcomeCount, complied, rate: complied / outcomeCount, base_rate: baseRate, keep_misassign: keepMisassign }
+        : null,
+      judgment: { n: outcomeCount, n_target: KILL_N_TARGET, days, days_target: KILL_DAYS_TARGET },
+    });
+  } catch (e) { logSafe("stats nudges", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
 // Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
 // renders every value via textContent (never innerHTML), so attacker-influenced
@@ -1501,6 +1615,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <a href="#tools" id="tab-tools">tools</a>
     <a href="#tokens" id="tab-tokens">tokens</a>
     <a href="#guards" id="tab-guards">guards</a>
+    <a href="#nudges" id="tab-nudges">nudges</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
@@ -1593,6 +1708,29 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <tbody id="guard-app-rows"></tbody>
   </table>
 </section>
+<section id="view-nudges">
+  <div class="cards" id="nudge-cards"></div>
+  <div class="toolbar">기간
+    <select id="nudge-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span data-help="nudges"></span>
+    <span class="dim">발화 카운트는 관측 하한 (수집기 다운 중 발화는 누락) · 순응 판정은 acp 원장이 단일 진실원</span>
+  </div>
+  <h2>by kind × template</h2>
+  <table>
+    <thead><tr><th>kind</th><th>template</th><th class="num">fires</th><th class="num">outcomes</th><th class="num">complied</th><th></th></tr></thead>
+    <tbody id="nudge-kind-rows"></tbody>
+  </table>
+  <h2>recent fires</h2>
+  <table>
+    <thead><tr><th>time</th><th>kind</th><th>template</th><th>drop → keep</th><th class="num">ctx</th><th class="num">est$</th><th>complied</th></tr></thead>
+    <tbody id="nudge-recent-rows"></tbody>
+  </table>
+  <h2>by app</h2>
+  <table>
+    <thead><tr><th>app</th><th class="num">count</th><th></th></tr></thead>
+    <tbody id="nudge-app-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
@@ -1626,6 +1764,7 @@ const DASHBOARD_JS = `(function(){
     tokens:"토큰 사용량과 추정 비용 (공식 단가 기준)\\n• cache read — 대화가 길어질수록 이전 내용을 매 턴 다시 읽는 비용\\n• unpriced — 단가표에 없는 모델의 토큰\\n• total은 서브에이전트 포함, cost는 어림값",
     "tok-anat":"AI 요금이 어디서 새는지 4갈래로 분해\\n• input — 처음 보내는(캐시 안 된) 프롬프트\\n• cache write — 프롬프트를 캐시에 저장 (5분 1.25배 / 1시간 2배)\\n• cache read — 캐시된 문맥을 매 턴 다시 읽음 (0.1배) · 보통 제일 큼\\n• output — 생성된 답변 · 토큰당 제일 비쌈\\n아래 turn tax·baseline·switch rewrite 카드는 어림값",
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
+    nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
     "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값"
   };
@@ -1651,14 +1790,15 @@ const DASHBOARD_JS = `(function(){
     window.addEventListener("scroll",function(){ var t=document.querySelectorAll(".hint .tip");
       for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
-  // ── tabs (#live | #sessions | #tools | #tokens | #guards) — hash routing
-  var TABS=["live","sessions","tools","tokens","guards"];
+  // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges) — hash routing
+  var TABS=["live","sessions","tools","tokens","guards","nudges"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
     if(name==="tools")loadTools();
     if(name==="tokens")loadTokens();
-    if(name==="guards")loadGuards(); }
+    if(name==="guards")loadGuards();
+    if(name==="nudges")loadNudges(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
   // ── live tail (stage 5 behaviour, unchanged)
@@ -1965,8 +2105,61 @@ const DASHBOARD_JS = `(function(){
     }).catch(function(){}); }
   $("guard-window").addEventListener("change",loadGuards);
 
+  // ── nudges tab (#63 — /stats/nudges): ctx-budget boundary /compact nudges,
+  // joined to acp's compliance verdict when present. Counts are an observed
+  // lower bound (see toolbar note); acp's ledger report owns the exact rate.
+  function loadNudges(){ var w=$("nudge-window").value;
+    getJson("/stats/nudges?window="+w).then(function(d){
+      var box=$("nudge-cards"); box.textContent="";
+      box.appendChild(card("fires",d.count||0));
+      var start=0,term=0; (d.by_kind||[]).forEach(function(k){ if(k.template==="start")start+=k.count; else if(k.template==="terminal")term+=k.count; });
+      box.appendChild(card("start / terminal",start+" / "+term));
+      var priced=0; (d.by_cost_shown||[]).forEach(function(c){ if(c.costShown==="on")priced=c.count; });
+      if(priced)box.appendChild(card("priced",priced));
+      var c=d.compliance;
+      if(c){ box.appendChild(card("complied",c.complied+"/"+c.outcomes+" ("+Math.round(c.rate*100)+"%)"));
+        if(c.base_rate!=null)box.appendChild(card("base rate",Math.round(c.base_rate*100)+"%"));
+        if(c.keep_misassign)box.appendChild(card("keep misassign",c.keep_misassign)); }
+      var j=d.judgment;
+      if(j)box.appendChild(card("kill judgment","n "+j.n+"/"+j.n_target+" · "+j.days+"/"+j.days_target+"d"));
+
+      var kr=$("nudge-kind-rows"); kr.textContent=""; var kmax=0;
+      (d.by_kind||[]).forEach(function(k){ if(k.count>kmax)kmax=k.count; });
+      (d.by_kind||[]).forEach(function(k){ var tr=document.createElement("tr");
+        tr.appendChild(cell(k.kind));
+        tr.appendChild(cell(k.template,k.template==="start"?"ok":"warn"));
+        tr.appendChild(cell(k.count,"num"));
+        tr.appendChild(cell(k.outcomes||"","num"));
+        tr.appendChild(cell(k.outcomes?(k.complied+"/"+k.outcomes):"","num"));
+        var td=document.createElement("td"); td.appendChild(hbar(k.count,kmax,120,12)); tr.appendChild(td);
+        kr.appendChild(tr); });
+      if(!(d.by_kind||[]).length){ var etr=document.createElement("tr"),etd=el("td","dim","no nudges in window"); etd.colSpan=6; etr.appendChild(etd); kr.appendChild(etr); }
+
+      var rr=$("nudge-recent-rows"); rr.textContent="";
+      (d.recent||[]).forEach(function(r){ var tr=document.createElement("tr");
+        tr.appendChild(cell(fmtDT(r.ts)));
+        tr.appendChild(cell(r.kind));
+        tr.appendChild(cell(r.template,r.template==="start"?"ok":"warn"));
+        var keep=r.keepLabel||"—", drop=r.dropLabel?(r.dropLabel+(r.dropForm?" ("+r.dropForm+")":"")):"—";
+        tr.appendChild(cell(drop+" → "+keep));
+        tr.appendChild(cell(r.ctxTokens!=null?fmtTok(r.ctxTokens):"","num"));
+        tr.appendChild(cell(r.costShown==="on"&&r.estUsd!=null?fmtUsd(r.estUsd):"","num"));
+        tr.appendChild(r.complied==null?cell("—","dim"):cell(r.complied?"✓":"✗",r.complied?"ok":"err"));
+        rr.appendChild(tr); });
+      if(!(d.recent||[]).length){ var rtr=document.createElement("tr"),rtd=el("td","dim","no nudges in window"); rtd.colSpan=7; rtr.appendChild(rtd); rr.appendChild(rtr); }
+
+      var ar=$("nudge-app-rows"); ar.textContent=""; var amax=0;
+      (d.by_app||[]).forEach(function(a){ if(a.count>amax)amax=a.count; });
+      (d.by_app||[]).forEach(function(a){ var tr=document.createElement("tr");
+        tr.appendChild(cell(a.app));
+        tr.appendChild(cell(a.count,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(a.count,amax,120,12)); tr.appendChild(td);
+        ar.appendChild(tr); });
+    }).catch(function(){}); }
+  $("nudge-window").addEventListener("change",loadNudges);
+
   // 30s refresh of whichever analytics tab is visible
-  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); },30000);
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); },30000);
 
   initHints();
   showTab(location.hash.slice(1));
@@ -2016,6 +2209,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/tools") return handleStatsTools(req, res, u);
       if (pathname === "/stats/tokens") return handleStatsTokens(req, res, u);
       if (pathname === "/stats/guards") return handleStatsGuards(req, res, u);
+      if (pathname === "/stats/nudges") return handleStatsNudges(req, res, u);
       return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {
