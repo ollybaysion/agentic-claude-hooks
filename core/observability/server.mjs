@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.9.2"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean
+const VERSION = "0.9.3"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1470,8 +1470,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 #drill h2{margin:14px 0 4px}
 .hint{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:5px;border:1px solid #2f3a4d;border-radius:50%;color:#6b7686;font:400 10px/1 ui-monospace,monospace;text-transform:none;letter-spacing:0;cursor:help;position:relative;vertical-align:middle;user-select:none}
 .hint:hover,.hint:focus{color:#e6edf3;border-color:#3d4a60;outline:none}
-.hint .tip{display:none;position:absolute;top:calc(100% + 6px);left:0;z-index:20;width:max-content;max-width:360px;white-space:pre-line;text-align:left;background:#141a26;border:1px solid #2f3a4d;border-radius:6px;padding:8px 11px;color:#c8d0dc;font:400 12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:none;letter-spacing:normal;box-shadow:0 6px 20px rgba(0,0,0,.55)}
-.hint:hover .tip,.hint:focus .tip{display:block}
+.hint .tip{display:none;position:fixed;left:0;top:0;z-index:60;max-width:min(400px,calc(100vw - 24px));white-space:pre-line;text-align:left;pointer-events:none;background:#141a26;border:1px solid #303a4d;border-radius:7px;padding:9px 12px;color:#d6deea;font:400 12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:none;letter-spacing:normal;box-shadow:0 10px 28px rgba(0,0,0,.6)}
 </style></head>
 <body>
 <header>
@@ -1488,7 +1487,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 </header>
 <div id="fleet"></div>
 <section id="view-live" class="on">
-  <div class="toolbar">live event tail<span data-help="live"></span></div>
+  <div class="toolbar">실시간 이벤트<span data-help="live"></span></div>
 <table>
   <thead><tr><th>seq</th><th>time</th><th>event</th><th>app</th><th>session</th><th>tool</th><th>payload</th></tr></thead>
   <tbody id="rows"></tbody>
@@ -1496,10 +1495,10 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 </section>
 <section id="view-sessions">
   <div class="cards" id="ov-cards"></div>
-  <div class="toolbar">window
+  <div class="toolbar">기간
     <select id="sess-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
     <span data-help="sessions"></span>
-    <span class="dim">click a row for the turn timeline</span>
+    <span class="dim">행을 누르면 턴별 타임라인</span>
   </div>
   <table>
     <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">avg ctx</th><th class="num">peak</th><th class="num">sw</th><th class="num">tokens</th><th class="num">cost</th></tr></thead>
@@ -1508,7 +1507,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
   <div id="drill"></div>
 </section>
 <section id="view-tools">
-  <div class="toolbar">window
+  <div class="toolbar">기간
     <select id="tools-window"><option>1h</option><option>6h</option><option selected>24h</option><option>7d</option></select>
     <span data-help="tools"></span>
   </div>
@@ -1519,10 +1518,10 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 </section>
 <section id="view-tokens">
   <div class="cards" id="tok-cards"></div>
-  <div class="toolbar">window
+  <div class="toolbar">기간
     <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option><option>30d</option></select>
     <span data-help="tokens"></span>
-    <span class="dim">costs are estimates from official per-MTok rates (per-TTL cache writes); baseline / turn tax / switch rewrite are approximations (see README)</span>
+    <span class="dim">비용은 공식 단가 기준 추정치 · baseline·turn tax·switch rewrite는 어림값</span>
   </div>
   <h2 data-help="tok-anat">cost anatomy</h2>
   <div class="cards" id="tok-anat-cards"></div>
@@ -1553,10 +1552,10 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 </section>
 <section id="view-guards">
   <div class="cards" id="guard-cards"></div>
-  <div class="toolbar">window
+  <div class="toolbar">기간
     <select id="guard-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
     <span data-help="guards"></span>
-    <span class="dim">only deny/ask are recorded (allow is not emitted); commands are redacted server-side</span>
+    <span class="dim">deny·ask만 기록 (allow 제외) · 명령은 서버에서 가림</span>
   </div>
   <h2>by guard × rule</h2>
   <table>
@@ -1598,21 +1597,39 @@ const DASHBOARD_JS = `(function(){
   function spark(vals,w,h){ var s=svgEl("svg",{width:w,height:h}); if(!vals.length)return s; var max=Math.max.apply(null,vals),pts=[],n=vals.length,i,x,y; for(i=0;i<n;i++){ x=n<2?1:(i/(n-1))*(w-2)+1; y=h-1-(max>0?(vals[i]/max)*(h-2):0); pts.push(x.toFixed(1)+","+y.toFixed(1)); } s.appendChild(svgEl("polyline",{points:pts.join(" "),"class":"spark"})); return s; }
 
   // ── metric help tooltips (#61): per-screen + key derived metrics.
-  // hover/focus a ? badge; Korean prose, English metric tokens (match the UI labels).
+  // hover/focus a ? badge; native Korean copy, English metric tokens (match UI labels).
+  // tip is position:fixed + JS-placed beside the badge so it never clips or hides the table.
   var HELP={
-    live:"모든 세션에서 발생한 훅 이벤트 원본 — 최신순, SSE 실시간.\\nseq: 서버 시퀀스 번호   event: 훅 종류 (PreToolUse / PostToolUse / Stop / PreCompact / SessionStart…)   payload: 이벤트 본문(서버에서 민감정보 제거).\\n위 스트립은 최근 10분 내 활동한 세션 목록 (앱 · id · 마지막 이벤트 · 컨텍스트 크기).",
-    sessions:"윈도우 내 Claude Code 세션당 한 행.\\nturns: 사용자 프롬프트 수   tools: 도구 호출 수   errs: 도구 에러 수\\ncompacts: PreCompact 이벤트(컨텍스트 자동 요약)   agents: 생성된 서브에이전트 수\\navg ctx / peak: 매 턴 모델에 다시 실려가는 토큰(컨텍스트 크기) — 평균 / 최대\\nsw: 세션 중 모델 전환 횟수 — 전환마다 캐시 재작성 발생\\ntokens / cost: 총 토큰 & 추정 비용(USD, 서브에이전트 포함)\\n●mega: 비정상적으로 무거운 세션 (턴 ≥300 또는 avg ctx ≥300k)\\n행을 클릭하면 턴 타임라인 + 컨텍스트 곡선.",
-    tools:"윈도우 내 도구당 한 행.\\ncalls: 호출 수   errs: 에러를 반환한 호출\\norphans: 짝 PreToolUse가 없는 PostToolUse (짝 유실)\\npend: 시작됐지만 아직 결과가 안 온 호출\\np50 / p95 / max: 호출 소요시간 백분위.",
-    tokens:"윈도우 동안의 토큰 사용량 & 추정 비용 (공식 per-MTok 요율).\\ntotal은 서브에이전트 토큰 포함.   cache read = 이후 턴에서 다시 읽는 컨텍스트, input의 0.1×로 과금.   cost는 추정치.   unpriced = 요율표에 없는 모델의 토큰.",
-    "tok-anat":"돈이 어디로 새는지 — Anthropic이 과금하는 4가지:\\ninput: 캐시 안 된 새 프롬프트 토큰\\ncache write: 프롬프트를 캐시에 쓰기 (5m TTL = 1.25×, 1h TTL = 2× input)\\ncache read: 이후 턴에서 캐시된 컨텍스트 다시 읽기 (0.1× input) — 보통 가장 큼\\noutput: 생성된 토큰 (토큰당 가장 비쌈)\\nturn tax: 턴당 평균 재전송 컨텍스트.   baseline ctx: 대략적인 고정 시스템/하네스 바닥값 (Σ 세션별 최소 컨텍스트).   switch rewrite: 세션 중 모델 전환이 강제하는 캐시 재작성.\\nturn tax / baseline / switch rewrite은 근사치.",
-    guards:"git/bash 가드가 차단한 내역. deny(차단)와 ask(확인 요청)만 기록 — allow는 미기록; 명령은 서버에서 민감정보 제거.\\n카드는 총 결정 수, 차단(denied), 확인(asked), 그다음 가드별 합계. 표는 guard×rule · 가장 많이 차단된 명령 · 앱별로 분해.",
-    "sess-ctx":"각 메인체인 턴의 컨텍스트 크기(모델에 다시 실려가는 토큰). /compact로 초기화되기 전까지 매 턴 커져서 톱니 모양이 됨. 'compact'는 급락 지점 개수.",
-    "sess-whatif":"컨텍스트가 상한을 넘을 때마다 이 세션이 /compact를 돌렸다면 아꼈을 cache-read 비용 추정치.\\n@200k = 200k 토큰에서 상한, @300k = 300k.\\n매 턴 컨텍스트 전체를 input의 0.1×로 다시 읽으므로 큰 컨텍스트는 반복 과금됨 — 상한을 뒀다면 얼마나 피했을지 추정. 근사치: compact 자체 비용은 무시."
+    live:"실시간 훅 이벤트 로그 (최신순)\\n• payload — 비밀값·토큰은 서버가 자동으로 가림\\n• 맨 위 띠 — 최근 10분 안에 움직인 세션들",
+    sessions:"세션마다 무슨 일이 있었는지 한눈에\\n• compacts — 문맥이 꽉 차 자동 요약된 횟수\\n• agents — 띄운 서브에이전트 수\\n• avg ctx / peak — 매 턴 모델이 다시 읽는 문맥량 (평균 / 최대)\\n• sw — 도중에 모델 바꾼 횟수 (바꿀 때마다 캐시를 다시 만들어 돈이 듦)\\n• ●mega — 유난히 무거운 세션 (턴 300+ 또는 평균 문맥 300k+)\\n행을 누르면 턴별 타임라인이 열림",
+    tools:"도구별 호출 상태\\n• orphans — 시작 기록(PreToolUse) 없이 결과만 잡힌 호출 (짝 유실)\\n• pend — 아직 안 끝난 호출\\n• p50 / p95 / max — 걸린 시간 (중앙값 / 상위 5% / 최대)",
+    tokens:"토큰 사용량과 추정 비용 (공식 단가 기준)\\n• cache read — 대화가 길어질수록 이전 내용을 매 턴 다시 읽는 비용\\n• unpriced — 단가표에 없는 모델의 토큰\\n• total은 서브에이전트 포함, cost는 어림값",
+    "tok-anat":"AI 요금이 어디서 새는지 4갈래로 분해\\n• input — 처음 보내는(캐시 안 된) 프롬프트\\n• cache write — 프롬프트를 캐시에 저장 (5분 1.25배 / 1시간 2배)\\n• cache read — 캐시된 문맥을 매 턴 다시 읽음 (0.1배) · 보통 제일 큼\\n• output — 생성된 답변 · 토큰당 제일 비쌈\\n아래 turn tax·baseline·switch rewrite 카드는 어림값",
+    guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
+    "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
+    "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값"
   };
+  function placeTip(badge){ var tip=badge.querySelector(".tip"); if(!tip)return;
+    tip.style.visibility="hidden"; tip.style.display="block";
+    var b=badge.getBoundingClientRect(), tw=tip.offsetWidth, th=tip.offsetHeight;
+    var vw=window.innerWidth, vh=window.innerHeight, m=8, left, top;
+    if(b.right+8+tw<=vw-m){ left=b.right+8; top=b.top; }      // prefer right of the badge → keeps the table clear
+    else { left=Math.min(b.left, vw-tw-m); top=b.bottom+6; }  // no room → drop below
+    if(top+th>vh-m)top=Math.max(m, vh-th-m);
+    if(top<m)top=m; if(left<m)left=m;
+    tip.style.left=left+"px"; tip.style.top=top+"px"; tip.style.visibility="visible"; }
+  function hideTip(badge){ var tip=badge.querySelector(".tip"); if(tip)tip.style.display="none"; }
   function hint(key){ var txt=HELP[key]||""; var s=el("span","hint","?"); s.tabIndex=0;
-    s.setAttribute("aria-label",txt); s.appendChild(el("div","tip",txt)); return s; }
+    s.setAttribute("aria-label",txt); s.appendChild(el("div","tip",txt));
+    s.addEventListener("mouseenter",function(){ placeTip(s); });
+    s.addEventListener("mouseleave",function(){ hideTip(s); });
+    s.addEventListener("focus",function(){ placeTip(s); });
+    s.addEventListener("blur",function(){ hideTip(s); });
+    return s; }
   function initHints(){ var ns=document.querySelectorAll("[data-help]");
-    for(var i=0;i<ns.length;i++){ var k=ns[i].getAttribute("data-help"); if(HELP[k])ns[i].appendChild(hint(k)); } }
+    for(var i=0;i<ns.length;i++){ var k=ns[i].getAttribute("data-help"); if(HELP[k])ns[i].appendChild(hint(k)); }
+    window.addEventListener("scroll",function(){ var t=document.querySelectorAll(".hint .tip");
+      for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
   // ── tabs (#live | #sessions | #tools | #tokens | #guards) — hash routing
   var TABS=["live","sessions","tools","tokens","guards"];
