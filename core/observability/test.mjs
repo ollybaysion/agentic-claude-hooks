@@ -1,13 +1,17 @@
-// Deterministic end-to-end checks for the cache-write TTL split (#57).
+// Deterministic end-to-end checks for the token cost views (#57 + #56).
 // No test framework — plain assertions over the real CLI + HTTP surface.
 //
 //   node --disable-warning=ExperimentalWarning core/observability/test.mjs
 //
-// Covers: v3→v4 migration (ALTER adds cache_create_1h), the re-backfill path
+// #57 — v3→v4 migration (ALTER adds cache_create_1h), the re-backfill path
 // (cursor-at-EOF blocker → --rescan drops cursors + upsert refreshes old rows),
 // TTL-split collection + fallback, per-TTL billing (5m 1.25× / 1h 2×), the
 // no-regression invariant (cache_create stays the TOTAL), and the config
 // partial-override NaN guard.
+// #56 — cost anatomy (group=anatomy: 4-component split + pct + baseline_ctx),
+// per-session diagnostics (group=session: avg/peak ctx, model switches +
+// rewrite est, mega flag), and the session timeline (group=timeline: context
+// series, compact markers, compact what-if).
 
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync, spawn } from "node:child_process";
@@ -111,18 +115,23 @@ async function waitHealth(port, tries = 60) {
   }
   return false;
 }
-async function modelRow(port, config) {
+// spawn a fresh server, GET one stats path, return parsed JSON. config=null
+// clears any config.json first (default pricing/thresholds).
+async function statGet(port, qpath, config = null) {
   if (config === null) { try { fs.unlinkSync(path.join(DATA_DIR, "config.json")); } catch {} }
   else fs.writeFileSync(path.join(DATA_DIR, "config.json"), JSON.stringify(config));
   const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: String(port) }, stdio: "ignore" });
   try {
     if (!(await waitHealth(port))) throw new Error("server did not come up");
-    const res = await get(port, "/stats/tokens?group=model&window=7d");
-    return (res.rows || []).find((r) => r.key === MODEL);
+    return await get(port, qpath);
   } finally {
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
   }
+}
+async function modelRow(port, config) {
+  const res = await statGet(port, "/stats/tokens?group=model&window=7d", config);
+  return (res.rows || []).find((r) => r.key === MODEL);
 }
 
 // ── 1. blocker: plain re-run with cursor at EOF changes nothing ──────────────
@@ -167,6 +176,77 @@ process.stdout.write("\n# config partial-override NaN guard\n");
 const row2 = await modelRow(45732, { pricing: { [MODEL]: { cache_write: 10 } } });
 check("cost_usd is finite (not NaN)", row2 && Number.isFinite(row2.cost_usd), row2 && String(row2.cost_usd));
 check("cost_usd = 11.8667 (partial override merged onto base)", row2 && approx(row2.cost_usd, 11.8667), row2 && String(row2.cost_usd));
+
+// ══ #56 — cost anatomy + session diagnostics + timeline ══════════════════════
+
+// ── 5. anatomy: per-model 4-component cost split (transcript session only) ────
+process.stdout.write("\n# anatomy (cost by component)\n");
+// components (opus-4-8): input 0.5002 / write 8.512375 / read 0.1000025 / output 1.2515
+const anat = await statGet(45733, "/stats/tokens?group=anatomy&window=7d", null);
+const T = anat.totals || {};
+check("anatomy totals cost = 10.3641", approx(T.cost_usd, 10.3641), String(T.cost_usd));
+check("components sum to cost", approx(T.input_usd + T.write_usd + T.read_usd + T.output_usd, T.cost_usd, 1e-4),
+  `${T.input_usd}+${T.write_usd}+${T.read_usd}+${T.output_usd}`);
+check("write is the dominant component (1h 2×)", approx(T.write_usd, 8.5124, 1e-3), String(T.write_usd));
+check("pct sums to ~100", T.pct && approx(T.pct.input + T.pct.write + T.pct.read + T.pct.output, 100, 0.5), JSON.stringify(T.pct));
+check("baseline_ctx = min main-chain ctx (530)", T.baseline_ctx === 530, String(T.baseline_ctx));
+const am = (anat.rows || []).find((r) => r.key === MODEL);
+check("per-model anatomy row present, cost 10.3641", am && approx(am.cost_usd, 10.3641), am && String(am.cost_usd));
+
+// ── 6. session diagnostics on the transcript session (mega TRUE branch) ──────
+process.stdout.write("\n# session diagnostics (avg/peak ctx, mega)\n");
+// ctx: m_old 1,300,000 · m_new 1015 · m_flat 530 → avg 433848, peak 1,300,000
+const sess = await statGet(45734, "/stats/tokens?group=session&window=7d", null);
+const S = (sess.rows || []).find((r) => r.key === SESSION);
+check("session row present", !!S, "no SESSION row");
+check("messages = 3 (no-regression)", S && S.messages === 3, S && String(S.messages));
+check("session cost = 10.3641 (no-regression)", S && approx(S.cost_usd, 10.3641), S && String(S.cost_usd));
+check("avg_ctx = 433848", S && S.avg_ctx === 433848, S && String(S.avg_ctx));
+check("peak_ctx = 1,300,000", S && S.peak_ctx === 1300000, S && String(S.peak_ctx));
+check("model_switches = 0 (single model)", S && S.model_switches === 0, S && String(S.model_switches));
+check("mega = true (avg_ctx ≥ 300k)", S && S.mega === true, S && String(S.mega));
+
+// ── 7. multi-model session: switches, rewrite, compact markers, what-if ──────
+process.stdout.write("\n# switches + compact markers + what-if\n");
+{
+  const db = new DatabaseSync(DB_PATH);
+  const ins = db.prepare(`INSERT INTO usage
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,0,'[]','[]')`);
+  const base = Date.now() - 60000;
+  // [msg_id, model, input, output, cache_create (all 1h), cache_read]
+  const rows = [
+    ["t1", "claude-opus-4-8", 1000, 1000, 100000, 0],       // ctx 101000
+    ["t2", "claude-opus-4-8", 1000, 1000, 100000, 300000],  // ctx 401000 (peak)
+    ["t3", "claude-opus-4-8", 1000, 1000, 20000, 5000],     // ctx 26000  → compact marker
+    ["t4", "claude-fable-5", 1000, 1000, 50000, 10000],     // ctx 61000  → model switch
+  ];
+  rows.forEach((r, i) => ins.run("sess-mix", r[0], "testapp", base + i * 1000, r[1], r[2], r[3], r[4], r[5], r[4]));
+  db.close();
+}
+const mix = await statGet(45735, "/stats/tokens?group=session&window=7d", null);
+const M = (mix.rows || []).find((r) => r.key === "sess-mix");
+check("sess-mix present", !!M, "no sess-mix row");
+check("messages = 4", M && M.messages === 4, M && String(M.messages));
+check("avg_ctx = 147250", M && M.avg_ctx === 147250, M && String(M.avg_ctx));
+check("peak_ctx = 401000", M && M.peak_ctx === 401000, M && String(M.peak_ctx));
+check("model_switches = 1", M && M.model_switches === 1, M && String(M.model_switches));
+check("switch_rewrite_est = 1.0 (fable 1h rewrite)", M && approx(M.switch_rewrite_est, 1.0), M && String(M.switch_rewrite_est));
+check("mega = false (small session)", M && M.mega === false, M && String(M.mega));
+check("latest context = t4 (61000)", M && M.context === 61000, M && String(M.context));
+
+const tl = await statGet(45736, "/stats/tokens?group=timeline&session_id=sess-mix", null);
+check("timeline count = 4", tl.count === 4, String(tl.count));
+check("ctx series in ts order", tl.series && JSON.stringify(tl.series.map((s) => s.ctx)) === JSON.stringify([101000, 401000, 26000, 61000]),
+  tl.series && JSON.stringify(tl.series.map((s) => s.ctx)));
+check("one compact marker (401000→26000)",
+  tl.compact_markers && tl.compact_markers.length === 1 && tl.compact_markers[0].from_ctx === 401000 && tl.compact_markers[0].to_ctx === 26000,
+  JSON.stringify(tl.compact_markers));
+check("what-if @200k ≈ 0.05, @300k = 0", tl.whatif && approx(tl.whatif["200000"], 0.05) && tl.whatif["300000"] === 0, JSON.stringify(tl.whatif));
+
+// timeline requires a session_id
+const tlBad = await statGet(45737, "/stats/tokens?group=timeline", null);
+check("timeline without session_id → error", !!tlBad.error, JSON.stringify(tlBad));
 
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
