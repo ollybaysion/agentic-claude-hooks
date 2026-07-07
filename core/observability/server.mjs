@@ -31,7 +31,7 @@ import crypto from "node:crypto";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.8.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57)
+const VERSION = "0.9.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -61,6 +61,12 @@ const MAX_DB_BYTES = intEnv("OBS_MAX_DB_MB", 1024) * 1024 * 1024;
 // a session idle longer than this is no longer "active". Raise it if
 // long-running Bash calls (builds) show up as false orphans.
 const ACTIVE_MS = intEnv("OBS_ACTIVE_MS", 600_000);
+
+// "mega session" flags (analysis #56): a session with at least this many
+// main-chain messages OR this large an average context is a cost hot-spot worth
+// compacting. env override here; config.json {mega:{turns,ctx}} wins (loadThresholds).
+let MEGA_TURNS = intEnv("OBS_MEGA_TURNS", 300);
+let MEGA_CTX = intEnv("OBS_MEGA_CTX", 300_000);
 
 // Auth is OFF by default (single-user box trusts loopback — design §8, decision).
 // Turn it on by exporting a non-empty OBS_TOKEN, or by putting {token} in
@@ -1095,12 +1101,23 @@ function writeRates(p) {
   const w1h = p.cache_write_1h ?? p.input * 2;
   return [w5m, w1h];
 }
-function costOf(p, input, output, cacheCreate, cacheRead, cacheCreate1h = 0) {
+// USD cost split into its four components (input / cache write / cache read /
+// output). Single source for both the scalar cost and the anatomy view (#56).
+// Cache writes bill per TTL: the 1h subset at 2×, the rest (5m) at 1.25×ish.
+function costParts(p, input, output, cacheCreate, cacheRead, cacheCreate1h = 0) {
   const [w5m, w1h] = writeRates(p);
   const cc1h = Math.min(cacheCreate, Math.max(0, cacheCreate1h)); // 1h subset ≤ total
   const cc5m = cacheCreate - cc1h;
-  return (input * p.input + output * p.output
-    + cc5m * w5m + cc1h * w1h + cacheRead * p.cache_read) / 1e6;
+  return {
+    input: input * p.input / 1e6,
+    write: (cc5m * w5m + cc1h * w1h) / 1e6,
+    read: cacheRead * p.cache_read / 1e6,
+    output: output * p.output / 1e6,
+  };
+}
+function costOf(p, input, output, cacheCreate, cacheRead, cacheCreate1h = 0) {
+  const c = costParts(p, input, output, cacheCreate, cacheRead, cacheCreate1h);
+  return c.input + c.write + c.read + c.output;
 }
 const roundUsd = (n) => Math.round(n * 1e4) / 1e4;
 
@@ -1161,14 +1178,136 @@ function tokensByTool(rows) {
     .sort((a, b) => b.total - a.total);
 }
 
+// GET /stats/tokens?group=anatomy — window-wide + per-model cost split into its
+// four components (input / cache write / cache read / output), $ and % of that
+// row's total. Same rows/prices as every other group; only the split is new.
+// `totals` also carries baseline_ctx: Σ over sessions of the smallest main-chain
+// context seen — a rough floor for the harness fixed cost re-sent every turn (#56).
+function tokensAnatomy(rows) {
+  const byModel = new Map();
+  const zero = () => ({ input: 0, write: 0, read: 0, output: 0 });
+  const totals = zero();
+  const sessionMin = new Map(); // session -> min main-chain context
+  let unpriced = 0;
+  for (const r of rows) {
+    if (!Number(r.sidechain)) {
+      const ctx = Number(r.input) + Number(r.cache_create) + Number(r.cache_read);
+      const cur = sessionMin.get(r.session_id);
+      if (cur === undefined || ctx < cur) sessionMin.set(r.session_id, ctx);
+    }
+    const p = priceOf(r.model);
+    if (!p) { unpriced += Number(r.input) + Number(r.output) + Number(r.cache_create) + Number(r.cache_read); continue; }
+    const c = costParts(p, Number(r.input), Number(r.output), Number(r.cache_create), Number(r.cache_read), Number(r.cache_create_1h));
+    const key = r.model || "(unknown)";
+    let m = byModel.get(key);
+    if (!m) byModel.set(key, (m = { key, ...zero() }));
+    for (const f of ["input", "write", "read", "output"]) { m[f] += c[f]; totals[f] += c[f]; }
+  }
+  let baseline_ctx = 0;
+  for (const v of sessionMin.values()) baseline_ctx += v;
+  const withPct = (o) => {
+    const cost = o.input + o.write + o.read + o.output;
+    const p = (v) => cost > 0 ? Math.round(v / cost * 1000) / 10 : 0;
+    return {
+      key: o.key,
+      input_usd: roundUsd(o.input), write_usd: roundUsd(o.write),
+      read_usd: roundUsd(o.read), output_usd: roundUsd(o.output),
+      cost_usd: roundUsd(cost),
+      pct: { input: p(o.input), write: p(o.write), read: p(o.read), output: p(o.output) },
+    };
+  };
+  const modelRows = [...byModel.values()].map(withPct).sort((a, b) => b.cost_usd - a.cost_usd);
+  return { rows: modelRows, totals: { ...withPct({ key: "(all)", ...totals }), baseline_ctx, unpriced } };
+}
+
+// Enrich group=session rows with per-session diagnostics derived from the SAME
+// window rows (#56): average / peak context, model switches and the cache
+// rewrite they cost, mega flag. Additive — token/cost sums stay untouched.
+function enrichSessions(out, rows) {
+  const bySession = new Map();
+  for (const r of rows) {
+    if (Number(r.sidechain)) continue; // main chain only — context = what resends
+    let l = bySession.get(r.session_id);
+    if (!l) bySession.set(r.session_id, (l = []));
+    l.push(r);
+  }
+  for (const a of out) {
+    const l = bySession.get(a.key);
+    if (!l || !l.length) { a.avg_ctx = 0; a.peak_ctx = 0; a.model_switches = 0; a.switch_rewrite_est = 0; a.mega = false; continue; }
+    l.sort((x, y) => Number(x.ts) - Number(y.ts));
+    let sum = 0, peak = 0, switches = 0, rewrite = 0, prevModel = null;
+    for (const r of l) {
+      const ctx = Number(r.input) + Number(r.cache_create) + Number(r.cache_read);
+      sum += ctx; if (ctx > peak) peak = ctx;
+      const m = r.model || "";
+      if (prevModel !== null && m !== prevModel) {
+        switches++;
+        const p = priceOf(r.model); // the rewrite the new model had to pay on switch-in
+        if (p) rewrite += costParts(p, 0, 0, Number(r.cache_create), 0, Number(r.cache_create_1h)).write;
+      }
+      prevModel = m;
+    }
+    a.avg_ctx = Math.round(sum / l.length);
+    a.peak_ctx = peak;
+    a.model_switches = switches;
+    a.switch_rewrite_est = roundUsd(rewrite);
+    a.mega = l.length >= MEGA_TURNS || a.avg_ctx >= MEGA_CTX;
+  }
+}
+
+// GET /stats/tokens?group=timeline&session_id=X — one session's main-chain
+// messages in ts order: context growth, compact markers (a sharp ctx drop), and
+// a compact what-if (cache-read $ a context cap would have avoided) (#56). Not
+// windowed — a drilldown shows the whole session.
+function tokensTimeline(res, sid) {
+  try {
+    const rows = db.impl.prepare(
+      `SELECT ts, model, input, output, cache_create, cache_read, cache_create_1h
+       FROM usage WHERE session_id = ? AND sidechain = 0 ORDER BY ts ASC`
+    ).all(sid);
+    const series = rows.map((r) => {
+      const ctx = Number(r.input) + Number(r.cache_create) + Number(r.cache_read);
+      const p = priceOf(r.model);
+      const cost = p ? costOf(p, Number(r.input), Number(r.output), Number(r.cache_create), Number(r.cache_read), Number(r.cache_create_1h)) : 0;
+      return { ts: Number(r.ts), model: r.model || "(unknown)", ctx,
+        input: Number(r.input), output: Number(r.output),
+        cache_create: Number(r.cache_create), cache_read: Number(r.cache_read),
+        cost_usd: roundUsd(cost) };
+    });
+    // compact marker: context fell below 60% of the previous turn while the
+    // previous was substantial (>50k) — a compaction / clear boundary heuristic.
+    const compact_markers = [];
+    for (let i = 1; i < series.length; i++)
+      if (series[i - 1].ctx > 50_000 && series[i].ctx < series[i - 1].ctx * 0.6)
+        compact_markers.push({ ts: series[i].ts, from_ctx: series[i - 1].ctx, to_ctx: series[i].ctx });
+    // what-if: had the session been capped, each turn's cache_read above the cap
+    // would have been avoided (rough upper bound, billed at that turn's read rate).
+    const whatif = {};
+    for (const cap of [200_000, 300_000]) {
+      let saved = 0;
+      for (const r of rows) {
+        const p = priceOf(r.model); if (!p) continue;
+        saved += Math.max(0, Number(r.cache_read) - cap) * p.cache_read / 1e6;
+      }
+      whatif[cap] = roundUsd(saved);
+    }
+    json(res, 200, { session_id: sid, count: series.length, series, compact_markers, whatif });
+  } catch (e) { logSafe("stats tokens timeline", e); json(res, 500, { error: "query failed" }); }
+}
+
 function handleStatsTokens(req, res, u) {
   if (!statsGate(req, res)) return;
   const window_ms = windowOf(u, "7d");
   const bucket_ms = window_ms <= WINDOW_MS["1h"] ? 60_000 : 3_600_000;
   const group = u.searchParams.get("group") || "session";
-  if (!["session", "app", "bucket", "tool", "model"].includes(group))
-    return json(res, 400, { error: "bad group (session|app|bucket|tool|model)" });
+  if (!["session", "app", "bucket", "tool", "model", "anatomy", "timeline"].includes(group))
+    return json(res, 400, { error: "bad group (session|app|bucket|tool|model|anatomy|timeline)" });
   if (!db) return json(res, 200, { window_ms, bucket_ms, group, count: 0, rows: [] });
+  if (group === "timeline") {
+    const sid = u.searchParams.get("session_id");
+    if (!sid) return json(res, 400, { error: "timeline needs session_id" });
+    return tokensTimeline(res, sid);
+  }
   const since = Date.now() - window_ms;
   const app = u.searchParams.get("source_app");
   const where = app ? "ts >= ? AND source_app = ?" : "ts >= ?";
@@ -1179,8 +1318,9 @@ function handleStatsTokens(req, res, u) {
               sidechain, emitted_tool_ids, follows_tool_ids
        FROM usage WHERE ${where}`
     ).all(...params);
-    let out;
+    let out, totals;
     if (group === "tool") out = tokensByTool(rows);
+    else if (group === "anatomy") { const a = tokensAnatomy(rows); out = a.rows; totals = a.totals; }
     else {
       const keyOf = group === "session" ? (r) => r.session_id
         : group === "app" ? (r) => r.source_app
@@ -1219,8 +1359,11 @@ function handleStatsTokens(req, res, u) {
       }
       out = [...agg.values()].sort(group === "bucket" ? (a, b) => a.key - b.key : (a, b) => b.total - a.total);
       for (const a of out) a.cost_usd = roundUsd(a.cost_usd);
+      if (group === "session") enrichSessions(out, rows);
     }
-    json(res, 200, { window_ms, bucket_ms, group, count: out.length, rows: out });
+    const resp = { window_ms, bucket_ms, group, count: out.length, rows: out };
+    if (totals) resp.totals = totals;
+    json(res, 200, resp);
   } catch (e) { logSafe("stats tokens", e); json(res, 500, { error: "query failed" }); }
 }
 
@@ -1353,7 +1496,7 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
     <span class="dim">click a row for the turn timeline</span>
   </div>
   <table>
-    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">tokens</th><th class="num">cost</th></tr></thead>
+    <thead><tr><th></th><th>app</th><th>session</th><th>started</th><th>dur</th><th class="num">turns</th><th class="num">tools</th><th class="num">errs</th><th class="num">compacts</th><th class="num">agents</th><th class="num">avg ctx</th><th class="num">peak</th><th class="num">sw</th><th class="num">tokens</th><th class="num">cost</th></tr></thead>
     <tbody id="sess-rows"></tbody>
   </table>
   <div id="drill"></div>
@@ -1371,8 +1514,14 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
   <div class="cards" id="tok-cards"></div>
   <div class="toolbar">window
     <select id="tok-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option><option>30d</option></select>
-    <span class="dim">costs are estimates from official per-MTok rates (5m cache writes); per-tool figures are attributed approximations (see README)</span>
+    <span class="dim">costs are estimates from official per-MTok rates (per-TTL cache writes); baseline / turn tax / switch rewrite are approximations (see README)</span>
   </div>
+  <h2>cost anatomy</h2>
+  <div class="cards" id="tok-anat-cards"></div>
+  <table>
+    <thead><tr><th>model</th><th></th><th class="num">input</th><th class="num">write</th><th class="num">read</th><th class="num">output</th><th class="num">cost</th></tr></thead>
+    <tbody id="tok-anat-rows"></tbody>
+  </table>
   <h2>daily</h2>
   <table>
     <thead><tr><th>day</th><th class="num">total</th><th></th><th class="num">output</th><th class="num">cache read</th><th class="num">cost</th></tr></thead>
@@ -1520,10 +1669,12 @@ const DASHBOARD_JS = `(function(){
     ]).then(function(rr){ var d=rr[0], tok={};
       (rr[1].rows||[]).forEach(function(t){ tok[t.key]=t; });
       var tb=$("sess-rows"); tb.textContent="";
-      (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess");
+      (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess"); var tk=tok[s.session_id];
         tr.appendChild(cell(s.active?"●":(s.ended?"✓":"·"),s.active?"ok":"dim"));
         tr.appendChild(cell(s.source_app));
-        tr.appendChild(cell(s.session_id.slice(0,8),"dim"));
+        var sc=el("td","dim"); sc.appendChild(el("span",null,s.session_id.slice(0,8)));
+        if(tk&&tk.mega)sc.appendChild(el("span","err"," ●mega"));
+        tr.appendChild(sc);
         tr.appendChild(cell(fmtDT(s.started_at)));
         tr.appendChild(cell(fmtDur(s.duration_ms)));
         tr.appendChild(cell(s.turns,"num"));
@@ -1531,7 +1682,9 @@ const DASHBOARD_JS = `(function(){
         tr.appendChild(cell(s.errors,"num"+(s.errors?" err":"")));
         tr.appendChild(cell(s.precompacts,"num"+(s.precompacts?" warn":"")));
         tr.appendChild(cell(s.subagents,"num"));
-        var tk=tok[s.session_id];
+        tr.appendChild(cell(tk&&tk.avg_ctx?fmtTok(tk.avg_ctx):"","num"+(tk&&tk.mega?" warn":"")));
+        tr.appendChild(cell(tk&&tk.peak_ctx?fmtTok(tk.peak_ctx):"","num"));
+        tr.appendChild(cell(tk&&tk.model_switches?tk.model_switches:"","num"+(tk&&tk.model_switches?" warn":"")));
         tr.appendChild(cell(tk?fmtTok(tk.total+(tk.subagent_total||0)):"","num"));
         tr.appendChild(cell(tk?fmtUsd(tk.cost_usd):"","num"));
         tr.addEventListener("click",function(){ drill(s); });
@@ -1547,6 +1700,19 @@ const DASHBOARD_JS = `(function(){
     return page(); }
   function drill(s){ var box=$("drill"); box.textContent="";
     box.appendChild(el("h2",null,"session "+s.session_id+" · "+s.source_app));
+    // context growth curve + compact what-if (from the token timeline, #56)
+    var tlBox=el("div","cards"); box.appendChild(tlBox);
+    getJson("/stats/tokens?group=timeline&session_id="+encodeURIComponent(s.session_id)).then(function(t){
+      tlBox.textContent=""; if(!t.series||!t.series.length)return;
+      var wrap=el("div","card");
+      wrap.appendChild(el("div","k","context growth · "+t.series.length+" msgs · "+((t.compact_markers||[]).length)+" compact"));
+      wrap.appendChild(spark(t.series.map(function(x){ return x.ctx; }),300,40));
+      wrap.appendChild(el("div","dim","peak "+fmtTok(Math.max.apply(null,t.series.map(function(x){ return x.ctx; })))));
+      tlBox.appendChild(wrap);
+      var wi=el("div","card"); wi.appendChild(el("div","k","compact what-if (cache-read saved)"));
+      wi.appendChild(el("div","v","@200k "+(fmtUsd(t.whatif&&t.whatif["200000"])||"$0")+"  ·  @300k "+(fmtUsd(t.whatif&&t.whatif["300000"])||"$0")));
+      tlBox.appendChild(wi);
+    }).catch(function(){ tlBox.textContent=""; });
     fetchSession(s.session_id).then(function(evs){
       var turns=[],cur=null;
       evs.forEach(function(ev){
@@ -1629,7 +1795,40 @@ const DASHBOARD_JS = `(function(){
       tr.appendChild(cell(fmtTok(a.cache_read),"num"));
       tr.appendChild(cell(fmtUsd(a.cost),"num"));
       tb.appendChild(tr); }); }
+  // ── cost anatomy (#56): 4-component stacked bar + baseline / turn tax / switch cards
+  var ANAT=[["input_usd","#2f6feb"],["write_usd","#d29922"],["read_usd","#3fb950"],["output_usd","#a371f7"]];
+  function anatBar(o,max,w,h){ var s=svgEl("svg",{width:w,height:h}),x=0;
+    ANAT.forEach(function(g){ var pw=max>0?Math.round((Number(o[g[0]])||0)/max*w):0;
+      if(pw>0){ s.appendChild(svgEl("rect",{x:x,y:1,width:pw,height:h-2,fill:g[1]})); x+=pw; } });
+    return s; }
+  function renderAnatomy(d,sessRows){ var T=d.totals||{};
+    var box=$("tok-anat-cards"); box.textContent="";
+    var msgs=0,ctxSum=0,rewrite=0;
+    (sessRows||[]).forEach(function(s){ var m=Number(s.messages)||0; msgs+=m;
+      ctxSum+=(Number(s.avg_ctx)||0)*m; rewrite+=Number(s.switch_rewrite_est)||0; });
+    box.appendChild(card("turn tax (avg ctx)",fmtTok(msgs>0?Math.round(ctxSum/msgs):0)));
+    box.appendChild(card("baseline ctx (est.)",fmtTok(T.baseline_ctx)));
+    box.appendChild(card("switch rewrite (est.)",fmtUsd(rewrite)||"$0"));
+    box.appendChild(card("input",fmtUsd(T.input_usd)||"$0"));
+    box.appendChild(card("cache write",fmtUsd(T.write_usd)||"$0"));
+    box.appendChild(card("cache read",fmtUsd(T.read_usd)||"$0"));
+    box.appendChild(card("output",fmtUsd(T.output_usd)||"$0"));
+    var tb=$("tok-anat-rows"); tb.textContent=""; var max=Number(T.cost_usd)||0;
+    var all=[{key:"(all)",input_usd:T.input_usd,write_usd:T.write_usd,read_usd:T.read_usd,output_usd:T.output_usd,cost_usd:T.cost_usd}].concat(d.rows||[]);
+    all.forEach(function(r){ if(!(Number(r.cost_usd)>0))return; var tr=document.createElement("tr");
+      tr.appendChild(cell(r.key));
+      var td=document.createElement("td"); td.appendChild(anatBar(r,max,140,12)); tr.appendChild(td);
+      tr.appendChild(cell(fmtUsd(r.input_usd),"num"));
+      tr.appendChild(cell(fmtUsd(r.write_usd),"num"));
+      tr.appendChild(cell(fmtUsd(r.read_usd),"num"));
+      tr.appendChild(cell(fmtUsd(r.output_usd),"num"));
+      tr.appendChild(cell(fmtUsd(r.cost_usd),"num"));
+      tb.appendChild(tr); }); }
   function loadTokens(){ var w=$("tok-window").value;
+    Promise.all([
+      getJson("/stats/tokens?window="+w+"&group=anatomy").catch(function(){ return {}; }),
+      getJson("/stats/tokens?window="+w+"&group=session").catch(function(){ return { rows: [] }; })
+    ]).then(function(rr){ renderAnatomy(rr[0]||{},(rr[1]||{}).rows||[]); }).catch(function(){});
     getJson("/stats/tokens?window="+w+"&group=app").then(function(d){
       var rows=d.rows||[];
       var box=$("tok-cards"); box.textContent="";
@@ -1808,6 +2007,18 @@ function loadPricing() {
   } catch {}
 }
 
+// config.json {mega:{turns,ctx}} overrides the mega-session thresholds (#56).
+// env (OBS_MEGA_*) is already applied above; config wins if present. Fail-open.
+function loadThresholds() {
+  try {
+    const c = JSON.parse(fs.readFileSync(configFile(DATA_DIR), "utf8"));
+    if (c.mega && typeof c.mega === "object") {
+      if (Number.isFinite(c.mega.turns)) MEGA_TURNS = c.mega.turns;
+      if (Number.isFinite(c.mega.ctx)) MEGA_CTX = c.mega.ctx;
+    }
+  } catch {}
+}
+
 function writePidfile() {
   const data = { pid: process.pid, host: HOST, port: PORT, startedAt: STARTED_AT, version: VERSION };
   try { fs.writeFileSync(pidFile(DATA_DIR), JSON.stringify(data), { mode: 0o600 }); }
@@ -1866,6 +2077,7 @@ async function startServer() {
   ensureDataDir();
   loadToken();
   loadPricing();
+  loadThresholds();
   EXPECT = TOKEN ? sha256(TOKEN) : null;
 
   await startBackend(); // open SQLite, migrate, seed SEQ (degrades to null on failure)

@@ -44,10 +44,10 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/overview` | window totals: events / errors / sessions (+active) per type + time buckets |
 | GET | `/stats/sessions` | per-session rollup: turns / tool_calls / errors / precompacts / subagents / active |
 | GET | `/stats/tools` | per-tool calls / errors / orphans / pending + p50/p95/max ms (Pre↔Post pairs) |
-| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table) |
+| GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model\|anatomy\|timeline` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table). `group=session` rows also carry per-session diagnostics: `avg_ctx`/`peak_ctx` (context = input+cache), `model_switches` + `switch_rewrite_est` (the cache rewrite a mid-session model change forces), `mega` (hot-spot flag). `group=anatomy` returns per-model + `(all)` cost split into 4 components (`input`/`write`/`read`/`output` USD + `pct`) with `baseline_ctx` (est. harness fixed cost). `group=timeline&session_id=X` returns one session's main-chain context `series` + `compact_markers` (sharp ctx drops) + `whatif` (cache-read $ a 200k/300k cap would have saved) |
 | GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. The one stats query that reads `payload` (json_extract) — GuardDecision rows are few |
 | GET | `/health` | liveness + counters (single-instance probe) |
-| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + turn drill-down), Tools (latency/error bars), Tokens (daily/by app/by model/by tool + cost + trend), Guards (what the git/bash guards blocked), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
+| GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + avg/peak ctx + mega badge + turn drill-down with a context-growth curve & compact what-if), Tools (latency/error bars), Tokens (cost anatomy stack + baseline/turn-tax/switch-rewrite cards + daily/by app/by model/by tool + trend), Guards (what the git/bash guards blocked), fleet strip with per-session context size (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
@@ -61,7 +61,12 @@ MTok) in config.json — longest prefix wins, loaded at boot. `cache_write` is t
 5m-TTL rate; `cache_write_1h` is the 1h rate (defaults to `input × 2` if omitted).
 A partial override **merges** onto the base entry (missing keys keep their
 defaults), so overriding just `cache_write` no longer wipes the other rates; set a
-prefix to `null` to unprice it.
+prefix to `null` to unprice it. The `mega` session flag defaults to ≥300 main-chain
+messages OR ≥300k average context; tune with `{"mega": {"turns": N, "ctx": N}}` in
+config.json (or `OBS_MEGA_TURNS`/`OBS_MEGA_CTX`). `baseline_ctx`, `turn tax`,
+`switch_rewrite_est` and the compact `whatif` are deliberate **approximations**
+(harness-overhead floor / average per-turn context / cache rewrite at switch
+boundaries / cache-read a cap would avoid) — diagnostic signals, not exact bills.
 
 ## Config (env `OBS_*` > config.json > default)
 
@@ -79,6 +84,8 @@ prefix to `null` to unprice it.
 | `OBS_MAX_ROWS` | `500000` | retention: keep at most this many rows |
 | `OBS_MAX_DB_MB` | `1024` | retention: size cap (freelist-aware) |
 | `OBS_ACTIVE_MS` | `600000` | stats idle threshold: session "active" + orphan-Pre cutoff |
+| `OBS_MEGA_TURNS` | `300` | mega-session flag: main-chain messages at/above this (config.json `{mega:{turns}}` wins) |
+| `OBS_MEGA_CTX` | `300000` | mega-session flag: average context at/above this (config.json `{mega:{ctx}}` wins) |
 
 ## Guarantees (held from stage 0)
 
