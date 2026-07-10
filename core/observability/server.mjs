@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.13.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags)
+const VERSION = "0.13.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1664,10 +1664,17 @@ function buildTurns(rows, now) {
   // segmentation (§4.1)
   const turns = [];
   let cur = null;
+  // Harness-injected "prompts" (never typed by a human): a background task's
+  // completion notification re-enters the loop as a synthetic user message and
+  // fires UserPromptSubmit like any real prompt. Classify so the UI can label
+  // the turn instead of dumping raw XML. Live share: 19/502 prompts.
+  const AUTO_PROMPT_RE = /^\s*<(task-notification|system-reminder|local-command-caveat|command-name)\b/;
   const open = (r, virtual) => {
+    const prompt = virtual ? null : (turnPayload(r)?.prompt ?? null);
+    const auto = prompt != null ? (AUTO_PROMPT_RE.exec(prompt)?.[1] ?? null) : null;
     cur = {
       virtual, turn_seq: virtual ? 0 : r.seq, started_at: r.received_at,
-      prompt: virtual ? null : (turnPayload(r)?.prompt ?? null),
+      prompt, auto,
       queued: 0, events: [], stops: [],
     };
     turns.push(cur);
@@ -1925,6 +1932,7 @@ function buildTurns(rows, now) {
     out.push({
       turn_seq: t.turn_seq, n: t.virtual ? 0 : ++n,
       prompt: t.prompt != null ? turnClip(t.prompt, 200) : null,
+      auto: t.auto, // harness-injected prompt kind (task-notification, …) | null = human
       queued_prompts: t.queued,
       started_at: t.started_at, ended_at, status, duration_ms,
       tool_ms, gap_ms, wait_ms,
@@ -2044,6 +2052,15 @@ h2{font-size:12px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em;ma
 .hint{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-left:5px;border:1px solid #2f3a4d;border-radius:50%;color:#6b7686;font:400 10px/1 ui-monospace,monospace;text-transform:none;letter-spacing:0;cursor:help;position:relative;vertical-align:middle;user-select:none}
 .hint:hover,.hint:focus{color:#e6edf3;border-color:#3d4a60;outline:none}
 .hint .tip{display:none;position:fixed;left:0;top:0;z-index:60;max-width:min(400px,calc(100vw - 24px));white-space:pre-line;text-align:left;pointer-events:none;background:#141a26;border:1px solid #303a4d;border-radius:7px;padding:9px 12px;color:#d6deea;font:400 12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;text-transform:none;letter-spacing:normal;box-shadow:0 10px 28px rgba(0,0,0,.6)}
+.fl{display:inline-block;border:1px solid #4d3800;background:#20180a;color:#d29922;border-radius:3px;padding:0 5px;margin-left:6px;font-size:11px;font-style:normal}
+.seg-tool{fill:#2f6feb}.seg-wait{fill:#d29922}.seg-gap{fill:#30363d}
+.tsplit{padding:8px 12px 2px;display:flex;align-items:center;gap:8px;font-size:12px;color:#6b7686}
+#drill tr.tail td{opacity:.45}
+#drill .tbar{display:flex;gap:12px;align-items:center;padding:10px 0 2px;color:#6b7686;font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+#drill .tbar label{cursor:pointer;display:flex;align-items:center;gap:4px;text-transform:none;letter-spacing:normal}
+a.evlink{color:inherit;text-decoration:none;border-bottom:1px dotted #2f3a4d}
+a.evlink:hover{color:#79c0ff}
+#drill summary .auto{color:#8b949e;font-style:italic}
 </style></head>
 <body>
 <header>
@@ -2199,13 +2216,16 @@ const DASHBOARD_JS = `(function(){
   var HELP={
     live:"실시간 훅 이벤트 로그 (최신순)\\n• payload — 비밀값·토큰은 서버가 자동으로 가림\\n• 맨 위 띠 — 최근 10분 안에 움직인 세션들",
     sessions:"세션마다 무슨 일이 있었는지 한눈에\\n• compacts — 문맥이 꽉 차 자동 요약된 횟수\\n• agents — 띄운 서브에이전트 수\\n• avg ctx / peak — 매 턴 모델이 다시 읽는 문맥량 (평균 / 최대)\\n• sw — 도중에 모델 바꾼 횟수 (바꿀 때마다 캐시를 다시 만들어 돈이 듦)\\n• ●mega — 유난히 무거운 세션 (턴 300+ 또는 평균 문맥 300k+)\\n행을 누르면 턴별 타임라인이 열림",
-    tools:"도구별 호출 상태\\n• orphans — 시작 기록(PreToolUse) 없이 결과만 잡힌 호출 (짝 유실)\\n• pend — 아직 안 끝난 호출\\n• p50 / p95 / max — 걸린 시간 (중앙값 / 상위 5% / 최대)",
+    tools:"도구별 호출 상태\\n• orphans — 시작(Pre)만 있고 끝(Post)이 안 잡힌 호출 — 1순위 원인은 훅 가드 deny, 그 외 권한 거부·중단\\n• pend — 아직 안 끝난 호출\\n• p50 / p95 / max — 걸린 시간 (중앙값 / 상위 5% / 최대)",
     tokens:"토큰 사용량과 추정 비용 (공식 단가 기준)\\n• cache read — 대화가 길어질수록 이전 내용을 매 턴 다시 읽는 비용\\n• unpriced — 단가표에 없는 모델의 토큰\\n• total은 서브에이전트 포함, cost는 어림값",
     "tok-anat":"AI 요금이 어디서 새는지 4갈래로 분해\\n• input — 처음 보내는(캐시 안 된) 프롬프트\\n• cache write — 프롬프트를 캐시에 저장 (5분 1.25배 / 1시간 2배)\\n• cache read — 캐시된 문맥을 매 턴 다시 읽음 (0.1배) · 보통 제일 큼\\n• output — 생성된 답변 · 토큰당 제일 비쌈\\n아래 turn tax·baseline·switch rewrite 카드는 어림값",
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
-    "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값"
+    "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값",
+    turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
+    "turn-split":"턴의 벽시계 시간 3분해 — 전부 근사\\n• tool — 도구 실행 (병렬은 겹침 합집합, 이중계산 없음)\\n• wait — 권한 프롬프트 앞 사람 대기 (해당 도구 시간에서 차감 · 상한 추정 · 캡 30m)\\n• gap — 나머지 전부: 모델 생성 · API 지연 · 관측 못한 대기\\n• bg 배지 — 백그라운드 실행이라 실제 작업 시간은 관측 불가",
+    "turn-flags":"기계적으로 셀 수 있는 비효율 신호 (메인 체인만 · 질적 판단은 사람 몫)\\n• dup-call — 같은 도구+같은 입력 반복 (사이에 상태 변경 있으면 정당한 재확인으로 제외)\\n• re-read — 같은 파일을 겹치는 범위로 3회+ 읽기\\n• retry-loop — 같은 호출이 에러로 3연속\\n• search-storm — 첫 Read 전에 탐색만 5배치+ (병렬 배치는 1로 접음)\\n• long-tail — 호출 하나가 턴 도구 시간의 절반+ (30s+)\\n• gap-heavy — 미분류 시간이 도구 시간의 2배+ (60s+)\\n• orphaned — 끝(Post)이 없는 호출 (1순위 원인 = 훅 가드 deny)\\n• mega-turn — 호출 30+ 또는 10분+ · 임계값은 config {turns}로 조정"
   };
   function placeTip(badge){ var tip=badge.querySelector(".tip"); if(!tip)return;
     tip.style.visibility="hidden"; tip.style.display="block";
@@ -2338,13 +2358,101 @@ const DASHBOARD_JS = `(function(){
         tb.appendChild(tr); }); }).catch(function(){}); }
   $("sess-window").addEventListener("change",loadSessions);
 
-  // ── session drill-down: turn-grouped timeline, client-side (design §5.3)
-  function fetchSession(sid){ var out=[],since=null,pages=0;
-    function page(){ var q="/events?session_id="+encodeURIComponent(sid)+"&order=asc&limit=1000"+(since!=null?"&since="+since:"");
-      return getJson(q).then(function(d){ out=out.concat(d.events||[]); since=d.next_cursor;
-        if(d.count===1000&&++pages<5)return page();
-        return out; }); }
-    return page(); }
+  // ── session drill-down (#73 stage 2): server-grouped turns via /stats/turns.
+  // Replaces the old client-side grouping (analysis design §5.3) and its
+  // 5×1000-row full-payload fetchSession() — the server owns turn semantics.
+  function statusMark(t){
+    if(t.status==="open")return el("span","ok"," ● open");
+    if(t.status==="interrupted")return el("span","warn"," ✕ interrupted");
+    if(t.status==="virtual")return null;
+    return null; }
+  function stackbar(t){ var w=300,h=10,d=t.duration_ms||0;
+    var s=svgEl("svg",{width:w,height:h}); if(d<=0)return s;
+    var x=0;
+    [[t.tool_ms,"seg-tool"],[t.wait_ms,"seg-wait"],[t.gap_ms,"seg-gap"]].forEach(function(p){
+      var ww=Math.round((p[0]||0)/d*w);
+      if(ww>0){ s.appendChild(svgEl("rect",{x:x,y:1,width:ww,height:h-2,rx:1,"class":p[1]})); x+=ww; } });
+    return s; }
+  function turnBadges(t){ var wrap=el("span");
+    (t.flags||[]).forEach(function(f){ wrap.appendChild(el("span","fl",f+(f==="dup-call"&&t.dup_calls>1?" ×"+t.dup_calls:""))); });
+    return wrap; }
+  function markerRow(m){ var tr=document.createElement("tr");
+    tr.appendChild(cell(fmt(m.at),"dim"));
+    var td=document.createElement("td"); td.colSpan=7;
+    if(m.type==="Notification"&&m.kind==="permission")td.appendChild(el("span","warn","⚠ 권한 대기"+(m.wait_ms!=null?" "+fmtDur(m.wait_ms):"")));
+    else if(m.type==="Notification")td.appendChild(el("span","dim","⏸ notification (대기 알림)"));
+    else if(m.type==="GuardDecision")td.appendChild(el("span","err","⛔ "+(m.guard||"guard")+" · "+(m.rule||"")+" "+(m.decision||"")));
+    else if(m.type==="PreCompact")td.appendChild(el("span","warn","✂ compact — 이후 문맥 재구축 (갭·비용 증가, 이 턴 비용엔 미포함)"));
+    else if(m.type==="Stop")td.appendChild(el("span","dim","── Stop · 아래 흐린 행 = 응답 종료 뒤 서브에이전트 꼬리 ──"));
+    else if(m.type==="SubagentStop")td.appendChild(el("span","dim","└ subagent 종료"+(m.agent_id?" (sub:"+String(m.agent_id).slice(0,4)+")":"")));
+    else td.appendChild(el("span","dim",m.type));
+    tr.appendChild(td); return tr; }
+  function callRow(c,maxDur){ var tr=document.createElement("tr");
+    if(c.tail)tr.className="tail";
+    var t1=el("td","dim"); var a=document.createElement("a");
+    a.href="/events/"+c.event_seq; a.target="_blank"; a.rel="noopener"; a.className="evlink";
+    a.textContent=fmt(c.started_at); a.title="원본 이벤트 JSON 열기 (오래되면 404 = 보존기간 만료)";
+    t1.appendChild(a); tr.appendChild(t1);
+    tr.appendChild(cell(c.parallel?"∥":(c.gap_before_ms>0?"+"+fmtDur(c.gap_before_ms):""),"dim num"));
+    var t3=document.createElement("td");
+    if(c.lane==="subagent")t3.appendChild(el("span","dim","└ sub:"+String(c.agent_id||"").slice(0,4)+" "));
+    t3.appendChild(el("span","evt",c.tool_name)); tr.appendChild(t3);
+    var t4=el("td","pay"); t4.appendChild(el("span",null,c.input_summary||""));
+    if(c.error)t4.appendChild(el("div","err",c.error)); tr.appendChild(t4);
+    tr.appendChild(cell(c.duration_ms==null?"":fmtDur(c.duration_ms),"num"));
+    var t6=document.createElement("td");
+    if(c.duration_ms!=null)t6.appendChild(hbar(c.duration_ms,maxDur,60,10)); tr.appendChild(t6);
+    var st=c.status, cls=st==="ok"?"ok":st==="error"?"err":st==="orphan"?"warn":"dim";
+    tr.appendChild(cell(st,cls));
+    var t8=document.createElement("td");
+    if(c.dup_of)t8.appendChild(el("span","fl","dup"));
+    if(c.bg)t8.appendChild(el("span","fl","bg"));
+    if(c.crosses_turn)t8.appendChild(el("span","fl","→next"));
+    if(c.wait_ms)t8.appendChild(el("span","fl","wait "+fmtDur(c.wait_ms)));
+    tr.appendChild(t8);
+    return tr; }
+  // Harness-injected turns (auto): show a readable label instead of raw XML —
+  // the original text stays on hover (title) and in the detail's prompt_full.
+  var AUTO_LABEL={"task-notification":"백그라운드 작업 완료 알림","system-reminder":"시스템 주입 메시지",
+    "local-command-caveat":"로컬 명령 실행 로그","command-name":"로컬 명령 실행 로그"};
+  function autoText(t){ var lbl=AUTO_LABEL[t.auto]||"하네스 주입 메시지";
+    var m=/<task-id>([^<]{1,20})/.exec(t.prompt||""); if(m)lbl+=" · task "+m[1].slice(0,9);
+    return "⚙ "+lbl; }
+  function turnRow(sid,t){ var d=document.createElement("details"),sm=document.createElement("summary");
+    sm.appendChild(el("span","dim","#"+t.n+(t.turn_seq?" · seq "+t.turn_seq:"")+"  "));
+    if(t.auto){ var at=el("span","auto",autoText(t)); at.title=t.prompt||""; sm.appendChild(at); }
+    else sm.appendChild(el("span",null,t.prompt||(t.status==="virtual"?"(before first prompt / trimmed)":"(empty prompt)")));
+    var meta="  ·  "+fmtDur(t.duration_ms)+" · "+t.calls+" calls";
+    if(t.subagent_calls)meta+=" ("+t.subagent_calls+" sub)";
+    if(t.queued_prompts)meta+=" · +"+t.queued_prompts+" queued";
+    sm.appendChild(el("span","dim",meta));
+    if(t.errors)sm.appendChild(el("span","err"," "+t.errors+" err"));
+    if(t.orphans)sm.appendChild(el("span","warn"," "+t.orphans+" orphan"));
+    var stm=statusMark(t); if(stm)sm.appendChild(stm);
+    sm.appendChild(turnBadges(t));
+    d.appendChild(sm);
+    var body=el("div"); d.appendChild(body);
+    var loaded=false;
+    d.addEventListener("toggle",function(){ if(!d.open||loaded)return; loaded=true;
+      body.appendChild(el("div","dim","loading…"));
+      getJson("/stats/turns?session_id="+encodeURIComponent(sid)+"&turn="+t.turn_seq).then(function(det){
+        body.textContent="";
+        var lg=el("div","tsplit"); lg.appendChild(stackbar(det.turn));
+        var parts="tool "+fmtDur(det.turn.tool_ms)+" · wait "+fmtDur(det.turn.wait_ms)+" · gap "+fmtDur(det.turn.gap_ms);
+        if(det.turn.subagent_ms)parts+="  ·  sub "+fmtDur(det.turn.subagent_ms)+" (별도 레인)";
+        lg.appendChild(el("span",null,parts));
+        lg.appendChild(hint("turn-split"));
+        body.appendChild(lg);
+        var rows=[];
+        (det.calls||[]).forEach(function(c){ rows.push({at:c.started_at,call:c}); });
+        (det.markers||[]).forEach(function(m){ rows.push({at:m.at,marker:m}); });
+        rows.sort(function(a,b){ return a.at-b.at; });
+        var maxDur=0; (det.calls||[]).forEach(function(c){ if(c.duration_ms>maxDur)maxDur=c.duration_ms; });
+        var tbl=document.createElement("table"),tb=document.createElement("tbody");
+        rows.forEach(function(r){ tb.appendChild(r.marker?markerRow(r.marker):callRow(r.call,maxDur)); });
+        tbl.appendChild(tb); body.appendChild(tbl);
+      }).catch(function(e){ body.textContent=""; body.appendChild(el("div","err","detail load failed: "+e.message)); }); });
+    return d; }
   function drill(s){ var box=$("drill"); box.textContent="";
     box.appendChild(el("h2",null,(s.title||s.first_prompt||("session "+s.session_id.slice(0,8)))+" · "+s.source_app));
     // context growth curve + compact what-if (from the token timeline, #56)
@@ -2360,35 +2468,22 @@ const DASHBOARD_JS = `(function(){
       wi.appendChild(el("div","v","@200k "+(fmtUsd(t.whatif&&t.whatif["200000"])||"$0")+"  ·  @300k "+(fmtUsd(t.whatif&&t.whatif["300000"])||"$0")));
       tlBox.appendChild(wi);
     }).catch(function(){ tlBox.textContent=""; });
-    fetchSession(s.session_id).then(function(evs){
-      var turns=[],cur=null;
-      evs.forEach(function(ev){
-        if(ev.hook_event_type==="UserPromptSubmit"||!cur){
-          var pr="(before first prompt)";
-          if(ev.hook_event_type==="UserPromptSubmit"){ try{ pr=String((ev.payload&&ev.payload.prompt)||""); }catch(e){ pr=""; } }
-          cur={prompt:pr.slice(0,120),start:ev.received_at,end:ev.received_at,tools:0,errors:0,events:[]};
-          turns.push(cur); }
-        cur.events.push(ev); cur.end=ev.received_at;
-        if(ev.hook_event_type==="PreToolUse")cur.tools++;
-        if(ev.hook_event_type==="PostToolUse"&&ev.error!=null)cur.errors++; });
-      if(!turns.length){ box.appendChild(el("div","dim","no events in window")); return; }
-      turns.forEach(function(t,i){ var d=document.createElement("details"),sm=document.createElement("summary");
-        sm.appendChild(el("span","dim","#"+(i+1)+"  "));
-        sm.appendChild(el("span",null,t.prompt||"(empty prompt)"));
-        sm.appendChild(el("span","dim","  ·  "+fmtDur(t.end-t.start)+" · "+t.tools+" tools "));
-        if(t.errors)sm.appendChild(el("span","err",t.errors+" errors"));
-        d.appendChild(sm);
-        var tbl=document.createElement("table"),tb2=document.createElement("tbody");
-        t.events.forEach(function(ev){ var tr=document.createElement("tr");
-          tr.appendChild(cell(fmt(ev.received_at),"dim"));
-          tr.appendChild(cell(ev.hook_event_type,"evt"));
-          tr.appendChild(cell(ev.tool_name));
-          tr.appendChild(cell(ev.error?String(ev.error).slice(0,120):"","err"));
-          tr.appendChild(cell(preview(ev.payload,200),"pay"));
-          tb2.appendChild(tr); });
-        tbl.appendChild(tb2); d.appendChild(tbl); box.appendChild(d); });
-      box.scrollIntoView({behavior:"smooth"});
-    }).catch(function(e){ box.appendChild(el("div","err","load failed: "+e.message)); }); }
+    // turns list (#73): summaries up front, per-turn detail lazy-fetched on open
+    var bar=el("div","tbar"); bar.appendChild(el("span",null,"turns")); bar.appendChild(hint("turns"));
+    var lab=document.createElement("label"); var cb=document.createElement("input"); cb.type="checkbox";
+    lab.appendChild(cb); lab.appendChild(el("span",null,"⚑ flags만")); lab.appendChild(hint("turn-flags"));
+    bar.appendChild(lab); box.appendChild(bar);
+    var list=el("div"); box.appendChild(list);
+    var data=null;
+    function render(){ list.textContent=""; if(!data)return;
+      var ts=data.turns||[];
+      if(cb.checked)ts=ts.filter(function(t){ return t.flags&&t.flags.length; });
+      if(!ts.length){ list.appendChild(el("div","dim",cb.checked?"no flagged turns":"no turns in window")); return; }
+      ts.forEach(function(t){ list.appendChild(turnRow(s.session_id,t)); }); }
+    cb.addEventListener("change",render);
+    getJson("/stats/turns?session_id="+encodeURIComponent(s.session_id)+"&limit=200").then(function(d){
+      data=d; render(); box.scrollIntoView({behavior:"smooth"});
+    }).catch(function(e){ list.appendChild(el("div","err","turns load failed: "+e.message)); }); }
 
   // ── tools tab
   function loadTools(){ var w=$("tools-window").value;
