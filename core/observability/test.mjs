@@ -376,6 +376,233 @@ check("nudges: complied fire marked ✓", recA && recA.complied === true, JSON.s
 const recC = (nu2.recent || []).find((r) => r.costShown === "unpriced");
 check("nudges: unmatched fire stays null", recC && recC.complied === null, JSON.stringify(recC));
 
+// ══ #73 — Turn Inspector (/stats/turns: grouping, pairing, time split, flags) ═
+process.stdout.write("\n# turn inspector (/stats/turns)\n");
+{
+  const db = new DatabaseSync(DB_PATH);
+  const ins = db.prepare(`INSERT INTO events
+    (seq,id,source_app,session_id,hook_event_type,tool_name,tool_use_id,agent_id,error,received_at,payload)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?)`);
+  const ev = (seq, sess, type, at, o = {}) =>
+    ins.run(seq, "e" + seq, "testapp", sess, type, o.tool ?? null, o.tid ?? null,
+      o.agent ?? null, o.err ?? null, at, JSON.stringify(o.payload ?? {}));
+  const BT = Date.now() - 3_600_000; // 1h ago → sessions idle, un-Posted Pres are orphans
+
+  // sess-turn T1: normal turn — Read then a 40s Bash (long-tail)
+  ev(300, "sess-turn", "UserPromptSubmit", BT, { payload: { prompt: "첫 질문" } });
+  ev(301, "sess-turn", "PreToolUse", BT + 1000, { tool: "Read", tid: "tu-a", payload: { tool_input: { file_path: "/tmp/a.txt" } } });
+  ev(302, "sess-turn", "PostToolUse", BT + 1400, { tool: "Read", tid: "tu-a" });
+  ev(303, "sess-turn", "PreToolUse", BT + 2000, { tool: "Bash", tid: "tu-b", payload: { tool_input: { command: "npm test" } } });
+  ev(304, "sess-turn", "PostToolUse", BT + 42000, { tool: "Bash", tid: "tu-b" });
+  ev(305, "sess-turn", "Stop", BT + 45000);
+  // T2: dup Read + Edit-exempted re-Read + one error + stop-hook double Stop
+  ev(310, "sess-turn", "UserPromptSubmit", BT + 60000, { payload: { prompt: "둘째" } });
+  ev(311, "sess-turn", "PreToolUse", BT + 61000, { tool: "Read", tid: "tu-r1", payload: { tool_input: { file_path: "/tmp/b.txt" } } });
+  ev(312, "sess-turn", "PostToolUse", BT + 61200, { tool: "Read", tid: "tu-r1" });
+  ev(313, "sess-turn", "PreToolUse", BT + 62000, { tool: "Read", tid: "tu-r2", payload: { tool_input: { file_path: "/tmp/b.txt" } } });
+  ev(314, "sess-turn", "PostToolUse", BT + 62200, { tool: "Read", tid: "tu-r2" });
+  ev(315, "sess-turn", "PreToolUse", BT + 63000, { tool: "Edit", tid: "tu-e1", payload: { tool_input: { file_path: "/tmp/b.txt", old_string: "x", new_string: "y" } } });
+  ev(316, "sess-turn", "PostToolUse", BT + 63200, { tool: "Edit", tid: "tu-e1" });
+  ev(317, "sess-turn", "PreToolUse", BT + 64000, { tool: "Read", tid: "tu-r3", payload: { tool_input: { file_path: "/tmp/b.txt" } } });
+  ev(318, "sess-turn", "PostToolUse", BT + 64200, { tool: "Read", tid: "tu-r3" });
+  ev(319, "sess-turn", "PreToolUse", BT + 65000, { tool: "Bash", tid: "tu-x1", payload: { tool_input: { command: "false" } } });
+  ev(320, "sess-turn", "PostToolUse", BT + 65500, { tool: "Bash", tid: "tu-x1", err: "exit 1" });
+  ev(321, "sess-turn", "Stop", BT + 66000);
+  ev(322, "sess-turn", "Stop", BT + 67000); // stop-hook loop → LAST Stop is the end
+  // T3: queued prompt mid-turn — in-flight tu-q1 pairs AFTER the second prompt → merge
+  ev(330, "sess-turn", "UserPromptSubmit", BT + 120000, { payload: { prompt: "셋째" } });
+  ev(331, "sess-turn", "PreToolUse", BT + 121000, { tool: "Bash", tid: "tu-q1", payload: { tool_input: { command: "sleep 5" } } });
+  ev(332, "sess-turn", "UserPromptSubmit", BT + 123000, { payload: { prompt: "큐잉 질문" } });
+  ev(333, "sess-turn", "PostToolUse", BT + 125000, { tool: "Bash", tid: "tu-q1" });
+  ev(334, "sess-turn", "Stop", BT + 126000);
+  // T4: Esc interrupt — orphan Pre + GuardDecision within 3s, then a new prompt → SPLIT
+  ev(340, "sess-turn", "UserPromptSubmit", BT + 180000, { payload: { prompt: "넷째" } });
+  ev(341, "sess-turn", "PreToolUse", BT + 181000, { tool: "Grep", tid: "tu-g1", payload: { tool_input: { pattern: "foo" } } });
+  ev(342, "sess-turn", "GuardDecision", BT + 181500, { payload: { guard: "bash-guard", rule: "rm-scan", decision: "deny" } });
+  ev(343, "sess-turn", "UserPromptSubmit", BT + 185000, { payload: { prompt: "다섯째" } });
+  ev(344, "sess-turn", "PreToolUse", BT + 186000, { tool: "Read", tid: "tu-z1", payload: { tool_input: { file_path: "/tmp/c.txt" } } });
+  ev(345, "sess-turn", "PostToolUse", BT + 186300, { tool: "Read", tid: "tu-z1" });
+  ev(346, "sess-turn", "Stop", BT + 187000);
+  // T6: permission wait inside a call + subagent lane + post-stop tail + late main Post
+  ev(350, "sess-turn", "UserPromptSubmit", BT + 240000, { payload: { prompt: "여섯째" } });
+  ev(351, "sess-turn", "PreToolUse", BT + 241000, { tool: "Bash", tid: "tu-w1", payload: { tool_input: { command: "deploy prod" } } });
+  ev(352, "sess-turn", "Notification", BT + 242000, { payload: { message: "Claude needs your permission to use Bash" } });
+  ev(353, "sess-turn", "PostToolUse", BT + 250000, { tool: "Bash", tid: "tu-w1" });
+  ev(354, "sess-turn", "PreToolUse", BT + 251000, { tool: "Task", tid: "tu-s1", payload: { tool_input: { description: "verify diff", subagent_type: "general-purpose" } } });
+  ev(355, "sess-turn", "PreToolUse", BT + 252000, { tool: "Grep", tid: "tu-sub1", agent: "agentA", payload: { tool_input: { pattern: "x" } } });
+  ev(356, "sess-turn", "PostToolUse", BT + 253000, { tool: "Grep", tid: "tu-sub1", agent: "agentA" });
+  ev(357, "sess-turn", "Stop", BT + 254000);
+  ev(358, "sess-turn", "PreToolUse", BT + 255000, { tool: "Read", tid: "tu-sub2", agent: "agentA", payload: { tool_input: { file_path: "/tmp/d.txt" } } });
+  ev(359, "sess-turn", "PostToolUse", BT + 255400, { tool: "Read", tid: "tu-sub2", agent: "agentA" });
+  ev(360, "sess-turn", "SubagentStop", BT + 256000, { agent: "agentA" });
+  ev(361, "sess-turn", "PostToolUse", BT + 257000, { tool: "Task", tid: "tu-s1" }); // late main Post = tail, must NOT extend the end
+
+  // sess-race: Stop arrives 300ms AFTER the queued prompt (hook POST race) —
+  // it must end turn A (else A looks interrupted and B "completes" with 0 calls)
+  const RT = Date.now() - 1_800_000;
+  ev(400, "sess-race", "UserPromptSubmit", RT, { payload: { prompt: "레이스 A" } });
+  ev(401, "sess-race", "PreToolUse", RT + 1000, { tool: "Read", tid: "tu-ra", payload: { tool_input: { file_path: "/tmp/r.txt" } } });
+  ev(402, "sess-race", "PostToolUse", RT + 1200, { tool: "Read", tid: "tu-ra" });
+  ev(403, "sess-race", "UserPromptSubmit", RT + 10000, { payload: { prompt: "레이스 B" } });
+  ev(404, "sess-race", "Stop", RT + 10300);
+  ev(405, "sess-race", "PreToolUse", RT + 11000, { tool: "Read", tid: "tu-rb", payload: { tool_input: { file_path: "/tmp/r2.txt" } } });
+  ev(406, "sess-race", "PostToolUse", RT + 11300, { tool: "Read", tid: "tu-rb" });
+  ev(407, "sess-race", "Stop", RT + 12000);
+
+  // sess-par: two overlapping Greps — tool_ms must be the interval UNION (4200),
+  // not the naive duration sum (8000)
+  const PT = Date.now() - 1_700_000;
+  ev(420, "sess-par", "UserPromptSubmit", PT, { payload: { prompt: "병렬" } });
+  ev(421, "sess-par", "PreToolUse", PT + 1000, { tool: "Grep", tid: "tu-pa", payload: { tool_input: { pattern: "aaa" } } });
+  ev(422, "sess-par", "PreToolUse", PT + 1200, { tool: "Grep", tid: "tu-pb", payload: { tool_input: { pattern: "bbb" } } });
+  ev(423, "sess-par", "PostToolUse", PT + 5000, { tool: "Grep", tid: "tu-pa" });
+  ev(424, "sess-par", "PostToolUse", PT + 5200, { tool: "Grep", tid: "tu-pb" });
+  ev(425, "sess-par", "Stop", PT + 6000);
+
+  // sess-cross: bg Bash spawned in turn 1, Post lands in turn 2's window —
+  // session-wide pairing keeps it turn 1's call (crosses_turn), NOT an orphan,
+  // and turn 2 must not count the stray Post as unpaired
+  const CT = Date.now() - 1_600_000;
+  ev(440, "sess-cross", "UserPromptSubmit", CT, { payload: { prompt: "크로스" } });
+  ev(441, "sess-cross", "PreToolUse", CT + 1000, { tool: "Bash", tid: "tu-bg", payload: { tool_input: { command: "long build", run_in_background: true } } });
+  ev(442, "sess-cross", "Stop", CT + 2000);
+  ev(443, "sess-cross", "UserPromptSubmit", CT + 10000, { payload: { prompt: "다음" } });
+  ev(444, "sess-cross", "PostToolUse", CT + 12000, { tool: "Bash", tid: "tu-bg" });
+  ev(445, "sess-cross", "Stop", CT + 13000);
+
+  // sess-storm: five sequential Greps 3s apart before any Read → 5 batches
+  const ST = Date.now() - 1_500_000;
+  ev(460, "sess-storm", "UserPromptSubmit", ST, { payload: { prompt: "폭풍" } });
+  for (let i = 0; i < 5; i++) {
+    ev(461 + i * 2, "sess-storm", "PreToolUse", ST + 1000 + i * 3000, { tool: "Grep", tid: "tu-st" + i, payload: { tool_input: { pattern: "p" + i } } });
+    ev(462 + i * 2, "sess-storm", "PostToolUse", ST + 1200 + i * 3000, { tool: "Grep", tid: "tu-st" + i });
+  }
+  ev(471, "sess-storm", "Stop", ST + 16000);
+
+  // sess-batch: five PARALLEL Greps (one probe) → 1 batch, no storm
+  const BT2 = Date.now() - 1_400_000;
+  ev(480, "sess-batch", "UserPromptSubmit", BT2, { payload: { prompt: "배치" } });
+  for (let i = 0; i < 5; i++)
+    ev(481 + i, "sess-batch", "PreToolUse", BT2 + 1000 + i * 10, { tool: "Grep", tid: "tu-ba" + i, payload: { tool_input: { pattern: "q" + i } } });
+  for (let i = 0; i < 5; i++)
+    ev(486 + i, "sess-batch", "PostToolUse", BT2 + 3000 + i * 10, { tool: "Grep", tid: "tu-ba" + i });
+  ev(491, "sess-batch", "Stop", BT2 + 4000);
+
+  // sess-retry: the same Bash erroring 3× with one Read between → retry-loop
+  const RT2 = Date.now() - 1_300_000;
+  ev(500, "sess-retry", "UserPromptSubmit", RT2, { payload: { prompt: "재시도" } });
+  ev(501, "sess-retry", "PreToolUse", RT2 + 1000, { tool: "Bash", tid: "tu-f1", payload: { tool_input: { command: "flaky-cmd" } } });
+  ev(502, "sess-retry", "PostToolUse", RT2 + 1500, { tool: "Bash", tid: "tu-f1", err: "exit 1" });
+  ev(503, "sess-retry", "PreToolUse", RT2 + 2000, { tool: "Read", tid: "tu-rr", payload: { tool_input: { file_path: "/tmp/log.txt" } } });
+  ev(504, "sess-retry", "PostToolUse", RT2 + 2100, { tool: "Read", tid: "tu-rr" });
+  ev(505, "sess-retry", "PreToolUse", RT2 + 3000, { tool: "Bash", tid: "tu-f2", payload: { tool_input: { command: "flaky-cmd" } } });
+  ev(506, "sess-retry", "PostToolUse", RT2 + 3500, { tool: "Bash", tid: "tu-f2", err: "exit 1" });
+  ev(507, "sess-retry", "PreToolUse", RT2 + 4000, { tool: "Bash", tid: "tu-f3", payload: { tool_input: { command: "flaky-cmd" } } });
+  ev(508, "sess-retry", "PostToolUse", RT2 + 4500, { tool: "Bash", tid: "tu-f3", err: "exit 1" });
+  ev(509, "sess-retry", "Stop", RT2 + 5000);
+
+  // sess-open: active session, un-Posted Pre is PENDING (not orphan), turn OPEN
+  const OT = Date.now() - 5000;
+  ev(520, "sess-open", "UserPromptSubmit", OT, { payload: { prompt: "진행중" } });
+  ev(521, "sess-open", "PreToolUse", OT + 1000, { tool: "Bash", tid: "tu-o1", payload: { tool_input: { command: "work" } } });
+
+  // sess-zero: residue before the first prompt folds into virtual turn #0
+  const ZT = Date.now() - 1_200_000;
+  ev(540, "sess-zero", "SessionStart", ZT, { payload: { source: "resume" } });
+  ev(541, "sess-zero", "UserPromptSubmit", ZT + 1000, { payload: { prompt: "제로" } });
+  ev(542, "sess-zero", "Stop", ZT + 3000);
+  db.close();
+}
+
+// list view: grouping, boundaries, statuses, flags
+const tu = await statGet(45745, "/stats/turns?session_id=sess-turn", null);
+check("turns: sess-turn has 6 turns (queued merged, interrupt split)", tu.count === 6, JSON.stringify(tu.count));
+const [T1, T2, T3, T4, T5, T6] = tu.turns || [];
+check("turns: keyed by the prompt's seq", T1 && T1.turn_seq === 300 && T4 && T4.turn_seq === 340, JSON.stringify((tu.turns || []).map((t) => t.turn_seq)));
+check("T1 complete, 2 calls, 45s wall", T1 && T1.status === "complete" && T1.calls === 2 && T1.duration_ms === 45000, JSON.stringify(T1));
+check("T1 tool_ms 40400 / gap 4600", T1 && T1.tool_ms === 40400 && T1.gap_ms === 4600, T1 && `${T1.tool_ms}/${T1.gap_ms}`);
+check("T1 long-tail (40s Bash ≥ 50% of tool time)", T1 && T1.flags.includes("long-tail"), T1 && JSON.stringify(T1.flags));
+check("T1 longest = Bash 40s", T1 && T1.longest && T1.longest.tool_name === "Bash" && T1.longest.duration_ms === 40000, T1 && JSON.stringify(T1.longest));
+check("T2 last Stop wins (ended at 2nd Stop)", T2 && T2.ended_at - T2.started_at === 7000, T2 && String(T2.ended_at - T2.started_at));
+check("T2 dup-call: identical re-Read counted once (Edit exempts the 3rd)", T2 && T2.dup_calls === 1 && T2.flags.includes("dup-call"), T2 && JSON.stringify({ d: T2.dup_calls, f: T2.flags }));
+check("T2 re-read: 3 overlapping full-range Reads of one file", T2 && T2.flags.includes("re-read"), T2 && JSON.stringify(T2.flags));
+check("T2 errors = 1", T2 && T2.errors === 1, T2 && String(T2.errors));
+check("T3 queued prompt merged (1 turn, queued_prompts=1)", T3 && T3.turn_seq === 330 && T3.queued_prompts === 1 && T3.status === "complete", JSON.stringify(T3));
+check("T4 interrupted (Esc: no Stop, no in-flight pairing)", T4 && T4.status === "interrupted", T4 && T4.status);
+check("T4 orphan + guard-deny correlated + flagged", T4 && T4.orphans === 1 && T4.guard_denies === 1 && T4.flags.includes("orphaned"), JSON.stringify(T4));
+check("T5 split off as its own turn", T5 && T5.turn_seq === 343 && T5.status === "complete" && T5.calls === 1, JSON.stringify(T5));
+check("T6 permission wait carved out: wait 8000, tool 4000, gap 2000", T6 && T6.wait_ms === 8000 && T6.tool_ms === 4000 && T6.gap_ms === 2000, T6 && `${T6.wait_ms}/${T6.tool_ms}/${T6.gap_ms}`);
+check("T6 late main Post is tail, does NOT extend the end", T6 && T6.duration_ms === 14000, T6 && String(T6.duration_ms));
+check("T6 subagent lane: 2 calls, 1 agent, union 1400ms", T6 && T6.subagent_calls === 2 && T6.subagents === 1 && T6.subagent_ms === 1400, T6 && JSON.stringify({ c: T6.subagent_calls, a: T6.subagents, ms: T6.subagent_ms }));
+check("T6 post_stop_events = 4", T6 && T6.post_stop_events === 4, T6 && String(T6.post_stop_events));
+check("T6 identity: wall = tool + wait + gap", T6 && T6.duration_ms === T6.tool_ms + T6.wait_ms + T6.gap_ms, T6 && JSON.stringify(T6));
+
+// detail view: calls timeline + markers
+const td = await statGet(45746, "/stats/turns?session_id=sess-turn&turn=350", null);
+check("detail: turn echoed with 4 calls", td.turn && td.turn.turn_seq === 350 && (td.calls || []).length === 4, JSON.stringify(td.turn && td.turn.calls));
+const dw1 = (td.calls || []).find((c) => c.tool_use_id === "tu-w1");
+const ds1 = (td.calls || []).find((c) => c.tool_use_id === "tu-s1");
+const dsub2 = (td.calls || []).find((c) => c.tool_use_id === "tu-sub2");
+check("detail: permission wait attributed to the enclosing call", dw1 && dw1.wait_ms === 8000, JSON.stringify(dw1));
+check("detail: input_summary from the whitelist (Bash command)", dw1 && dw1.input_summary === "deploy prod", dw1 && dw1.input_summary);
+check("detail: subagent tail call marked (lane+tail)", dsub2 && dsub2.lane === "subagent" && dsub2.tail === true, JSON.stringify(dsub2));
+check("detail: late Task Post stays ok, not crossing (no next turn)", ds1 && ds1.status === "ok" && ds1.crosses_turn === false, JSON.stringify(ds1));
+const mkP = (td.markers || []).find((m) => m.type === "Notification");
+const mkS = (td.markers || []).filter((m) => m.type === "Stop");
+check("detail: permission marker with wait", mkP && mkP.kind === "permission" && mkP.wait_ms === 8000, JSON.stringify(mkP));
+check("detail: Stop + SubagentStop markers present", mkS.length === 1 && (td.markers || []).some((m) => m.type === "SubagentStop"), JSON.stringify(td.markers));
+const tg = await statGet(45747, "/stats/turns?session_id=sess-turn&turn=340", null);
+const mkG = (tg.markers || []).find((m) => m.type === "GuardDecision");
+check("detail: GuardDecision marker correlated to the orphan Pre", mkG && mkG.guard === "bash-guard" && mkG.correlated_tool_use_id === "tu-g1", JSON.stringify(mkG));
+
+// boundary race: the late Stop ends turn A; turn B keeps its own call
+const tr = await statGet(45748, "/stats/turns?session_id=sess-race", null);
+check("race: 2 turns, A complete via the raced Stop", tr.count === 2 && tr.turns[0].status === "complete" && tr.turns[0].ended_at - tr.turns[0].started_at === 10300, JSON.stringify(tr.turns && tr.turns[0]));
+check("race: B unaffected (1 call, complete)", tr.turns && tr.turns[1].calls === 1 && tr.turns[1].status === "complete", JSON.stringify(tr.turns && tr.turns[1]));
+
+// parallel: union not sum; second call flagged parallel with gap 0
+const tp = await statGet(45749, "/stats/turns?session_id=sess-par", null);
+check("parallel: tool_ms = union 4200 (not 8000)", tp.turns && tp.turns[0].tool_ms === 4200, JSON.stringify(tp.turns && tp.turns[0].tool_ms));
+const tpd = await statGet(45750, "/stats/turns?session_id=sess-par&turn=420", null);
+check("parallel: overlap badge + zero gap on the 2nd call", tpd.calls && tpd.calls[1].parallel === true && tpd.calls[1].gap_before_ms === 0, JSON.stringify(tpd.calls && tpd.calls[1]));
+
+// crosses-turn: bg call owned by its Pre's turn; no fake orphan/unpaired
+const tc = await statGet(45751, "/stats/turns?session_id=sess-cross", null);
+check("cross: turn1 owns the call, clipped tool 1000ms", tc.turns && tc.turns[0].calls === 1 && tc.turns[0].tool_ms === 1000 && tc.turns[0].orphans === 0, JSON.stringify(tc.turns && tc.turns[0]));
+check("cross: turn2 has 0 calls and 0 unpaired (stray Post is paired)", tc.turns && tc.turns[1].calls === 0 && tc.turns[1].unpaired === 0, JSON.stringify(tc.turns && tc.turns[1]));
+const tcd = await statGet(45752, "/stats/turns?session_id=sess-cross&turn=" + tc.turns[0].turn_seq, null);
+check("cross: crosses_turn + bg badges on the call", tcd.calls && tcd.calls[0].crosses_turn === true && tcd.calls[0].bg === true && tcd.calls[0].status === "ok", JSON.stringify(tcd.calls && tcd.calls[0]));
+
+// search-storm fires on sequential probing, folds on a parallel batch
+const ts1 = await statGet(45753, "/stats/turns?session_id=sess-storm", null);
+check("storm: 5 sequential Greps → search-storm", ts1.turns && ts1.turns[0].flags.includes("search-storm"), JSON.stringify(ts1.turns && ts1.turns[0].flags));
+const ts2 = await statGet(45754, "/stats/turns?session_id=sess-batch", null);
+check("storm: 5 parallel Greps = one probe → no flag", ts2.turns && !ts2.turns[0].flags.includes("search-storm"), JSON.stringify(ts2.turns && ts2.turns[0].flags));
+
+// retry-loop: same command erroring 3× (one Read between keeps the chain)
+const tt = await statGet(45755, "/stats/turns?session_id=sess-retry", null);
+check("retry: 3 same-input errors → retry-loop", tt.turns && tt.turns[0].flags.includes("retry-loop"), JSON.stringify(tt.turns && tt.turns[0].flags));
+
+// open turn: recent un-Posted Pre is pending, not orphan
+const to = await statGet(45756, "/stats/turns?session_id=sess-open", null);
+check("open: active session turn is open, no orphan", to.turns && to.turns[0].status === "open" && to.turns[0].orphans === 0, JSON.stringify(to.turns && to.turns[0]));
+const tod = await statGet(45757, "/stats/turns?session_id=sess-open&turn=520", null);
+check("open: the in-flight call is pending", tod.calls && tod.calls[0].status === "pending", JSON.stringify(tod.calls && tod.calls[0]));
+
+// virtual #0 folds pre-prompt residue, never judged
+const tz = await statGet(45758, "/stats/turns?session_id=sess-zero", null);
+check("zero: virtual #0 + real turn", tz.count === 2 && tz.turns[0].turn_seq === 0 && tz.turns[0].n === 0 && tz.turns[0].status === "virtual" && tz.turns[0].flags.length === 0, JSON.stringify(tz.turns && tz.turns[0]));
+
+// API contract: session_id required; unknown turn → error body
+const tbad = await statGet(45759, "/stats/turns", null);
+check("turns without session_id → error", !!tbad.error, JSON.stringify(tbad));
+const tmiss = await statGet(45760, "/stats/turns?session_id=sess-turn&turn=99999", null);
+check("unknown turn → not-found error", !!tmiss.error, JSON.stringify(tmiss));
+
+// config override: a huge storm threshold suppresses the sess-storm flag
+const tcfg = await statGet(45761, "/stats/turns?session_id=sess-storm", { turns: { storm: 99 } });
+check("config {turns:{storm}} overrides the threshold", tcfg.turns && !tcfg.turns[0].flags.includes("search-storm"), JSON.stringify(tcfg.turns && tcfg.turns[0].flags));
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);

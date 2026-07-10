@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.12.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix
+const VERSION = "0.13.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -69,6 +69,24 @@ const ACTIVE_MS = intEnv("OBS_ACTIVE_MS", 600_000);
 // compacting. env override here; config.json {mega:{turns,ctx}} wins (loadThresholds).
 let MEGA_TURNS = intEnv("OBS_MEGA_TURNS", 300);
 let MEGA_CTX = intEnv("OBS_MEGA_CTX", 300_000);
+
+// Turn Inspector (#73): orphan cutoff (a Pre with no Post anywhere in the
+// session older than this), permission-wait cap (an overnight permission prompt
+// must not devour the time split — live tail reaches 42h), and flag thresholds.
+// env here; config.json {turns:{...}} wins (loadThresholds).
+let TURN_ORPHAN_MS = intEnv("OBS_TURN_ORPHAN_MS", ACTIVE_MS);
+let TURN_WAIT_CAP_MS = intEnv("OBS_TURN_WAIT_CAP_MS", 1_800_000); // 30m
+const TURN_FLAG_DEFAULTS = {
+  dup: 2,                    // dup-call: same tool+input occurrences
+  reread: 3,                 // re-read: overlapping Reads of one file
+  retry: 3,                  // retry-loop: same-call error chain length
+  storm: 5,                  // search-storm: Grep/Glob batches before the first Read/Edit
+  storm_batch_gap_ms: 2000,  // searches starting closer than this collapse into one batch
+  longtail_ms: 30_000, longtail_share: 0.5,
+  gap_ratio: 2, gap_min_ms: 60_000,
+  mega_calls: 30, mega_ms: 600_000,
+};
+let TURN_FLAGS = { ...TURN_FLAG_DEFAULTS };
 
 // Auth is OFF by default (single-user box trusts loopback — design §8, decision).
 // Turn it on by exporting a non-empty OBS_TOKEN, or by putting {token} in
@@ -799,9 +817,11 @@ function handleEventById(req, res, idStr) {
 }
 
 // ── stats API (read-only aggregates — analysis design §4) ───────────────────
-// Same gates as the query API; degraded (db=null) answers empty-but-200; and no
-// query here ever SELECTs the payload column (the widest one). The hot path
-// (POST /events) is untouched by this whole section.
+// Same gates as the query API; degraded (db=null) answers empty-but-200.
+// Aggregates avoid the payload column (the widest one) except four bounded
+// cases: /stats/guards and /stats/nudges (rare custom rows), /stats/sessions'
+// first_prompt (one row per session), and /stats/turns (one session per
+// request). The hot path (POST /events) is untouched by this whole section.
 const WINDOW_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 };
 
 function statsGate(req, res) {
@@ -1384,10 +1404,11 @@ function handleStatsTokens(req, res, u) {
 }
 
 // ── GET /stats/guards (stage 9) ─────────────────────────────────────────────
-// Roll up GuardDecision events (guard deny/ask/warn — design §6). This is the
-// ONLY stats query that reads the payload column: GuardDecision rows are few
-// (tens/day) so per-row json_extract over the idx_type_time range is cheap.
-// The command is already redacted by the collector's post-ack path.
+// Roll up GuardDecision events (guard deny/ask/warn — design §6). Reads the
+// payload column (see the stats-section header for the full exception list):
+// GuardDecision rows are few (tens/day) so per-row json_extract over the
+// idx_type_time range is cheap. The command is already redacted by the
+// collector's post-ack path.
 function handleStatsGuards(req, res, u) {
   if (!statsGate(req, res)) return;
   const window_ms = windowOf(u, "7d");
@@ -1543,6 +1564,423 @@ function handleStatsNudges(req, res, u) {
       judgment: { n: outcomeCount, n_target: KILL_N_TARGET, days, days_target: KILL_DAYS_TARGET },
     });
   } catch (e) { logSafe("stats nudges", e); json(res, 500, { error: "query failed" }); }
+}
+
+// ── GET /stats/turns (#73 — Turn Inspector, stage 1) ────────────────────────
+// One session's events grouped into turns (UserPromptSubmit → last Stop before
+// the next prompt) with per-call Pre↔Post pairing, the tool/wait/gap time split
+// and inefficiency flags (docs/agent-dashboard-turn-inspector-design.md).
+// Pairing runs over the WHOLE session, not the turn window — a background
+// task's Post can land turns later, and a turn-scoped pair would fake an
+// orphan. Payload-reading exception (see the stats-section header): bounded to
+// ONE session, parsed only for UserPromptSubmit / PreToolUse / Notification /
+// GuardDecision rows.
+
+const TURN_RACE_MS = 1000;       // Stop landing ≤1s after a prompt = arrival race
+const TURN_GUARD_CORR_MS = 3000; // GuardDecision ↔ orphan-Pre correlation window
+const TURN_READONLY = new Set(["Read", "Grep", "Glob", "WebFetch", "WebSearch"]);
+const TURN_MUTATING = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+
+function turnPayload(r) { // lazy parse, cached on the row
+  if (r._p !== undefined) return r._p;
+  let p = null;
+  if (r.payload != null) { try { p = JSON.parse(r.payload); } catch {} }
+  return (r._p = p);
+}
+
+function sortKeysDeep(v) {
+  if (Array.isArray(v)) return v.map(sortKeysDeep);
+  if (v && typeof v === "object") {
+    const o = {};
+    for (const k of Object.keys(v).sort()) o[k] = sortKeysDeep(v[k]);
+    return o;
+  }
+  return v;
+}
+
+// Normalized dup key; null = no verdict. A "[redacted …]" mask can make two
+// different inputs collide, so masked inputs are conservatively exempt (§5:
+// a missed dup beats a false accusation).
+function turnInputKey(tool, inp) {
+  let x = inp ?? null;
+  if (tool === "Bash" && x && typeof x.command === "string")
+    x = { ...x, command: x.command.replace(/\s+/g, " ").trim() };
+  let s;
+  try { s = JSON.stringify(sortKeysDeep(x)); } catch { return null; }
+  if (s.includes("[redacted")) return null;
+  return `${tool} ${s}`;
+}
+
+function turnClip(s, n) {
+  s = String(s).replace(/\s+/g, " ").trim();
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
+
+// Tool-aware one-line summary of tool_input (whitelisted fields only).
+function turnInputSummary(tool, inp) {
+  if (!inp || typeof inp !== "object") return "";
+  const s = (v) => (typeof v === "string" ? v : "");
+  if (tool === "Bash") return turnClip(s(inp.description) || s(inp.command).split("\n")[0], 120);
+  if (tool === "Read") {
+    let r = s(inp.file_path);
+    if (inp.offset != null || inp.limit != null) r += ` :${inp.offset ?? 0}${inp.limit != null ? "+" + inp.limit : "-"}`;
+    return turnClip(r, 120);
+  }
+  if (TURN_MUTATING.has(tool)) return turnClip(s(inp.file_path), 120);
+  if (tool === "Grep") return turnClip([s(inp.pattern), s(inp.path) || s(inp.glob)].filter(Boolean).join("  "), 120);
+  if (tool === "Glob") return turnClip(s(inp.pattern), 120);
+  if (tool === "Task" || tool === "Agent")
+    return turnClip([s(inp.description), s(inp.subagent_type) ? `(${inp.subagent_type})` : ""].filter(Boolean).join(" "), 120);
+  if (tool === "WebFetch") return turnClip(s(inp.url), 120);
+  if (tool === "WebSearch") return turnClip(s(inp.query), 120);
+  try { return turnClip(JSON.stringify(sortKeysDeep(inp)), 120); } catch { return ""; }
+}
+
+// Merged length of [start,end) intervals — parallel calls must not count twice.
+function turnUnionMs(intervals) {
+  const iv = intervals.filter((x) => x[1] > x[0]).sort((a, b) => a[0] - b[0]);
+  let total = 0, curS = null, curE = null;
+  for (const [s0, e0] of iv) {
+    if (curE == null || s0 > curE) { if (curE != null) total += curE - curS; curS = s0; curE = e0; }
+    else if (e0 > curE) curE = e0;
+  }
+  if (curE != null) total += curE - curS;
+  return total;
+}
+
+// rows: one session's events ASC by seq (payload only on the four parsed types).
+// Returns turn objects with internal _calls/_markers kept for the detail view.
+function buildTurns(rows, now) {
+  // session-wide Pre↔Post pairing (a turn-scoped pair fakes orphans — §4.2)
+  const pairs = new Map(); // tool_use_id → {pre, post}
+  for (const r of rows) {
+    if (!r.tool_use_id) continue;
+    let p = pairs.get(r.tool_use_id);
+    if (!p) pairs.set(r.tool_use_id, (p = { pre: null, post: null }));
+    if (r.type === "PreToolUse" && !p.pre) p.pre = r;
+    else if (r.type === "PostToolUse" && !p.post) p.post = r;
+  }
+
+  // segmentation (§4.1)
+  const turns = [];
+  let cur = null;
+  const open = (r, virtual) => {
+    cur = {
+      virtual, turn_seq: virtual ? 0 : r.seq, started_at: r.received_at,
+      prompt: virtual ? null : (turnPayload(r)?.prompt ?? null),
+      queued: 0, events: [], stops: [],
+    };
+    turns.push(cur);
+  };
+  for (const r of rows) {
+    if (r.type === "UserPromptSubmit") {
+      // queued-prompt merge: ONLY when an in-flight Pre of the running turn
+      // pairs with a Post after this prompt (proof the loop kept running).
+      // Esc-then-retype leaves that Pre orphaned forever → split (§4.1 C-1).
+      if (cur && !cur.virtual && !cur.stops.length && cur.events.some((e) =>
+        e.type === "PreToolUse" && e.tool_use_id &&
+        pairs.get(e.tool_use_id)?.post && pairs.get(e.tool_use_id).post.seq > r.seq)) {
+        cur.queued++; cur.events.push(r); continue;
+      }
+      open(r, false); continue;
+    }
+    if (!cur) open(r, true); // virtual #0: residue before the first prompt
+    // Arrival race: Stop and a queued prompt POST from separate hook processes;
+    // a Stop generated just before the prompt can arrive just after it. No tool
+    // activity yet + ≤1s → it ends the PREVIOUS turn (else this turn would
+    // "complete" with zero calls and the previous one would look interrupted).
+    if (r.type === "Stop" && !cur.virtual && turns.length >= 2 &&
+        r.received_at - cur.started_at <= TURN_RACE_MS &&
+        !cur.events.some((e) => e.type === "PreToolUse" || e.type === "PostToolUse")) {
+      const prev = turns[turns.length - 2];
+      prev.events.push(r); prev.stops.push(r);
+      continue;
+    }
+    cur.events.push(r);
+    if (r.type === "Stop") cur.stops.push(r);
+  }
+
+  const out = [];
+  let n = 0;
+  for (let i = 0; i < turns.length; i++) {
+    const t = turns[i];
+    const next = turns[i + 1] || null;
+    const lastEv = t.events.length ? t.events[t.events.length - 1] : null;
+    const lastAt = Math.max(t.started_at, lastEv ? lastEv.received_at : t.started_at);
+    const lastStop = t.stops[t.stops.length - 1] || null;
+
+    // status + main-chain end (§4.1)
+    let status, ended_at;
+    if (t.virtual) { status = "virtual"; ended_at = lastAt; }
+    else if (lastStop) {
+      status = "complete"; ended_at = lastStop.received_at;
+      // A main-lane Pre AFTER the last Stop = the real final Stop got lost
+      // (collector timeout/downtime) — extend the end, keep complete. A late
+      // POST alone is a legitimate background tail and does NOT extend.
+      for (const e of t.events) {
+        if (e.seq > lastStop.seq && e.type === "PreToolUse" && !e.agent_id) {
+          ended_at = Math.max(ended_at, e.received_at);
+          const post = e.tool_use_id ? pairs.get(e.tool_use_id)?.post : null;
+          if (post && (!next || post.seq < next.turn_seq)) ended_at = Math.max(ended_at, post.received_at);
+        }
+      }
+    } else if (!next && now - lastAt < ACTIVE_MS) { status = "open"; ended_at = lastAt; }
+    else { status = "interrupted"; ended_at = lastAt; }
+
+    // calls: every Pre in this turn, paired session-wide (§4.2)
+    const calls = [];
+    let unpaired = 0;
+    for (const e of t.events) {
+      if (e.type === "PostToolUse") {
+        const pr = e.tool_use_id ? pairs.get(e.tool_use_id) : null;
+        if (!pr || !pr.pre) unpaired++; // reverse orphan: the Pre was lost/dropped
+        continue;
+      }
+      if (e.type !== "PreToolUse") continue;
+      if (!e.tool_use_id) { unpaired++; continue; }
+      const pair = pairs.get(e.tool_use_id);
+      if (pair.pre !== e) { unpaired++; continue; }
+      const post = pair.post;
+      const inp = turnPayload(e)?.tool_input;
+      calls.push({
+        tool_use_id: e.tool_use_id, tool_name: e.tool_name || "unknown",
+        lane: e.agent_id ? "subagent" : "main", agent_id: e.agent_id || null,
+        event_seq: e.seq, started_at: e.received_at, post,
+        duration_ms: post ? post.received_at - e.received_at : null,
+        status: post ? (post.error != null ? "error" : "ok")
+          : (now - e.received_at >= TURN_ORPHAN_MS ? "orphan" : "pending"),
+        error: post && post.error != null ? String(post.error).slice(0, 200) : null,
+        input: inp && typeof inp === "object" ? inp : null,
+        input_summary: turnInputSummary(e.tool_name, inp),
+        key: turnInputKey(e.tool_name, inp),
+        bg: !!(inp && inp.run_in_background === true),
+        crosses_turn: !!(post && next && post.seq >= next.turn_seq),
+        tail: !!(lastStop && e.seq > lastStop.seq),
+        dup_of: null, gap_before_ms: null, parallel: false, wait_ms: 0,
+      });
+    }
+    const mainCalls = calls.filter((c) => c.lane === "main");
+
+    // gap-before + parallel badge (main lane, §4.3): negative gap = overlap → 0
+    let runEnd = t.started_at;
+    for (const c of mainCalls) {
+      c.parallel = c.started_at < runEnd;
+      c.gap_before_ms = Math.max(0, c.started_at - runEnd);
+      runEnd = Math.max(runEnd, c.post ? c.post.received_at : c.started_at);
+    }
+
+    // markers (§4.2) + permission wait (§4.3). The permission dialog sits INSIDE
+    // the call's [Pre,Post] (hook → dialog → approve → run → Post), so its span
+    // must come OUT of that call's tool time or it double-counts. Idle
+    // notifications ("waiting for your input", 95% live share) are marker-only.
+    const markers = [];
+    let wait_ms = 0, guard_denies = 0, notifications = 0, precompacts = 0;
+    for (const e of t.events) {
+      if (e.type === "Notification") {
+        notifications++;
+        const kind = /permission/i.test(String(turnPayload(e)?.message ?? "")) ? "permission" : "idle";
+        const m = { type: "Notification", kind, at: e.received_at, wait_ms: null };
+        if (kind === "permission" && e.received_at <= ended_at) {
+          const encl = mainCalls.find((c) => c.post && c.started_at <= e.received_at && c.post.received_at >= e.received_at);
+          const rawEnd = encl ? encl.post.received_at
+            : (t.events.find((x) => x.seq > e.seq)?.received_at ?? ended_at); // denied → next event
+          const w = Math.min(Math.max(0, rawEnd - e.received_at), TURN_WAIT_CAP_MS);
+          m.wait_ms = w; wait_ms += w;
+          if (encl) encl.wait_ms += w;
+        }
+        markers.push(m);
+      } else if (e.type === "GuardDecision") {
+        // hook-guard deny is the DOMINANT orphan cause (238/396 live, vs 9 for
+        // permission) — GuardDecision carries no tool_use_id, so correlate by time.
+        const corr = calls.find((c) => c.status === "orphan" && Math.abs(c.started_at - e.received_at) <= TURN_GUARD_CORR_MS);
+        if (corr) guard_denies++;
+        const p = turnPayload(e) || {};
+        markers.push({
+          type: "GuardDecision", at: e.received_at, guard: p.guard ?? null,
+          rule: p.rule ?? null, decision: p.decision ?? null,
+          correlated_tool_use_id: corr ? corr.tool_use_id : null,
+        });
+      } else if (e.type === "PreCompact") { precompacts++; markers.push({ type: "PreCompact", at: e.received_at }); }
+      else if (e.type === "SubagentStop") markers.push({ type: "SubagentStop", at: e.received_at, agent_id: e.agent_id || null });
+      else if (e.type === "Stop") markers.push({ type: "Stop", at: e.received_at });
+      else if (e.type === "SessionEnd") markers.push({ type: "SessionEnd", at: e.received_at });
+    }
+
+    // time split (§4.3): tool = union of main [Pre,Post] clipped to the turn
+    // window minus permission-wait spans; gap = the unexplained rest
+    // (generation, API latency, unobserved waits). Post-stop tail excluded.
+    const mainIv = [], subIv = [];
+    const ownEnd = next ? next.started_at : Infinity;
+    for (const c of calls) {
+      if (!c.post) continue;
+      if (c.lane === "subagent") {
+        subIv.push([Math.max(c.started_at, t.started_at), Math.min(c.post.received_at, ownEnd)]);
+        continue;
+      }
+      if (c.tail) continue;
+      const a = Math.max(c.started_at, t.started_at);
+      let b = Math.min(c.post.received_at, ended_at);
+      if (c.wait_ms > 0) b = Math.min(b, c.post.received_at - c.wait_ms); // carve the wait out
+      mainIv.push([a, b]);
+    }
+    const tool_ms = turnUnionMs(mainIv);
+    const subagent_ms = turnUnionMs(subIv);
+    const duration_ms = Math.max(0, ended_at - t.started_at);
+    const gap_ms = Math.max(0, duration_ms - tool_ms - wait_ms);
+
+    // dup detection (main lane, §5): a state change between two identical calls
+    // (any Bash, or an Edit/Write to the same file) legitimizes the re-run.
+    const firstByKey = new Map();
+    let dup_calls = 0;
+    for (let k = 0; k < mainCalls.length; k++) {
+      const c = mainCalls[k];
+      if (!c.key) continue;
+      const prev = firstByKey.get(c.key);
+      if (prev === undefined) { firstByKey.set(c.key, k); continue; }
+      const file = c.input && typeof c.input.file_path === "string" ? c.input.file_path : null;
+      let invalidated = false;
+      for (let j = prev + 1; j < k && !invalidated; j++) {
+        const b = mainCalls[j];
+        if (b.tool_name === "Bash") invalidated = true;
+        else if (TURN_MUTATING.has(b.tool_name) && file && b.input && b.input.file_path === file) invalidated = true;
+      }
+      if (invalidated) { firstByKey.set(c.key, k); continue; }
+      c.dup_of = mainCalls[prev].tool_use_id;
+      dup_calls++;
+    }
+
+    // re-read (§5): ≥N Reads of one file with OVERLAPPING ranges — disjoint
+    // chunked reads of a big file are the correct pattern, not waste.
+    let reread = false;
+    {
+      const byFile = new Map();
+      for (const c of mainCalls) {
+        if (c.tool_name !== "Read" || !c.input || typeof c.input.file_path !== "string") continue;
+        const off = c.input.offset != null && Number.isFinite(Number(c.input.offset)) ? Number(c.input.offset) : 0;
+        const lim = c.input.limit != null && Number.isFinite(Number(c.input.limit)) ? Number(c.input.limit) : Infinity;
+        const arr = byFile.get(c.input.file_path) || [];
+        arr.push([off, off + lim]);
+        byFile.set(c.input.file_path, arr);
+      }
+      for (const ranges of byFile.values()) {
+        if (ranges.length < TURN_FLAGS.reread) continue;
+        let overlapping = 0;
+        for (let a = 0; a < ranges.length; a++) {
+          if (ranges.some((r2, b2) => b2 !== a && ranges[a][0] < r2[1] && r2[0] < ranges[a][1])) overlapping++;
+        }
+        if (overlapping >= TURN_FLAGS.reread) { reread = true; break; }
+      }
+    }
+
+    // retry-loop (§5): the SAME call (tool+input) erroring ≥N times, allowing
+    // one read-only look between attempts — lint→typecheck→test failing in a
+    // row is three different checks, not a loop.
+    let retry = false;
+    {
+      let key = null, count = 0, slack = 0;
+      for (const c of mainCalls) {
+        if (c.key && c.status === "error") {
+          count = c.key === key ? count + 1 : 1;
+          key = c.key; slack = 0;
+          if (count >= TURN_FLAGS.retry) { retry = true; break; }
+        } else if (key && TURN_READONLY.has(c.tool_name) && slack === 0) {
+          slack = 1; // one read-only call keeps the chain alive
+        } else { key = null; count = 0; slack = 0; }
+      }
+    }
+
+    // search-storm (§5): Grep/Glob batches before the first Read/Edit. A
+    // parallel/near-simultaneous batch is ONE probe, not five.
+    let storm = false;
+    {
+      let batches = 0, lastStart = null;
+      for (const c of mainCalls) {
+        if (c.tool_name === "Read" || TURN_MUTATING.has(c.tool_name)) break;
+        if (c.tool_name !== "Grep" && c.tool_name !== "Glob") continue;
+        if (lastStart == null || (!c.parallel && c.started_at - lastStart > TURN_FLAGS.storm_batch_gap_ms)) batches++;
+        lastStart = c.started_at;
+      }
+      storm = batches >= TURN_FLAGS.storm;
+    }
+
+    const errors = calls.filter((c) => c.status === "error").length;
+    const orphans = calls.filter((c) => c.status === "orphan").length;
+    const mainOrphans = mainCalls.filter((c) => c.status === "orphan").length;
+    const longest = mainCalls.filter((c) => c.duration_ms != null)
+      .reduce((m, c) => (!m || c.duration_ms > m.duration_ms ? c : m), null);
+
+    const flags = [];
+    if (!t.virtual) { // #0 holds residue/trimmed bodies — never judged (§4.1)
+      if (dup_calls >= TURN_FLAGS.dup - 1) flags.push("dup-call");
+      if (reread) flags.push("re-read");
+      if (retry) flags.push("retry-loop");
+      if (storm) flags.push("search-storm");
+      if (longest && longest.duration_ms - longest.wait_ms >= TURN_FLAGS.longtail_ms &&
+          tool_ms > 0 && longest.duration_ms - longest.wait_ms >= TURN_FLAGS.longtail_share * tool_ms) flags.push("long-tail");
+      if (gap_ms >= TURN_FLAGS.gap_ratio * tool_ms && gap_ms >= TURN_FLAGS.gap_min_ms) flags.push("gap-heavy");
+      if (mainOrphans >= 1) flags.push("orphaned");
+      if (mainCalls.length >= TURN_FLAGS.mega_calls || duration_ms >= TURN_FLAGS.mega_ms) flags.push("mega-turn");
+    }
+
+    out.push({
+      turn_seq: t.turn_seq, n: t.virtual ? 0 : ++n,
+      prompt: t.prompt != null ? turnClip(t.prompt, 200) : null,
+      queued_prompts: t.queued,
+      started_at: t.started_at, ended_at, status, duration_ms,
+      tool_ms, gap_ms, wait_ms,
+      calls: calls.length, errors, orphans, unpaired, guard_denies,
+      distinct_tools: new Set(calls.map((c) => c.tool_name)).size,
+      dup_calls,
+      subagent_calls: calls.length - mainCalls.length,
+      subagents: new Set(calls.filter((c) => c.agent_id).map((c) => c.agent_id)).size,
+      subagent_ms,
+      post_stop_events: lastStop ? t.events.filter((e) => e.seq > lastStop.seq).length : 0,
+      longest: longest ? { tool_name: longest.tool_name, duration_ms: longest.duration_ms } : null,
+      precompacts, notifications, flags,
+      _prompt_raw: t.prompt, _calls: calls, _markers: markers,
+    });
+  }
+  return out;
+}
+
+function handleStatsTurns(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const sid = u.searchParams.get("session_id");
+  if (!sid) return json(res, 400, { error: "turns needs session_id" });
+  if (!db) return json(res, 200, { session_id: sid, count: 0, turns: [] });
+  let limit = Math.trunc(Number(u.searchParams.get("limit"))) || 100;
+  limit = Math.min(Math.max(1, limit), 500);
+  const turnParam = u.searchParams.get("turn");
+  try {
+    const rows = db.impl.prepare(
+      `SELECT seq, hook_event_type AS type, tool_name, tool_use_id, agent_id, error, received_at,
+              CASE WHEN hook_event_type IN ('UserPromptSubmit','PreToolUse','Notification','GuardDecision')
+                   THEN payload END AS payload
+         FROM events WHERE session_id = ? ORDER BY seq ASC`
+    ).all(sid);
+    const all = buildTurns(rows, Date.now());
+    const strip = ({ _prompt_raw, _calls, _markers, ...s }) => s;
+    if (turnParam != null && turnParam !== "") {
+      const t = all.find((x) => x.turn_seq === Number(turnParam));
+      if (!t) return json(res, 404, { error: "turn not found (retention may have trimmed it)" });
+      return json(res, 200, {
+        turn: strip(t),
+        prompt_full: t._prompt_raw != null ? String(t._prompt_raw).slice(0, 2000) : null,
+        calls: t._calls.map((c) => ({
+          tool_use_id: c.tool_use_id, tool_name: c.tool_name, lane: c.lane, agent_id: c.agent_id,
+          event_seq: c.event_seq, started_at: c.started_at, duration_ms: c.duration_ms,
+          gap_before_ms: c.lane === "main" ? c.gap_before_ms : null,
+          status: c.status, error: c.error, input_summary: c.input_summary,
+          dup_of: c.dup_of, crosses_turn: c.crosses_turn, bg: c.bg, parallel: c.parallel,
+          tail: c.tail, wait_ms: c.wait_ms,
+        })),
+        markers: t._markers,
+      });
+    }
+    // limit = the LATEST N turns (audits look at recent work first)
+    const turns = all.slice(-limit).map(strip);
+    json(res, 200, { session_id: sid, count: turns.length, turns });
+  } catch (e) { logSafe("stats turns", e); json(res, 500, { error: "query failed" }); }
 }
 
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
@@ -2211,6 +2649,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/tokens") return handleStatsTokens(req, res, u);
       if (pathname === "/stats/guards") return handleStatsGuards(req, res, u);
       if (pathname === "/stats/nudges") return handleStatsNudges(req, res, u);
+      if (pathname === "/stats/turns") return handleStatsTurns(req, res, u);
       return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {
@@ -2279,6 +2718,14 @@ function loadThresholds() {
     if (c.mega && typeof c.mega === "object") {
       if (Number.isFinite(c.mega.turns)) MEGA_TURNS = c.mega.turns;
       if (Number.isFinite(c.mega.ctx)) MEGA_CTX = c.mega.ctx;
+    }
+    // {turns:{...}} tunes the Turn Inspector (#73): orphan cutoff, wait cap,
+    // and any flag threshold from TURN_FLAG_DEFAULTS.
+    if (c.turns && typeof c.turns === "object") {
+      if (Number.isFinite(c.turns.orphan_after_ms)) TURN_ORPHAN_MS = c.turns.orphan_after_ms;
+      if (Number.isFinite(c.turns.wait_cap_ms)) TURN_WAIT_CAP_MS = c.turns.wait_cap_ms;
+      for (const k of Object.keys(TURN_FLAG_DEFAULTS))
+        if (Number.isFinite(c.turns[k])) TURN_FLAGS[k] = c.turns[k];
     }
   } catch {}
 }

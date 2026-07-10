@@ -48,14 +48,16 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/tokens` | token usage from CC transcripts: `group=session\|app\|bucket\|tool\|model\|anatomy\|timeline` (tool attribution is a documented approximation); every row carries `cost_usd` (est., official per-MTok rates; cache writes billed per TTL — 5m 1.25× / 1h 2× input, from the transcript's `ephemeral_5m`/`ephemeral_1h` split) + `unpriced` (tokens of models missing from the pricing table). `group=session` rows also carry per-session diagnostics: `avg_ctx`/`peak_ctx` (context = input+cache), `model_switches` + `switch_rewrite_est` (the cache rewrite a mid-session model change forces), `mega` (hot-spot flag). `group=anatomy` returns per-model + `(all)` cost split into 4 components (`input`/`write`/`read`/`output` USD + `pct`) with `baseline_ctx` (est. harness fixed cost). `group=timeline&session_id=X` returns one session's main-chain context `series` + `compact_markers` (sharp ctx drops) + `whatif` (cache-read $ a 200k/300k cap would have saved) |
 | GET | `/stats/guards` | GuardDecision rollup: `by_guard` / `by_rule` (guard×rule×decision) / `by_app` / `top_commands`. Reads `payload` (json_extract) — GuardDecision rows are few |
 | GET | `/stats/nudges` | ctx-budget boundary-nudge rollup: `by_kind` (kind×template) / `by_cost_shown` / `by_app` / `series` / `recent` fires, plus `compliance` (rate + base rate + keep-misassign, when `NudgeOutcome` events are present — acp#29) and kill-judgment progress (`n`/20 outcomes over `days`/30). Joins `NudgeFired`↔`NudgeOutcome` on `(transcriptHash, byteOffset)`, degrading to `(transcriptHash, ts)` when byteOffset is null. Reads `payload`; nudge rows are few. Counts are an observed lower bound (a fire while the collector is down leaves a ledger line but no event) — acp's ledger report owns the exact rate |
+| GET | `/stats/turns` | Turn Inspector (#73, `docs/agent-dashboard-turn-inspector-design.md`): one session's events grouped into **turns** (`UserPromptSubmit` → last `Stop`; arrival-race repair, queued-prompt merge only when an in-flight Pre pairs after the prompt, post-stop tail kept but excluded from timing). `session_id` required, `limit` = latest N (≤500, no window — retention bounds it). Per turn: tool/wait/gap time split (main-lane interval **union**; permission-wait carved out of the enclosing call; capped), calls/errors/orphans/`guard_denies` (orphans' top cause is a hook-guard deny, time-correlated ±3s), subagent lane, and inefficiency `flags` (`dup-call`/`re-read`/`retry-loop`/`search-storm`/`long-tail`/`gap-heavy`/`orphaned`/`mega-turn` — thresholds via `{"turns":{…}}`). `&turn=<seq>` adds the call timeline + markers. Reads `payload` for ONE session only (`prompt`/`tool_input`/`message`/guard fields) |
 | GET | `/health` | liveness + counters (single-instance probe) |
 | GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + avg/peak ctx + mega badge + a human session title — generated title, else first prompt, else hash + turn drill-down with a context-growth curve & compact what-if), Tools (latency/error bars), Tokens (cost anatomy stack + baseline/turn-tax/switch-rewrite cards + daily/by app/by model/by tool + trend), Guards (what the git/bash guards blocked), Nudges (ctx-budget `/compact` boundary nudges + compliance), fleet strip with per-session context size, per-screen `(?)` help tooltips for derived metrics (strict CSP, same-origin, inline-SVG charts) |
 
 `/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
-`source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates never read
-the `payload` column (the exceptions are `/stats/guards` and `/stats/nudges`, by
-design — both roll up rare custom-event rows) and answer empty-but-200 when the
-DB backend is degraded. The git/bash guards emit a `GuardDecision` event on every
+`source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates avoid the
+`payload` column except four documented, bounded cases — `/stats/guards` and
+`/stats/nudges` (rare custom rows), `/stats/sessions`' `first_prompt` (one row
+per session), and `/stats/turns` (one session per request) — and answer
+empty-but-200 when the DB backend is degraded. The git/bash guards emit a `GuardDecision` event on every
 deny/ask (never on allow) via `lib/obs-client.mjs` — fire-and-forget, so a slow or
 absent collector never changes a guard's ruling. ctx-budget emits `NudgeFired` on
 each boundary `/compact` nudge (and later `NudgeOutcome` with acp's compliance
@@ -89,6 +91,8 @@ boundaries / cache-read a cap would avoid) — diagnostic signals, not exact bil
 | `OBS_MAX_ROWS` | `500000` | retention: keep at most this many rows |
 | `OBS_MAX_DB_MB` | `1024` | retention: size cap (freelist-aware) |
 | `OBS_ACTIVE_MS` | `600000` | stats idle threshold: session "active" + orphan-Pre cutoff |
+| `OBS_TURN_ORPHAN_MS` | `OBS_ACTIVE_MS` | `/stats/turns`: a Pre with no Post anywhere in the session older than this is `orphan` (younger = `pending`); config `{turns:{orphan_after_ms}}` wins |
+| `OBS_TURN_WAIT_CAP_MS` | `1800000` | `/stats/turns`: cap on a single permission-wait span (an overnight prompt must not devour the split); config `{turns:{wait_cap_ms}}` wins |
 | `OBS_MEGA_TURNS` | `300` | mega-session flag: main-chain messages at/above this (config.json `{mega:{turns}}` wins) |
 | `OBS_MEGA_CTX` | `300000` | mega-session flag: average context at/above this (config.json `{mega:{ctx}}` wins) |
 | `OBS_TITLE_MODEL` | `claude-haiku-4-5-20251001` | model the `title-sessions` batch calls (via the `claude` CLI) to summarise a session |
