@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.13.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed)
+const VERSION = "0.14.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1951,6 +1951,54 @@ function buildTurns(rows, now) {
   return out;
 }
 
+// #73 stage 3: per-turn cost from the usage table. MAIN-CHAIN ONLY — subagent
+// transcripts live in separate files the parser never reads (sidechain is 0 on
+// every live row), so subagent API spend is invisible here by design; a
+// subagent-heavy turn's cost is a documented undercount. One usage row lands in
+// exactly ONE bucket (no double counting): emitted-id match first, follows only
+// when emitted is EMPTY (the row after a tool-ending turn follows the previous
+// turn's ids — emitted-first blocks that misattribution), ts window last, else
+// `unattributed` — surfaced in the drill so cost never silently evaporates.
+// Mutates each turn's cost_usd (null = zero rows attributed, NEVER $0.00) and
+// returns { usage_cost_usd, unattributed_cost_usd } | null when usage is empty.
+function attachTurnCosts(all, sid) {
+  let usage;
+  try {
+    usage = db.impl.prepare(
+      `SELECT ts, model, input, output, cache_create, cache_read, cache_create_1h,
+              emitted_tool_ids, follows_tool_ids
+         FROM usage WHERE session_id = ?`
+    ).all(sid);
+  } catch (e) { logSafe("turns cost", e); usage = []; }
+  if (!usage.length) { for (const t of all) t.cost_usd = null; return null; }
+  const turnByToolId = new Map();
+  for (const t of all) for (const c of t._calls) turnByToolId.set(c.tool_use_id, t);
+  const ids = (s) => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; } };
+  const sums = new Map(); // turn → {usd, rows}
+  let total = 0, unattributed = 0;
+  for (const r of usage) {
+    const p = priceOf(r.model);
+    const usd = p ? costOf(p, r.input, r.output, r.cache_create, r.cache_read, r.cache_create_1h || 0) : 0;
+    total += usd;
+    let target = null;
+    const emitted = ids(r.emitted_tool_ids);
+    for (const id of emitted) if (turnByToolId.has(id)) { target = turnByToolId.get(id); break; }
+    if (!target && !emitted.length)
+      for (const id of ids(r.follows_tool_ids)) if (turnByToolId.has(id)) { target = turnByToolId.get(id); break; }
+    if (!target) {
+      const ts = Number(r.ts); // transcript time vs received_at — documented skew
+      target = all.find((t) => ts >= t.started_at && ts <= t.ended_at) || null;
+    }
+    if (target) { const s = sums.get(target) || { usd: 0, rows: 0 }; s.usd += usd; s.rows++; sums.set(target, s); }
+    else unattributed += usd; // inter-turn ts, resume re-ingest ghosts, retention gaps
+  }
+  for (const t of all) {
+    const s = sums.get(t);
+    t.cost_usd = s && s.rows ? roundUsd(s.usd) : null;
+  }
+  return { usage_cost_usd: roundUsd(total), unattributed_cost_usd: roundUsd(unattributed) };
+}
+
 function handleStatsTurns(req, res, u) {
   if (!statsGate(req, res)) return;
   const sid = u.searchParams.get("session_id");
@@ -1967,6 +2015,7 @@ function handleStatsTurns(req, res, u) {
          FROM events WHERE session_id = ? ORDER BY seq ASC`
     ).all(sid);
     const all = buildTurns(rows, Date.now());
+    const costs = attachTurnCosts(all, sid); // sets each turn's cost_usd (#73 stage 3)
     const strip = ({ _prompt_raw, _calls, _markers, ...s }) => s;
     if (turnParam != null && turnParam !== "") {
       const t = all.find((x) => x.turn_seq === Number(turnParam));
@@ -1987,7 +2036,11 @@ function handleStatsTurns(req, res, u) {
     }
     // limit = the LATEST N turns (audits look at recent work first)
     const turns = all.slice(-limit).map(strip);
-    json(res, 200, { session_id: sid, count: turns.length, turns });
+    json(res, 200, {
+      session_id: sid, count: turns.length, turns,
+      usage_cost_usd: costs ? costs.usage_cost_usd : null,
+      unattributed_cost_usd: costs ? costs.unattributed_cost_usd : null,
+    });
   } catch (e) { logSafe("stats turns", e); json(res, 500, { error: "query failed" }); }
 }
 
@@ -2223,7 +2276,7 @@ const DASHBOARD_JS = `(function(){
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
     "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값",
-    turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
+    turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• $ — 그 턴의 API 비용 (메인 체인만: 서브에이전트 지출은 미수집, compact 호출도 기록에 없음 → ✂ 뱃지) · 빈칸 = 귀속된 기록 없음\\n• 미귀속 — 어느 턴에도 못 붙은 비용 (턴 사이 유휴 시각·수집 공백·resume 잔재)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
     "turn-split":"턴의 벽시계 시간 3분해 — 전부 근사\\n• tool — 도구 실행 (병렬은 겹침 합집합, 이중계산 없음)\\n• wait — 권한 프롬프트 앞 사람 대기 (해당 도구 시간에서 차감 · 상한 추정 · 캡 30m)\\n• gap — 나머지 전부: 모델 생성 · API 지연 · 관측 못한 대기\\n• bg 배지 — 백그라운드 실행이라 실제 작업 시간은 관측 불가",
     "turn-flags":"기계적으로 셀 수 있는 비효율 신호 (메인 체인만 · 질적 판단은 사람 몫)\\n• dup-call — 같은 도구+같은 입력 반복 (사이에 상태 변경 있으면 정당한 재확인으로 제외)\\n• re-read — 같은 파일을 겹치는 범위로 3회+ 읽기\\n• retry-loop — 같은 호출이 에러로 3연속\\n• search-storm — 첫 Read 전에 탐색만 5배치+ (병렬 배치는 1로 접음)\\n• long-tail — 호출 하나가 턴 도구 시간의 절반+ (30s+)\\n• gap-heavy — 미분류 시간이 도구 시간의 2배+ (60s+)\\n• orphaned — 끝(Post)이 없는 호출 (1순위 원인 = 훅 가드 deny)\\n• mega-turn — 호출 30+ 또는 10분+ · 임계값은 config {turns}로 조정"
   };
@@ -2426,10 +2479,12 @@ const DASHBOARD_JS = `(function(){
     if(t.subagent_calls)meta+=" ("+t.subagent_calls+" sub)";
     if(t.queued_prompts)meta+=" · +"+t.queued_prompts+" queued";
     sm.appendChild(el("span","dim",meta));
+    if(t.cost_usd!=null)sm.appendChild(el("span","dim","  "+fmtUsd(t.cost_usd)));
     if(t.errors)sm.appendChild(el("span","err"," "+t.errors+" err"));
     if(t.orphans)sm.appendChild(el("span","warn"," "+t.orphans+" orphan"));
     var stm=statusMark(t); if(stm)sm.appendChild(stm);
     sm.appendChild(turnBadges(t));
+    if(t.precompacts)sm.appendChild(el("span","fl","✂ compact $ 미포함"));
     d.appendChild(sm);
     var body=el("div"); d.appendChild(body);
     var loaded=false;
@@ -2440,6 +2495,7 @@ const DASHBOARD_JS = `(function(){
         var lg=el("div","tsplit"); lg.appendChild(stackbar(det.turn));
         var parts="tool "+fmtDur(det.turn.tool_ms)+" · wait "+fmtDur(det.turn.wait_ms)+" · gap "+fmtDur(det.turn.gap_ms);
         if(det.turn.subagent_ms)parts+="  ·  sub "+fmtDur(det.turn.subagent_ms)+" (별도 레인)";
+        if(det.turn.cost_usd!=null)parts+="  ·  "+fmtUsd(det.turn.cost_usd)+" (메인 체인만)";
         lg.appendChild(el("span",null,parts));
         lg.appendChild(hint("turn-split"));
         body.appendChild(lg);
@@ -2472,10 +2528,13 @@ const DASHBOARD_JS = `(function(){
     var bar=el("div","tbar"); bar.appendChild(el("span",null,"turns")); bar.appendChild(hint("turns"));
     var lab=document.createElement("label"); var cb=document.createElement("input"); cb.type="checkbox";
     lab.appendChild(cb); lab.appendChild(el("span",null,"⚑ flags만")); lab.appendChild(hint("turn-flags"));
-    bar.appendChild(lab); box.appendChild(bar);
+    bar.appendChild(lab);
+    var costLine=el("span","dim",""); bar.appendChild(costLine); box.appendChild(bar);
     var list=el("div"); box.appendChild(list);
     var data=null;
     function render(){ list.textContent=""; if(!data)return;
+      costLine.textContent=data.usage_cost_usd!=null
+        ?("세션 "+fmtUsd(data.usage_cost_usd)+(data.unattributed_cost_usd?" · 미귀속 "+fmtUsd(data.unattributed_cost_usd):"")):"";
       var ts=data.turns||[];
       if(cb.checked)ts=ts.filter(function(t){ return t.flags&&t.flags.length; });
       if(!ts.length){ list.appendChild(el("div","dim",cb.checked?"no flagged turns":"no turns in window")); return; }
