@@ -91,8 +91,10 @@ WHERE pre.hook_event_type = 'PreToolUse' AND pre.tool_use_id IS NOT NULL;
 
 ### 3.2 파생 정의
 
-- **턴(turn)**: 세션 내 `UserPromptSubmit`부터 다음 `Stop`까지. 서버는 개수만 세고
-  (`SUM(hook_event_type='UserPromptSubmit')`), 구간 나누기는 드릴다운 UI가 클라이언트에서 한다(§5.3).
+- **턴(turn)**: 세션 내 `UserPromptSubmit`부터 다음 `Stop`까지. 세션 롤업은 개수만 센다
+  (`SUM(hook_event_type='UserPromptSubmit')`). 구간 나누기는 원래 드릴다운 UI가 클라이언트에서
+  했으나(§5.3), #73부터 서버 `/stats/turns`가 정식 턴 모델(경계·페어링·시간분해·flags)을
+  소유한다 — `agent-dashboard-turn-inspector-design.md` 참조.
 - **활성 세션**: `SessionEnd` 없음 + 마지막 이벤트가 10분 이내.
 - **세션 롤업** (참조 SQL — SQLite에서 boolean SUM은 0/1 합산):
 
@@ -153,7 +155,11 @@ LIMIT ?;
 
 ### 5.3 세션 드릴다운
 
-Sessions 탭에서 세션 클릭 → 기존 `GET /events?session_id=&order=asc` 재사용(서버 추가 없음).
+> **#73에서 대체됨.** 아래는 stage 8 당시 설계(클라이언트 그룹핑)의 기록이다. 현행 드릴다운은
+> 서버 `GET /stats/turns`(턴 요약 + lazy 상세)를 쓰며, 규범 문서는
+> `agent-dashboard-turn-inspector-design.md`다. `/events` 5×1000행 full-payload 페치는 제거됐다.
+
+(구) Sessions 탭에서 세션 클릭 → 기존 `GET /events?session_id=&order=asc` 재사용(서버 추가 없음).
 클라이언트가 `UserPromptSubmit`/`Stop` 경계로 턴을 나눠 접이식 워터폴로 그린다.
 턴 헤더: 프롬프트 미리보기(payload.prompt 앞 120자) · 소요시간 · 툴 호출 수 · 에러 뱃지.
 

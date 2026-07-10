@@ -511,6 +511,14 @@ process.stdout.write("\n# turn inspector (/stats/turns)\n");
   ev(540, "sess-zero", "SessionStart", ZT, { payload: { source: "resume" } });
   ev(541, "sess-zero", "UserPromptSubmit", ZT + 1000, { payload: { prompt: "제로" } });
   ev(542, "sess-zero", "Stop", ZT + 3000);
+
+  // sess-auto: a harness-injected prompt (background task-notification) starts
+  // the turn — classified `auto`, not a human question (#73 stage 2)
+  const AT = Date.now() - 1_100_000;
+  ev(550, "sess-auto", "UserPromptSubmit", AT, { payload: { prompt: "<task-notification>\n<task-id>abc123def</task-id>\n<status>completed</status>\n</task-notification>" } });
+  ev(551, "sess-auto", "PreToolUse", AT + 1000, { tool: "Read", tid: "tu-au1", payload: { tool_input: { file_path: "/tmp/out.txt" } } });
+  ev(552, "sess-auto", "PostToolUse", AT + 1300, { tool: "Read", tid: "tu-au1" });
+  ev(553, "sess-auto", "Stop", AT + 2000);
   db.close();
 }
 
@@ -592,6 +600,11 @@ check("open: the in-flight call is pending", tod.calls && tod.calls[0].status ==
 // virtual #0 folds pre-prompt residue, never judged
 const tz = await statGet(45758, "/stats/turns?session_id=sess-zero", null);
 check("zero: virtual #0 + real turn", tz.count === 2 && tz.turns[0].turn_seq === 0 && tz.turns[0].n === 0 && tz.turns[0].status === "virtual" && tz.turns[0].flags.length === 0, JSON.stringify(tz.turns && tz.turns[0]));
+check("zero: human prompt is not auto", tz.turns && tz.turns[1].auto === null, JSON.stringify(tz.turns && tz.turns[1] && tz.turns[1].auto));
+
+// harness-injected prompt classified as auto (#73 stage 2)
+const ta = await statGet(45762, "/stats/turns?session_id=sess-auto", null);
+check("auto: task-notification prompt classified", ta.turns && ta.turns[0].auto === "task-notification" && ta.turns[0].status === "complete", JSON.stringify(ta.turns && ta.turns[0] && { auto: ta.turns[0].auto, st: ta.turns[0].status }));
 
 // API contract: session_id required; unknown turn → error body
 const tbad = await statGet(45759, "/stats/turns", null);
