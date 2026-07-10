@@ -21,6 +21,9 @@
 // is the actually-invoked command with the matching subcommand — never because
 // the words "git"/"push"/"main"/"merge" merely co-occur in some argument or
 // message text (e.g. `git show main:push.txt`, or `gh pr create --title "merge"`).
+// Branch-dependent rules judge the repo each invocation actually touches:
+// Write/Edit at the target file's repo (#71), Bash git at the session cwd
+// re-anchored by any `-C <dir>` (#78).
 //
 // Mechanism: structured `permissionDecision:"deny"` + a typed reason (stdout
 // JSON + exit 0), same as bash-guard. A clean action passes silently (NOT an
@@ -76,22 +79,30 @@ const PUSH_VALUE_OPTS = new Set(["--repo", "-o", "--push-option", "--receive-pac
 // lib/shell-lex.mjs (extracted from this module for #36 so bash-guard's
 // dangerous-delete scan reads the same tokens).
 
-// Parse one segment's argv as a git invocation. Returns { subcommand, args }
-// (args = tokens after the subcommand, options included) or null when the
-// segment isn't `git` (after skipping wrappers/env-assignments and git's own
-// global options). Only the real subcommand drives the rules — not word matches.
+// Parse one segment's argv as a git invocation. Returns { subcommand, args,
+// chdirs } (args = tokens after the subcommand, options included; chdirs = the
+// `-C <dir>` values in order) or null when the segment isn't `git` (after
+// skipping wrappers/env-assignments and git's own global options). Only the
+// real subcommand drives the rules — not word matches. `-C` is both skipped
+// (so its value isn't mistaken for the subcommand) and captured (#78): the
+// command runs THERE, so branch-dependent rules must judge that repo, not the
+// session cwd. `--git-dir`/`--work-tree` stay skip-only (rare, out of scope).
 function parseGit(tokens) {
   let i = skipWrappers(tokens);
   if (i >= tokens.length) return null;
   const argv0 = tokens[i];
   if (argv0.slice(argv0.lastIndexOf("/") + 1) !== "git") return null;
   i++;
+  const chdirs = [];
   while (i < tokens.length && tokens[i].startsWith("-")) {
-    if (!tokens[i].includes("=") && GIT_GLOBAL_VALUE_OPTS.has(tokens[i])) i++; // skip its value too
+    if (!tokens[i].includes("=") && GIT_GLOBAL_VALUE_OPTS.has(tokens[i])) {
+      if (tokens[i] === "-C" && tokens[i + 1] !== undefined) chdirs.push(tokens[i + 1]);
+      i++; // skip its value too
+    }
     i++;
   }
   if (i >= tokens.length) return null; // no subcommand (e.g. `git --version`)
-  return { subcommand: tokens[i], args: tokens.slice(i + 1) };
+  return { subcommand: tokens[i], args: tokens.slice(i + 1), chdirs };
 }
 
 // Destination ref of a push refspec: `+src:dst` → dst, `main` → main,
@@ -175,14 +186,26 @@ function parseGh(tokens) {
 
 // `deny(rule, reason)` emits a GuardDecision (best-effort) then hard-denies via
 // denyPreToolUse — which exits. Sites `return deny(...)` so the scan halts.
-async function checkBash(command, branch, deny) {
+async function checkBash(command, cwd, deny) {
   // Analyse each real sub-command in isolation so a token in one segment can't
   // cross-trigger a rule meant for another, and so only an actual git/gh
   // subcommand — not a co-occurring word — fires a rule.
+  const branchCache = new Map();
+  const branchAt = (dir) => {
+    if (!branchCache.has(dir)) branchCache.set(dir, currentBranch(dir));
+    return branchCache.get(dir);
+  };
   for (const tokens of lexSegments(command)) {
     const git = parseGit(tokens);
     if (git) {
-      const { subcommand, args } = git;
+      const { subcommand, args, chdirs } = git;
+      // Branch-dependent rules judge where THIS git invocation runs: the
+      // session cwd, re-anchored by each `-C` in order (git semantics — a
+      // later relative -C is relative to the preceding one; an absolute -C
+      // resets). An unresolvable -C (unexpanded $VAR, missing dir) makes
+      // currentBranch fail → "" → fail-open, NOT a cwd fallback: guessing
+      // the wrong repo would deny legitimate work.
+      const branch = branchAt(chdirs.reduce((d, c) => path.resolve(d, c), cwd));
 
       if (args.includes("--no-verify")) {
         return deny("no-verify",
@@ -265,11 +288,11 @@ try {
     pass();
   }
 
-  // tool === "Bash" from here — commands execute at the session cwd, so the
-  // session cwd's branch is the right judge for the Bash rules.
+  // tool === "Bash" from here — commands execute at the session cwd, so it is
+  // the anchor for the Bash rules; per-segment `-C` re-anchors inside (#78).
   const command = input?.tool_input?.command;
   if (!command || !command.trim()) pass();
-  await checkBash(command, currentBranch(cwd), deny);
+  await checkBash(command, cwd, deny);
 
   pass(); // clean — defer to the normal permission flow
 } catch (err) {
