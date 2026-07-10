@@ -2,7 +2,11 @@
 // Main-branch protection + force-push + no-verify guard hook (PreToolUse).
 //
 // Blocks, via deny:
-//   - Write/Edit/MultiEdit: file edits while HEAD is a protected branch (main/master).
+//   - Write/Edit/MultiEdit: file edits when the repo the TARGET FILE lives in
+//     has a protected branch (main/master) checked out. Judged by
+//     tool_input.file_path, not the session cwd (#71) — a session parked in a
+//     main checkout may still write outside that repo, and a feature-branch
+//     session must not slip edits into another main checkout.
 //   - Bash: `git commit` on a protected branch, `git push` to a protected branch,
 //           force push (`--force`/`-f`) on any branch, and any git `--no-verify`
 //           (skipping pre-commit/pre-push hooks). `--force-with-lease` is the safe
@@ -27,6 +31,8 @@
 // destructive commands (reset --hard, clean -fd, checkout .) are bash-guard's job.
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { readHookInput, denyPreToolUse, pass, failOpen } from "../../lib/hook-io.mjs";
 import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
 import { emitGuardDecision } from "../../lib/obs-client.mjs";
@@ -41,6 +47,20 @@ function currentBranch(cwd) {
   });
   if (r.error || r.status !== 0) return "";
   return (r.stdout || "").trim();
+}
+
+// Nearest existing ancestor of `dir` (inclusive), or null when even the root
+// doesn't exist. `git -C` demands an existing directory, and a Write may
+// target a not-yet-created subtree — without the walk, a new-directory Write
+// inside a protected checkout would fail open on `git -C <missing>` (exit 128).
+function nearestExistingDir(dir) {
+  let d = dir;
+  while (!existsSync(d)) {
+    const parent = path.dirname(d);
+    if (parent === d) return null;
+    d = parent;
+  }
+  return d;
 }
 
 // git *global* options that consume the following token as their value, e.g.
@@ -216,7 +236,6 @@ try {
   if (tool !== "Bash" && !isEdit) pass(); // not our concern
 
   const cwd = input?.cwd ?? process.cwd();
-  const branch = currentBranch(cwd);
 
   // Emit a GuardDecision (best-effort, never blocks) then hard-deny. The emit
   // failing/hanging/absent can NEVER change the decision — deny always runs.
@@ -226,6 +245,17 @@ try {
   };
 
   if (isEdit) {
+    // Judge by the repo the target file lives in, not the session cwd (#71).
+    // `path.dirname` alone is wrong twice over: a missing file_path must fall
+    // back to cwd BEFORE dirname (dirname("") is "." = the hook process's cwd,
+    // not the session's), and a relative file_path must be anchored at the
+    // session cwd first (resolve), or `git -C` reads it against the hook
+    // process's cwd.
+    const fp = input?.tool_input?.file_path;
+    const anchor = fp
+      ? nearestExistingDir(path.dirname(path.resolve(cwd, String(fp)))) ?? cwd
+      : cwd;
+    const branch = currentBranch(anchor);
     if (PROTECTED.has(branch)) {
       await deny("protected-edit",
         `'${branch}' 브랜치에서 파일 수정 거부 — 작업용 feature/* 또는 fix/* 브랜치를 ` +
@@ -235,10 +265,11 @@ try {
     pass();
   }
 
-  // tool === "Bash" from here.
+  // tool === "Bash" from here — commands execute at the session cwd, so the
+  // session cwd's branch is the right judge for the Bash rules.
   const command = input?.tool_input?.command;
   if (!command || !command.trim()) pass();
-  await checkBash(command, branch, deny);
+  await checkBash(command, currentBranch(cwd), deny);
 
   pass(); // clean — defer to the normal permission flow
 } catch (err) {
