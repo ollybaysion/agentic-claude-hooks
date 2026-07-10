@@ -6,7 +6,8 @@
 - **Mechanism**: 위반 시 구조화된 `permissionDecision:"deny"` + 타입화된 이유 (stdout JSON + exit 0) — bash-guard와 동일
 - **Requirement**: Node.js + `git` (PATH). git 저장소가 아니거나 git이 없으면 **fail-open**
 - **argv 기반 탐지**: 명령을 `;` `&&` `||` `|` `&` 줄바꿈·명령치환(`$(…)`/백틱)으로 쪼개 **각 조각을 따옴표 인식 argv로 토큰화**한 뒤, 실제 `git`/`gh` 서브커맨드(`push`/`commit`/`merge`, `gh pr merge`, `gh api …/pulls/<n>/merge`)일 때만 규칙을 건다. 단어 `push`·`main`·`merge`가 인자·메시지에 **우연히 함께 나온다고** 걸리지 않음 — 예: `git show main:push.txt`, `gh pr create --title "merge …"`는 통과. `push` 대상은 refspec 목적지에서만 `main`/`master`를, 머지 API는 **PUT**만 매칭(조회성 GET·`--help`는 통과)
-- **Write/Edit 판정 기준 = 대상 파일**: Write/Edit/MultiEdit은 세션 cwd가 아니라 **`file_path`가 속한 저장소**의 브랜치로 판정한다(#71). cwd가 main 체크아웃이어도 저장소 밖·다른 워크트리 파일은 통과하고, 반대로 cwd가 어디든 main 체크아웃 안 파일은 차단. 상대경로는 세션 cwd 기준으로 해석, 아직 없는 디렉토리는 존재하는 조상으로 판정. Bash 규칙은 명령이 cwd에서 실행되므로 기존대로 세션 cwd 기준
+- **Write/Edit 판정 기준 = 대상 파일**: Write/Edit/MultiEdit은 세션 cwd가 아니라 **`file_path`가 속한 저장소**의 브랜치로 판정한다(#71). cwd가 main 체크아웃이어도 저장소 밖·다른 워크트리 파일은 통과하고, 반대로 cwd가 어디든 main 체크아웃 안 파일은 차단. 상대경로는 세션 cwd 기준으로 해석, 아직 없는 디렉토리는 존재하는 조상으로 판정
+- **Bash 판정 기준 = 실행 저장소**: 브랜치 의존 규칙(commit/merge/bare push)은 세션 cwd 기준이되, **`git -C <dir>`가 있으면 그 디렉토리로 재앵커**한다(#78) — `git -C <main 체크아웃> commit`은 어디서 치든 차단, `git -C <feature 워크트리> commit`은 cwd가 main이어도 통과. 복수 `-C`는 git 시맨틱대로 순차 결합, 상대경로는 세션 cwd 기준. 미확장 변수(`-C "$WT"`)·비존재 경로는 판정 불가 → **fail-open**(cwd 폴백으로 오탐 내지 않음)
 - **범위**: main 보호 + force-push + `--no-verify` + PR 머지 차단. `reset --hard`·`clean`·`checkout .`은 **bash-guard** 소관
 
 ## 차단 규칙
@@ -14,13 +15,13 @@
 | 도구 | 조건 | 차단 이유 |
 | --- | --- | --- |
 | `Write`/`Edit`/`MultiEdit` | **`file_path`가 속한 저장소**의 HEAD가 `main`/`master` | 보호 브랜치 직접 수정 → "브랜치 먼저" |
-| `Bash` (`git commit`) | 현재 HEAD가 `main`/`master` | 보호 브랜치 직접 커밋 |
+| `Bash` (`git commit`) | 실행 저장소(`-C` 반영)의 HEAD가 `main`/`master` | 보호 브랜치 직접 커밋 |
 | `Bash` (`git push`) | 대상이 `main`/`master` | 보호 브랜치로 직접 push → PR로 |
 | `Bash` (`git push`) | `--force` / `-f` | force push (히스토리 덮어쓰기). `--force-with-lease`는 허용 |
 | `Bash` (모든 git) | `--no-verify` | pre-commit/pre-push 훅 우회 |
 | `Bash` (`gh pr merge`) | 모든 플래그 변형(`--merge`/`--squash`/`--rebase`/`--auto`/`--admin`) | 에이전트 PR 머지 → 사람이 리뷰 후 직접 (`--help`은 통과) |
 | `Bash` (`gh api`) | `pulls/<n>/merge` 엔드포인트에 `PUT` | REST 우회 머지 (조회성 `GET`은 통과) |
-| `Bash` (`git merge`) | 현재 HEAD가 `main`/`master` | 저수준 머지 우회 (`--abort`/`--continue`/`--quit`은 통과) |
+| `Bash` (`git merge`) | 실행 저장소(`-C` 반영)의 HEAD가 `main`/`master` | 저수준 머지 우회 (`--abort`/`--continue`/`--quit`은 통과) |
 
 > 왜 hook인가: "지금 어느 브랜치냐"는 **git 상태**가 필요해서 — 상태 없는 명령 매처(bash-guard)로는 불가능. main 보호·force-push·no-verify는 git-guard, 그 외 파괴적 명령은 bash-guard로 경계가 깔끔하다.
 >
