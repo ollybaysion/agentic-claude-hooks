@@ -119,6 +119,36 @@ for (const [expected, event, note] of EDIT_CASES) {
   console.log(`${ok ? "ok  " : "FAIL"} ${expected.padEnd(4)} ${note}\n     ${where}${ok ? "" : ` → got ${got}`}`);
 }
 
+// ---- Bash `-C` anchoring (#78): rules judge where the git command runs ----
+// [expected, cwd, command, note]
+const BASH_C_CASES = [
+  ["deny", PLAIN, `git -C ${MAIN_REPO} commit -m x`,
+    "#78: cwd=non-repo, -C into a main checkout (the protection gap)"],
+  ["pass", MAIN_REPO, `git -C ${FEAT_REPO} commit -m x`,
+    "#78: cwd=main repo, -C into a feature checkout (skill workflow)"],
+  ["deny", MAIN_REPO, "git commit -m x",
+    "no -C → session cwd still judges (pre-#78 behaviour kept)"],
+  ["deny", PLAIN, `git -C ${MAIN_REPO} merge feat/x`,
+    "-C into a main checkout, low-level merge"],
+  ["deny", PLAIN, `git -C ${MAIN_REPO} push`,
+    "bare push pushes the -C repo's current branch (main)"],
+  ["pass", PLAIN, `git -C ${MAIN_REPO} push origin feat/x`,
+    "-C into main checkout but refspec targets a feature branch"],
+  ["deny", FIX, "git -C main-repo commit -m x",
+    "relative -C resolves against the session cwd"],
+  ["deny", PLAIN, `git -C ${FIX} -C main-repo commit -m x`,
+    "multiple -C compose (later relative is relative to the former)"],
+  ["pass", MAIN_REPO, 'git -C "$WT" commit -m x',
+    "unexpanded $VAR in -C → unresolvable → fail-open, no cwd fallback"],
+];
+
+for (const [expected, cwd, command, note] of BASH_C_CASES) {
+  const got = decideEvent({ tool_name: "Bash", cwd, tool_input: { command } });
+  const ok = got === expected;
+  if (!ok) failed++;
+  console.log(`${ok ? "ok  " : "FAIL"} ${expected.padEnd(4)} ${note}\n     cwd=${cwd} ${JSON.stringify(command)}${ok ? "" : ` → got ${got}`}`);
+}
+
 rmSync(FIX, { recursive: true, force: true });
 
 console.log(failed ? `\n${failed} FAILED` : "\nall passed");
