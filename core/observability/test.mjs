@@ -519,6 +519,20 @@ process.stdout.write("\n# turn inspector (/stats/turns)\n");
   ev(551, "sess-auto", "PreToolUse", AT + 1000, { tool: "Read", tid: "tu-au1", payload: { tool_input: { file_path: "/tmp/out.txt" } } });
   ev(552, "sess-auto", "PostToolUse", AT + 1300, { tool: "Read", tid: "tu-au1" });
   ev(553, "sess-auto", "Stop", AT + 2000);
+
+  // #73 stage 3 — usage rows for sess-turn (opus-4-8: in $5/M · out $25/M).
+  // One row → one bucket: u1 emitted→T1($0.5), u2 follows-with-empty-emitted→T1
+  // ($0.5), u3 id-less ts inside T2→T2($1.0), u4 id-less inter-turn ts→
+  // unattributed($0.5), u5 emitted(T5)+follows(T4)→emitted wins→T5($1.0).
+  const insU = db.prepare(`INSERT INTO usage
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)`);
+  const uMODEL = "claude-opus-4-8";
+  insU.run("sess-turn", "u1", "testapp", BT + 500, uMODEL, 100000, 0, 0, 0, 0, '["tu-a"]', "[]");
+  insU.run("sess-turn", "u2", "testapp", BT + 2500, uMODEL, 0, 20000, 0, 0, 0, "[]", '["tu-b"]');
+  insU.run("sess-turn", "u3", "testapp", BT + 61000, uMODEL, 200000, 0, 0, 0, 0, "[]", "[]");
+  insU.run("sess-turn", "u4", "testapp", BT + 100000, uMODEL, 100000, 0, 0, 0, 0, "[]", "[]");
+  insU.run("sess-turn", "u5", "testapp", BT + 186100, uMODEL, 0, 40000, 0, 0, 0, '["tu-z1"]', '["tu-g1"]');
   db.close();
 }
 
@@ -605,6 +619,14 @@ check("zero: human prompt is not auto", tz.turns && tz.turns[1].auto === null, J
 // harness-injected prompt classified as auto (#73 stage 2)
 const ta = await statGet(45762, "/stats/turns?session_id=sess-auto", null);
 check("auto: task-notification prompt classified", ta.turns && ta.turns[0].auto === "task-notification" && ta.turns[0].status === "complete", JSON.stringify(ta.turns && ta.turns[0] && { auto: ta.turns[0].auto, st: ta.turns[0].status }));
+
+// #73 stage 3 — per-turn cost: one usage row lands in exactly one bucket
+check("cost: emitted→T1 + follows(empty emitted)→T1 = $1.0", T1 && approx(T1.cost_usd, 1.0), T1 && String(T1.cost_usd));
+check("cost: id-less row falls to the ts window (T2 $1.0)", T2 && approx(T2.cost_usd, 1.0), T2 && String(T2.cost_usd));
+check("cost: zero attributed rows → null, never $0.00", T3 && T3.cost_usd === null && T4 && T4.cost_usd === null && T6 && T6.cost_usd === null, JSON.stringify([T3 && T3.cost_usd, T4 && T4.cost_usd, T6 && T6.cost_usd]));
+check("cost: emitted wins over follows (T5 $1.0, not T4)", T5 && approx(T5.cost_usd, 1.0), T5 && String(T5.cost_usd));
+check("cost: session total 3.5 / unattributed 0.5 (inter-turn ts)", approx(tu.usage_cost_usd, 3.5) && approx(tu.unattributed_cost_usd, 0.5), JSON.stringify({ t: tu.usage_cost_usd, u: tu.unattributed_cost_usd }));
+check("cost: session without usage → totals null + turn cost null", tr.usage_cost_usd === null && tr.unattributed_cost_usd === null && tr.turns[0].cost_usd === null, JSON.stringify({ t: tr.usage_cost_usd, c: tr.turns && tr.turns[0].cost_usd }));
 
 // API contract: session_id required; unknown turn → error body
 const tbad = await statGet(45759, "/stats/turns", null);
