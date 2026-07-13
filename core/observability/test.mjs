@@ -120,6 +120,18 @@ function get(port, p) {
     }).on("error", reject);
   });
 }
+function postJson(port, p, body) {
+  return new Promise((resolve, reject) => {
+    const data = Buffer.from(JSON.stringify(body || {}));
+    const req = http.request(
+      { host: "127.0.0.1", port, path: p, method: "POST",
+        headers: { Host: "127.0.0.1", "content-type": "application/json", "content-length": data.length } },
+      (res) => { const c = []; res.on("data", (x) => c.push(x));
+        res.on("end", () => { let j = null; try { j = JSON.parse(Buffer.concat(c).toString()); } catch {}
+          resolve({ status: res.statusCode, body: j }); }); });
+    req.on("error", reject); req.write(data); req.end();
+  });
+}
 async function waitHealth(port, tries = 60) {
   for (let i = 0; i < tries; i++) {
     try { await get(port, "/health"); return true; } catch { await new Promise((r) => setTimeout(r, 100)); }
@@ -896,6 +908,67 @@ process.stdout.write("\n# enrich apply/promote log (/stats/schema-docs)\n");
   } finally {
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+  }
+}
+
+// ══ #112 — dashboard promote (POST /actions/schema-docs/promote, stage 2) ══════
+// The write half: a human clicks 승격 → the collector delegates to the
+// db-schema-apply CLI (`promote --all --write`), which rewrites the doc and emits
+// SchemaDocPromote. Assert the gate (allowlist / method / body), the file rewrite,
+// idempotency, and that the emit lands in the activity log.
+process.stdout.write("\n# dashboard promote (POST /actions/schema-docs/promote)\n");
+{
+  // fixture: one indexed doc with 2 inferred slots — a manual purpose region and
+  // the 5th (설명) cell of a column row, the exact shape apply.mjs promote rewrites.
+  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-promote-"));
+  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
+  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
+    JSON.stringify([{ keywords: ["sensor"], path: ".claude/docs/db/sensor.md" }]));
+  const docPath = path.join(H, ".claude", "docs", "db", "sensor.md");
+  fs.writeFileSync(docPath,
+    "# TESTUSER.SENSOR\n\n" +
+    "<!-- dbdoc:manual:purpose -->\n추정) 센서 원장 [근거: repo/schema.ts:24]\n<!-- dbdoc:end:purpose -->\n\n" +
+    "<!-- dbdoc:auto:columns -->\n| 컬럼 | 타입 | 널 | 기본값 | 설명 |\n| --- | --- | --- | --- | --- |\n" +
+    "| SNSR_ID | VARCHAR2(20) | N | - | 추정) 센서 ID [근거: repo/schema.ts:27] |\n<!-- dbdoc:end:columns -->\n");
+
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45782", OBS_DOCS_HOME: H }, stdio: "ignore" });
+  try {
+    await waitHealth(45782);
+    const before = (fs.readFileSync(docPath, "utf8").match(/추정\)/g) || []).length;
+    check("promote: fixture has 2 inferred before", before === 2, String(before));
+
+    const g = await get(45782, "/actions/schema-docs/promote").catch(() => null);
+    check("promote: GET is rejected (POST-only)", g && g.error, JSON.stringify(g));
+
+    const outside = await postJson(45782, "/actions/schema-docs/promote", { path: path.join(H, "secret.md") });
+    check("promote: path outside doc allowlist → 403/404", outside.status === 403 || outside.status === 404, JSON.stringify(outside.status));
+
+    const nopath = await postJson(45782, "/actions/schema-docs/promote", {});
+    check("promote: missing path → 400", nopath.status === 400, JSON.stringify(nopath.status));
+
+    const ok = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
+    check("promote: 200 + promoted purpose+column, remaining 0",
+      ok.status === 200 && ok.body && ok.body.ok && ok.body.promoted_count === 2 && ok.body.remaining_inferred === 0,
+      JSON.stringify(ok.body));
+
+    const after = fs.readFileSync(docPath, "utf8");
+    check("promote: file rewritten, 추정) stripped (evidence kept)", !/추정\)/.test(after) && /센서 원장 \[근거:/.test(after), String((after.match(/추정\)/g) || []).length));
+
+    const again = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
+    check("promote: idempotent second run → 0 promoted", again.status === 200 && again.body.promoted_count === 0, JSON.stringify(again.body));
+
+    // the CLI emitted SchemaDocPromote → appears in history (poll for the async commit)
+    let sawPromote = false;
+    for (let i = 0; i < 20 && !sawPromote; i++) {
+      const sd = await get(45782, "/stats/schema-docs?window=90d").catch(() => ({}));
+      if ((sd.history || []).some((h) => h.type === "promote" && /sensor\.md$/.test(h.doc || ""))) sawPromote = true;
+      else await new Promise((r) => setTimeout(r, 100));
+    }
+    check("promote: emitted SchemaDocPromote lands in history", sawPromote, "polled 2s");
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
   }
 }
 

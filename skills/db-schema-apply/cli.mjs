@@ -14,6 +14,7 @@
 //
 // Exit: 0 ok, 1 fatal/usage, 2 apply hit a confirmed slot it left untouched.
 
+import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { applyProposal, promote } from "./apply.mjs";
