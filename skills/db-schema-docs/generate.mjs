@@ -4,8 +4,14 @@
 // Input: a JSON file holding one describe_table result (agent-db-plugin MCP
 // tool output shape), or an array of them (optionally each with an extra
 // `tableComment` seeded from list_tables). It renders/regenerates each table's
-// doc under <cwd>/.claude/docs/db/ and upserts
-// <cwd>/.claude/context-docs.db-schema.json.
+// doc under <base>/.claude/docs/db/ and upserts
+// <base>/.claude/context-docs.db-schema.json.
+//
+// <base> defaults to the HOME directory — the keyword-docs USER layer, read in
+// every repo (issue #84: DB docs are consumed from many repos, so one copy in
+// ~/.claude beats per-repo copies). Pass --cwd REPO_ROOT to write into that
+// repo's project layer instead (committed, team-shared; project > user
+// shadowing makes the repo copy win there).
 //
 // DEFAULT IS DRY-RUN: it prints the rendered docs and does not touch disk. Pass
 // --write to actually write — the skill shows the dry-run for approval first.
@@ -18,6 +24,7 @@
 
 import { readFile, writeFile, mkdir, access } from "node:fs/promises";
 import { join, dirname } from "node:path";
+import { homedir } from "node:os";
 
 import { renderDoc, upsertIndexEntry, docRelPath, WIDE_TABLE_COLUMNS } from "./render.mjs";
 
@@ -50,8 +57,8 @@ async function readJson(path) {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const cwd = args.cwd ?? process.cwd();
-  const indexPath = args.index ?? join(cwd, ".claude", "context-docs.db-schema.json");
+  const base = args.cwd ?? homedir(); // default: user layer (~/.claude), see header
+  const indexPath = args.index ?? join(base, ".claude", "context-docs.db-schema.json");
 
   const raw = await readJson(args.describe);
   const tables = Array.isArray(raw) ? raw : [raw];
@@ -66,7 +73,7 @@ async function main() {
       console.error("skip: owner/table 없는 항목");
       continue;
     }
-    const docAbs = join(cwd, docRelPath(desc.table));
+    const docAbs = join(base, docRelPath(desc.table));
     const existing = (await exists(docAbs)) ? await readFile(docAbs, "utf8") : null;
     const res = renderDoc(desc, { tableComment: desc.tableComment ?? null, existing });
 
