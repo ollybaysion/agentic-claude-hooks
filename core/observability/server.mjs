@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.15.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again)
+const VERSION = "0.15.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -2154,6 +2154,7 @@ tbody tr.sess{cursor:pointer}
 .stitle.prov{color:#8b949e;font-style:italic}
 .stitle.dim{color:#6b7686}
 .ssub{font-size:11px;color:#6b7686;margin-top:1px}
+.tprompt{white-space:pre-wrap;overflow-wrap:anywhere;color:#c8d0dc;background:#0d1119;border:1px solid #1c2230;border-radius:5px;padding:8px 11px;margin:2px 0 10px;max-height:260px;overflow:auto;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
 #fleet .tt{display:inline-block;vertical-align:bottom;max-width:34ch;overflow:hidden;text-overflow:ellipsis;color:#d6deea}
 .toolbar{display:flex;gap:10px;align-items:center;padding:8px 16px;color:#6b7686;font-size:12px}
 select{background:#11161f;color:#c8d0dc;border:1px solid #1c2230;border-radius:4px;font:inherit;padding:2px 6px}
@@ -2416,7 +2417,7 @@ const DASHBOARD_JS = `(function(){
       c.appendChild(el("span","dot","●"));
       c.appendChild(el("span","app",f.app||"?"));
       c.appendChild(el("span","dim",sid.slice(0,8)));
-      if(f.title)c.appendChild(el("span","tt",f.title));
+      if(f.title){var tt=el("span","tt",f.title);tt.title=f.title;c.appendChild(tt);}
       if(f.what)c.appendChild(el("span","what",f.what));
       c.appendChild(el("span","ago",fmtAgo(f.last_at)));
       if(f.ctx)c.appendChild(el("span","dim","ctx "+fmtTok(f.ctx)));
@@ -2555,6 +2556,7 @@ const DASHBOARD_JS = `(function(){
       body.appendChild(el("div","dim","loading…"));
       getJson("/stats/turns?session_id="+encodeURIComponent(sid)+"&turn="+t.turn_seq).then(function(det){
         body.textContent="";
+        if(det.prompt_full){ body.appendChild(el("div","tprompt",det.prompt_full)); }
         var lg=el("div","tsplit"); lg.appendChild(stackbar(det.turn));
         var parts="tool "+fmtDur(det.turn.tool_ms)+" · wait "+fmtDur(det.turn.wait_ms)+" · gap "+fmtDur(det.turn.gap_ms);
         if(det.turn.subagent_ms)parts+="  ·  sub "+fmtDur(det.turn.subagent_ms)+" (별도 레인)";
