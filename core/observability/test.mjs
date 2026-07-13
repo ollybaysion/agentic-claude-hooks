@@ -866,6 +866,39 @@ function getRaw(port, p) {
   }
 }
 
+// ══ #90 — enrich apply/promote activity log (/stats/schema-docs, events only) ══
+// The review "queue" folded into the keyword-docs corpus table's 추정) column: a
+// live /docs file scan whose tiers.inferred is asserted in the docs-viewer test
+// above. This endpoint is now the events-only apply/promote HISTORY under it.
+process.stdout.write("\n# enrich apply/promote log (/stats/schema-docs)\n");
+{
+  // seed apply/promote events into the shared DB
+  const db = new DatabaseSync(DB_PATH);
+  const insSD = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  const SDT = Date.now();
+  insSD.run(90001, "sd0", "db-schema-enrich", "enrich", "SchemaDocApply", SDT,
+    JSON.stringify({ doc: "sensor.md", filled: [{ slot: "purpose" }, { slot: "column:SNSR_ID" }], skipped: [] }));
+  insSD.run(90002, "sd1", "db-schema-enrich", "enrich", "SchemaDocPromote", SDT + 1,
+    JSON.stringify({ doc: "sensor.md", promoted: ["purpose"] }));
+  db.close();
+
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45781" }, stdio: "ignore" });
+  try {
+    await waitHealth(45781);
+    const sd = await get(45781, "/stats/schema-docs?window=90d");
+    check("schema-docs: events-only now (no file-scan queue)", sd.queue === undefined, JSON.stringify(Object.keys(sd)));
+    check("schema-docs: history totals from apply/promote events",
+      sd.totals.applies === 1 && sd.totals.promotes === 1 && sd.totals.promoted_slots === 1 && sd.totals.filled_slots === 2,
+      JSON.stringify(sd.totals));
+    const ap = (sd.history || []).find((h) => h.type === "apply");
+    const pr = (sd.history || []).find((h) => h.type === "promote");
+    check("schema-docs: history entries carry doc + counts", ap && ap.doc === "sensor.md" && ap.filled === 2 && pr && pr.promoted === 1, JSON.stringify({ ap, pr }));
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+  }
+}
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);
