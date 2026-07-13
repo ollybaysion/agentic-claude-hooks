@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.15.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand)
+const VERSION = "0.16.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -386,7 +386,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 6;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage)
+  impl.exec("PRAGMA user_version = 7;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage) · v7 = + turns/turn_cursor + usage.inserted_at (#82 fleet turn materialization)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -429,6 +429,7 @@ function initSchema(impl) {
     cache_create_1h INTEGER NOT NULL DEFAULT 0,
     sidechain INTEGER NOT NULL DEFAULT 0,
     agent_id TEXT,
+    inserted_at INTEGER,
     emitted_tool_ids TEXT NOT NULL DEFAULT '[]',
     follows_tool_ids TEXT NOT NULL DEFAULT '[]',
     UNIQUE(session_id, msg_id))`);
@@ -462,6 +463,14 @@ function initSchema(impl) {
         ALTER TABLE transcript_cursor_v6 RENAME TO transcript_cursor;`);
     } catch (e) { logSafe("migrate v6 cursor", e); } // fresh DB / already rebuilt
   }
+  // v6→v7 (#82): fleet turn materialization. `usage.inserted_at` is the ARRIVAL
+  // time (Date.now() at insert/update) — the watermark the materializer polls, so
+  // late usage whose transcript `ts` is OLD (subagent tails) or a `--rescan` that
+  // rewrites cost without moving `ts` still triggers a re-materialization.
+  if (exists && prevVersion < 7) {
+    try { impl.exec("ALTER TABLE usage ADD COLUMN inserted_at INTEGER"); }
+    catch (e) { logSafe("migrate v7 usage", e); } // already present → ignore
+  }
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id, ts)");
   impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor (
@@ -478,6 +487,42 @@ function initSchema(impl) {
   impl.exec(`CREATE TABLE IF NOT EXISTS session_titles (
     session_id TEXT PRIMARY KEY, title TEXT NOT NULL,
     prompt_count INTEGER NOT NULL DEFAULT 0, generated_at INTEGER NOT NULL)`);
+  // #82: materialized SETTLED turns — one summary row per turn, computed ONCE by
+  // running the same buildTurns/attachTurnCosts as the drill-down and persisting
+  // the output. Fleet aggregates read this (cheap SQL) and it OUTLIVES `events`
+  // (retention never trims this table). Never holds the open/last turn (§3 settle
+  // rule); `subagent_ms` is deliberately absent (post-stop tail time keeps growing).
+  impl.exec(`CREATE TABLE IF NOT EXISTS turns (
+    session_id TEXT NOT NULL, turn_seq INTEGER NOT NULL,
+    source_app TEXT NOT NULL, n INTEGER NOT NULL,
+    status TEXT NOT NULL, auto TEXT,
+    started_at INTEGER NOT NULL, ended_at INTEGER NOT NULL, duration_ms INTEGER NOT NULL,
+    tool_ms INTEGER NOT NULL, wait_ms INTEGER NOT NULL, gap_ms INTEGER NOT NULL,
+    calls INTEGER NOT NULL, subagent_calls INTEGER NOT NULL, distinct_tools INTEGER NOT NULL,
+    errors INTEGER NOT NULL, orphans INTEGER NOT NULL, dup_calls INTEGER NOT NULL,
+    guard_denies INTEGER NOT NULL, queued_prompts INTEGER NOT NULL, precompacts INTEGER NOT NULL,
+    cost_usd REAL, cost_subagent_usd REAL, cost_has_gap INTEGER NOT NULL DEFAULT 0,
+    flags TEXT NOT NULL DEFAULT '[]', flags_mask INTEGER NOT NULL DEFAULT 0,
+    config_ver INTEGER NOT NULL, materialized_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, turn_seq))`);
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_turns_app_time ON turns(source_app, started_at)");
+  impl.exec("CREATE INDEX IF NOT EXISTS idx_turns_time ON turns(started_at)");
+  // Per-session materialization watermark + completeness anchor. `frozen`=1 means
+  // early events were trimmed (current MIN(seq) rose above the anchor) → the
+  // session can no longer be re-derived correctly, so we FREEZE it: keep the good
+  // historical rows, never re-run buildTurns over the truncated stream.
+  impl.exec(`CREATE TABLE IF NOT EXISTS turn_cursor (
+    session_id TEXT PRIMARY KEY,
+    materialized_through_seq INTEGER NOT NULL DEFAULT 0,
+    min_event_seq_seen INTEGER NOT NULL DEFAULT 0,
+    usage_epoch_seen INTEGER NOT NULL DEFAULT 0,
+    last_turn_seq INTEGER NOT NULL DEFAULT 0,
+    unattributed_cost_usd REAL,
+    config_ver INTEGER NOT NULL DEFAULT 0,
+    session_ended INTEGER NOT NULL DEFAULT 0,
+    frozen INTEGER NOT NULL DEFAULT 0,
+    stale_config INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL)`);
 }
 
 function toRow(r) {
@@ -562,6 +607,10 @@ function runRetention() {
   try {
     if (!db) return;
     flush();
+    // §7: capture settled turns BEFORE their events are trimmed. Retention evicts
+    // by rows/size (no age floor), so a burst can drop recent events fast — the
+    // materialized rows must already exist by then, or fleet history has a hole.
+    try { materializeSweep(Date.now(), 100_000); } catch (e) { logSafe("retention materialize", e); }
     archiveAndDeletePaged("received_at < ?", [Date.now() - MAX_AGE_MS]); // by age
     archiveAndDeletePaged("seq <= (SELECT MAX(seq) - ? FROM events)", [MAX_ROWS]); // by rows
     // size cap: page_count only shrinks after incremental_vacuum returns pages
@@ -1048,8 +1097,8 @@ function parseSessionTranscripts(sessionId, tPath, app) {
 // feeds the NEXT call's input, so that is where its input cost lands.
 function ingestUsageLines(sessionId, app, text, lastEmitted, agentId) {
   const ins = db.impl.prepare(`INSERT OR IGNORE INTO usage
-    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, agent_id, emitted_tool_ids, follows_tool_ids)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, agent_id, inserted_at, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const sel = db.impl.prepare("SELECT emitted_tool_ids FROM usage WHERE session_id = ? AND msg_id = ?");
   // On conflict (rescan, or a message straddling a read boundary) refresh the
   // token/TTL columns from this parse and UNION the tool ids. The numbers are
@@ -1059,13 +1108,13 @@ function ingestUsageLines(sessionId, app, text, lastEmitted, agentId) {
   // first insert set it (unchanged from prior behaviour).
   const upd = db.impl.prepare(`UPDATE usage SET
     ts = ?, model = ?, input = ?, output = ?, cache_create = ?, cache_read = ?, cache_create_1h = ?,
-    emitted_tool_ids = ? WHERE session_id = ? AND msg_id = ?`);
+    inserted_at = ?, emitted_tool_ids = ? WHERE session_id = ? AND msg_id = ?`);
   let cur = null, last = lastEmitted;
   const flush = () => {
     if (!cur) return;
     try {
       const info = ins.run(sessionId, cur.id, app, cur.ts, cur.model,
-        cur.input, cur.output, cur.cc, cur.cr, cur.cc1h, cur.side, agentId ?? null,
+        cur.input, cur.output, cur.cc, cur.cr, cur.cc1h, cur.side, agentId ?? null, Date.now(),
         JSON.stringify(cur.emitted), JSON.stringify(cur.follows));
       if (info.changes === 0) {
         // row already existed (rescan / straddled pass) → refresh columns and
@@ -1075,7 +1124,7 @@ function ingestUsageLines(sessionId, app, text, lastEmitted, agentId) {
         if (row) { try { old = JSON.parse(row.emitted_tool_ids) || []; } catch {} }
         const merged = cur.emitted.length ? [...new Set([...old, ...cur.emitted])] : old;
         upd.run(cur.ts, cur.model, cur.input, cur.output, cur.cc, cur.cr, cur.cc1h,
-          JSON.stringify(merged), sessionId, cur.id);
+          Date.now(), JSON.stringify(merged), sessionId, cur.id);
       }
     } catch (e) { logSafe("usage row", e); }
     if (!cur.side) last = cur.emitted;
@@ -2060,6 +2109,196 @@ function attachTurnCosts(all, sid) {
   return { usage_cost_usd: roundUsd(total), unattributed_cost_usd: roundUsd(unattributed) };
 }
 
+// ── #82 fleet turn materialization ──────────────────────────────────────────
+// Persist SETTLED turns (one summary row each) by RE-RUNNING buildTurns +
+// attachTurnCosts per session and writing the output — buildTurns stays the
+// single source of truth (fleet aggregates and the drill-down agree by
+// construction). Runs IN-PROCESS on the shared db.impl connection: buildTurns is
+// milliseconds (not the blocking LLM the titler needs a detached child for), so
+// writes serialize on the event loop and there is NO cross-connection WAL
+// contention / spill risk. The design's adversarial review forced five guards,
+// tagged inline: [gate] [reconcile] [freeze] [arrival-wm] [residual].
+const TURN_MAT_AUTO = process.env.OBS_TURN_MAT !== "0";
+const TURN_MAT_INTERVAL_MS = intEnv("OBS_TURN_MAT_INTERVAL_SEC", 120) * 1000;
+const TURN_MAT_LIMIT = intEnv("OBS_TURN_MAT_LIMIT", 50); // sessions per auto tick (bounds event-loop stall)
+
+const FLAG_BIT = { // 8 inefficiency flags → bitmask (fixed order, append-only)
+  "dup-call": 1, "re-read": 2, "retry-loop": 4, "search-storm": 8,
+  "long-tail": 16, "gap-heavy": 32, "orphaned": 64, "mega-turn": 128,
+};
+function flagsMask(flags) { let m = 0; for (const f of flags || []) m |= (FLAG_BIT[f] || 0); return m; }
+
+// Stable hash of the flag-affecting config; a change makes non-frozen sessions
+// candidates so their flags recompute against the new thresholds (§8).
+function configVer() {
+  const parts = Object.keys(TURN_FLAGS).sort().map((k) => k + "=" + TURN_FLAGS[k]);
+  parts.push("orphan=" + TURN_ORPHAN_MS, "waitcap=" + TURN_WAIT_CAP_MS);
+  const s = parts.join("|");
+  let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+  return h;
+}
+
+// same events as the drill-down (handleStatsTurns) + source_app for the fleet axis
+function turnEventsForSession(sid) {
+  return db.impl.prepare(
+    `SELECT seq, hook_event_type AS type, tool_name, tool_use_id, agent_id, error, received_at, source_app,
+            CASE WHEN hook_event_type IN ('UserPromptSubmit','PreToolUse','Notification','GuardDecision')
+                 THEN payload END AS payload
+       FROM events WHERE session_id = ? ORDER BY seq ASC`
+  ).all(sid);
+}
+// [arrival-wm] session usage watermark = MAX(inserted_at) (arrival time), NOT
+// MAX(ts) — late subagent-tail rows carry mid-session ts, and a --rescan rewrites
+// cost without moving ts, so a ts watermark would miss both.
+function sessionUsageEpoch(sid) {
+  try { const r = db.impl.prepare("SELECT MAX(inserted_at) AS e FROM usage WHERE session_id = ?").get(sid);
+    return r && r.e != null ? Number(r.e) : 0; } catch { return 0; }
+}
+
+const TURN_UPSERT_SQL = `INSERT INTO turns
+  (session_id, turn_seq, source_app, n, status, auto, started_at, ended_at, duration_ms,
+   tool_ms, wait_ms, gap_ms, calls, subagent_calls, distinct_tools, errors, orphans, dup_calls,
+   guard_denies, queued_prompts, precompacts, cost_usd, cost_subagent_usd, cost_has_gap,
+   flags, flags_mask, config_ver, materialized_at)
+  VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+  ON CONFLICT(session_id, turn_seq) DO UPDATE SET
+   source_app=excluded.source_app, n=excluded.n, status=excluded.status, auto=excluded.auto,
+   started_at=excluded.started_at, ended_at=excluded.ended_at, duration_ms=excluded.duration_ms,
+   tool_ms=excluded.tool_ms, wait_ms=excluded.wait_ms, gap_ms=excluded.gap_ms,
+   calls=excluded.calls, subagent_calls=excluded.subagent_calls, distinct_tools=excluded.distinct_tools,
+   errors=excluded.errors, orphans=excluded.orphans, dup_calls=excluded.dup_calls,
+   guard_denies=excluded.guard_denies, queued_prompts=excluded.queued_prompts, precompacts=excluded.precompacts,
+   cost_usd=excluded.cost_usd, cost_subagent_usd=excluded.cost_subagent_usd, cost_has_gap=excluded.cost_has_gap,
+   flags=excluded.flags, flags_mask=excluded.flags_mask, config_ver=excluded.config_ver,
+   materialized_at=excluded.materialized_at`;
+
+// Materialize one session's settled turns in ONE short transaction. Returns a
+// small status object (never throws — caller may still guard).
+function materializeSession(sid, now, cv) {
+  const rows = turnEventsForSession(sid);
+  if (!rows.length) return { skipped: true };
+  const minSeq = rows[0].seq, maxSeq = rows[rows.length - 1].seq;
+  const lastAt = rows[rows.length - 1].received_at;
+  const app = rows[rows.length - 1].source_app || rows[0].source_app || "?";
+  const sessionEnded = rows.some((r) => r.type === "SessionEnd");
+  const cur = db.impl.prepare("SELECT * FROM turn_cursor WHERE session_id = ?").get(sid) || null;
+
+  // [freeze] early events trimmed (live MIN(seq) rose above the anchor) → the
+  // session can no longer be re-derived correctly. Keep the good historical rows;
+  // never re-run buildTurns over the truncated stream, never advance config_ver.
+  if (cur && cur.min_event_seq_seen > 0 && minSeq > cur.min_event_seq_seen) {
+    db.impl.prepare("UPDATE turn_cursor SET frozen = 1, stale_config = ?, updated_at = ? WHERE session_id = ?")
+      .run(cur.config_ver !== cv ? 1 : 0, now, sid);
+    return { frozen: true };
+  }
+
+  const all = buildTurns(rows, now);
+  const costs = attachTurnCosts(all, sid); // sets t.cost_usd / t.cost_subagent_usd
+  const usageTotal = costs ? costs.usage_cost_usd : null;
+
+  // [gate] settle rule (§3): drop the open last turn (unless SessionEnd or the
+  // session is idle ≥ TURN_ORPHAN_MS), and DEFER any turn still holding an
+  // unresolved main-lane Pre (status 'pending' — no Post yet, not yet aged to
+  // orphan) so its orphan/guard-deny/flag numbers are not frozen wrong.
+  const idle = now - lastAt >= TURN_ORPHAN_MS;
+  const settled = [];
+  for (let i = 0; i < all.length; i++) {
+    const t = all[i];
+    if (i === all.length - 1 && !(sessionEnded || idle)) continue;
+    if (t._calls.some((c) => c.lane === "main" && c.status === "pending")) continue;
+    settled.push(t);
+  }
+  const currentSeqs = all.map((t) => t.turn_seq);
+  let sumSettled = 0;
+  for (const t of settled) sumSettled += (t.cost_usd || 0) + (t.cost_subagent_usd || 0);
+  // [residual] unattributed = session total − Σ settled, so the dropped open turn
+  // and any not-yet-settled turn's cost is absorbed here (invariant preserved).
+  const unattributed = usageTotal == null ? null : roundUsd(usageTotal - sumSettled);
+  const lastTurnSeq = settled.length ? settled[settled.length - 1].turn_seq : 0;
+  const usageEpoch = sessionUsageEpoch(sid);
+
+  try {
+    db.impl.exec("BEGIN IMMEDIATE");
+    // [reconcile] delete rows whose turn_seq no longer exists — queued-merge /
+    // arrival-race can reclassify a boundary so a previously-settled turn_seq
+    // vanishes; an upsert alone would leave it as a ghost double-count.
+    if (currentSeqs.length) {
+      db.impl.prepare(`DELETE FROM turns WHERE session_id = ? AND turn_seq NOT IN (${currentSeqs.map(() => "?").join(",")})`)
+        .run(sid, ...currentSeqs);
+    } else db.impl.prepare("DELETE FROM turns WHERE session_id = ?").run(sid);
+    const upsert = db.impl.prepare(TURN_UPSERT_SQL);
+    for (const t of settled) {
+      upsert.run(sid, t.turn_seq, app, t.n, t.status, t.auto ?? null,
+        t.started_at, t.ended_at, t.duration_ms, t.tool_ms, t.wait_ms, t.gap_ms,
+        t.calls, t.subagent_calls, t.distinct_tools, t.errors, t.orphans, t.dup_calls,
+        t.guard_denies, t.queued_prompts, t.precompacts,
+        t.cost_usd ?? null, t.cost_subagent_usd ?? null, t.precompacts > 0 ? 1 : 0, // cost_has_gap: compaction spend absent from usage (§6)
+        JSON.stringify(t.flags || []), flagsMask(t.flags), cv, now);
+    }
+    const minSeen = cur ? cur.min_event_seq_seen : minSeq; // anchor set ONCE, on first materialization
+    db.impl.prepare(`INSERT INTO turn_cursor
+      (session_id, materialized_through_seq, min_event_seq_seen, usage_epoch_seen, last_turn_seq,
+       unattributed_cost_usd, config_ver, session_ended, frozen, stale_config, updated_at)
+      VALUES (?,?,?,?,?,?,?,?,0,0,?)
+      ON CONFLICT(session_id) DO UPDATE SET
+       materialized_through_seq=excluded.materialized_through_seq, usage_epoch_seen=excluded.usage_epoch_seen,
+       last_turn_seq=excluded.last_turn_seq, unattributed_cost_usd=excluded.unattributed_cost_usd,
+       config_ver=excluded.config_ver, session_ended=MAX(turn_cursor.session_ended, excluded.session_ended),
+       stale_config=0, updated_at=excluded.updated_at`)
+      .run(sid, maxSeq, minSeen, usageEpoch, lastTurnSeq, unattributed, cv, sessionEnded ? 1 : 0, now);
+    db.impl.exec("COMMIT");
+  } catch (e) {
+    try { db.impl.exec("ROLLBACK"); } catch {}
+    logSafe("materialize session", e);
+    return { error: true };
+  }
+  return { settled: settled.length, total: all.length };
+}
+
+// Cheap candidate scan: sessions whose materialization may be stale. Recently
+// active sessions are re-checked so time-based settling (idle / a Pre aging to
+// orphan) lands even without new events. Frozen sessions are excluded.
+function turnCandidates(now, cv, limit) {
+  let ev, us, cursors;
+  try {
+    ev = db.impl.prepare("SELECT session_id, MAX(seq) AS maxseq, MAX(received_at) AS last_at FROM events GROUP BY session_id").all();
+    us = db.impl.prepare("SELECT session_id, MAX(inserted_at) AS epoch FROM usage GROUP BY session_id").all();
+    cursors = db.impl.prepare("SELECT * FROM turn_cursor").all();
+  } catch (e) { logSafe("turn candidates", e); return []; }
+  const usMap = new Map(us.map((r) => [r.session_id, Number(r.epoch) || 0]));
+  const cMap = new Map(cursors.map((c) => [c.session_id, c]));
+  const out = [];
+  for (const e of ev) {
+    const c = cMap.get(e.session_id);
+    if (c && c.frozen) continue;
+    const recent = now - Number(e.last_at) < TURN_ORPHAN_MS * 2; // re-check window for time-based settling
+    if (!c || Number(e.maxseq) > c.materialized_through_seq ||
+        (usMap.get(e.session_id) || 0) > c.usage_epoch_seen || c.config_ver !== cv || recent) {
+      out.push(e.session_id);
+      if (out.length >= limit) break;
+    }
+  }
+  return out;
+}
+
+function materializeSweep(now, limit) {
+  if (!db) return { sessions: 0, candidates: 0 };
+  const cv = configVer();
+  const cands = turnCandidates(now, cv, limit);
+  let done = 0;
+  for (const sid of cands) { try { materializeSession(sid, now, cv); done++; } catch (e) { logSafe("materialize", e); } }
+  return { sessions: done, candidates: cands.length };
+}
+
+// In-process auto-materializer (shared connection → no WAL contention). Bounded
+// per tick so a backlog can't stall ingest/SSE for long. Timers unref'd.
+function startAutoMaterializer() {
+  if (!TURN_MAT_AUTO) return;
+  const tick = () => { try { materializeSweep(Date.now(), TURN_MAT_LIMIT); } catch (e) { logSafe("auto-materialize", e); } };
+  setTimeout(tick, Math.min(30_000, TURN_MAT_INTERVAL_MS)).unref();
+  setInterval(tick, TURN_MAT_INTERVAL_MS).unref();
+}
+
 function handleStatsTurns(req, res, u) {
   if (!statsGate(req, res)) return;
   const sid = u.searchParams.get("session_id");
@@ -3032,6 +3271,7 @@ async function startServer() {
   server.listen(PORT, HOST, () => {
     writePidfile();
     startAutoTitler();
+    startAutoMaterializer(); // #82: fleet turn materialization (in-process, shared connection)
     process.stderr.write(`[obs] ${SERVICE} listening on http://${HOST}:${PORT} (pid ${process.pid})\n`);
   });
 
@@ -3228,10 +3468,28 @@ function startAutoTitler() {
   setInterval(tick, TITLE_AUTO_INTERVAL_MS).unref();                  // then every interval
 }
 
+// #82: one materialization sweep from the CLI (backfill after deploy, or refresh).
+// `--rebuild` / `--all` forces re-derivation of every NON-frozen session (reset
+// their watermarks); frozen sessions (trimmed events) keep their historical rows.
+async function cliMaterializeTurns() {
+  await startBackend();
+  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
+  if (process.argv.includes("--rebuild") || process.argv.includes("--all")) {
+    try { db.impl.exec("UPDATE turn_cursor SET materialized_through_seq = 0, usage_epoch_seen = 0, config_ver = 0 WHERE frozen = 0"); }
+    catch (e) { logSafe("materialize rebuild", e); }
+    process.stdout.write("materialize-turns: reset watermarks for non-frozen sessions (rebuild)\n");
+  }
+  const r = materializeSweep(Date.now(), 1_000_000);
+  let rows = "?"; try { rows = db.impl.prepare("SELECT COUNT(*) c FROM turns").get().c; } catch {}
+  process.stdout.write(`materialize-turns: sessions=${r.sessions} candidates=${r.candidates} turn_rows=${rows}\n`);
+  process.exit(0);
+}
+
 const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
 else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
 else if (cmd === "title-sessions") await cliTitleSessions(); // #66: batch LLM session titles; --all re-titles, --limit N caps
+else if (cmd === "materialize-turns") await cliMaterializeTurns(); // #82: backfill/refresh the fleet turns table; --rebuild forces re-derive of non-frozen sessions
 else await startServer();
