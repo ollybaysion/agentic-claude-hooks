@@ -28,6 +28,7 @@ node core/observability/server.mjs retain     # run one retention pass (ops)
 node core/observability/server.mjs ingest-usage           # backfill token usage from transcripts, main + subagent files (idempotent)
 node core/observability/server.mjs ingest-usage --rescan  # drop cursors + re-read ALL transcripts (e.g. after the TTL-split or subagent (#81) migration)
 node core/observability/server.mjs title-sessions         # batch: LLM-summarise idle sessions into short titles (--all re-titles, --limit N caps, --idle SEC lowers the quiet-gate)
+node core/observability/server.mjs materialize-turns      # #82: backfill/refresh the fleet `turns` table from events (--rebuild re-derives non-frozen sessions). Also runs in-process on a timer + before retention trims.
 ```
 
 Then open the dashboard at **<http://127.0.0.1:4090/>**. Node 24+ emits an
@@ -51,6 +52,21 @@ experimental-SQLite warning (node:sqlite); the start paths pass
 | GET | `/stats/turns` | Turn Inspector (#73, `docs/agent-dashboard-turn-inspector-design.md`): one session's events grouped into **turns** (`UserPromptSubmit` → last `Stop`; arrival-race repair, queued-prompt merge only when an in-flight Pre pairs after the prompt, post-stop tail kept but excluded from timing). `session_id` required, `limit` = latest N (≤500, no window — retention bounds it). Per turn: tool/wait/gap time split (main-lane interval **union**; permission-wait carved out of the enclosing call; capped), calls/errors/orphans/`guard_denies` (orphans' top cause is a hook-guard deny, time-correlated ±3s), subagent lane, and inefficiency `flags` (`dup-call`/`re-read`/`retry-loop`/`search-storm`/`long-tail`/`gap-heavy`/`orphaned`/`mega-turn` — thresholds via `{"turns":{…}}`). `&turn=<seq>` adds the call timeline + markers. Each turn carries `cost_usd` (main chain) and `cost_subagent_usd` (#81 — the subagent spend that turn triggered, id-joined via the agents' own tool calls; `null` = zero usage rows attributed, never $0.00; compact API calls aren't in usage → the UI badges PreCompact turns). Attribution is single-bucket per usage row — emitted-id match first, `follows` only when emitted is empty, ts-window fallback — and the response totals `usage_cost_usd` / `unattributed_cost_usd` (rows landing in no turn) keep the sum honest. Reads `payload` for ONE session only (`prompt`/`tool_input`/`message`/guard fields) |
 | GET | `/health` | liveness + counters (single-instance probe) |
 | GET | `/` + `/app.js` | dependency-free dashboard: Live tail, Sessions (rollup + tokens + cost + avg/peak ctx + mega badge + a human session title — generated title, else first prompt, else hash — and the **Turn Inspector drill-down** (#73 stage 2): context-growth curve & compact what-if, then a `/stats/turns`-backed turn list with flags badges + a `[⚑ flags만]` filter, harness-injected turns labeled `⚙` (raw prompt on hover), per-turn lazy detail = tool/wait/gap stack bar + call timeline (gap/`∥`, input summaries, status colors, dup/bg/→next badges, `└ sub:` lanes, dimmed post-stop tail, ⚠ permission / ⛔ guard-deny / ✂ compact markers, row click → raw event JSON)), Tools (latency/error bars), Tokens (cost anatomy stack + baseline/turn-tax/switch-rewrite cards + daily/by app/by model/by tool + trend), Guards (what the git/bash guards blocked), Nudges (ctx-budget `/compact` boundary nudges + compliance), fleet strip with per-session context size, per-screen `(?)` help tooltips for derived metrics (strict CSP, same-origin, inline-SVG charts) |
+
+**#82 turn materialization (stage 1):** `/stats/turns` derives turns per session
+on-read, which can't answer fleet-wide questions ("avg calls/turn trend", "which
+projects run gap-heavy") without scanning every session's payload. So SETTLED
+turns are materialised — the same `buildTurns`/`attachTurnCosts` are re-run and
+their output persisted to a `turns` table (schema v7, one summary row per turn) +
+a `turn_cursor` watermark. `buildTurns` stays the single source of truth (drill and
+fleet agree by construction). The table **outlives `events`** (retention never
+trims it), so fleet history survives. Only settled turns are stored — never the
+open last turn, and never a turn with an unresolved main-lane Pre (§ design's
+settle gate); reconcile-delete removes turn_seqs a re-segmentation dropped; a
+`frozen` flag protects sessions whose early events were trimmed from being
+re-derived over a truncated stream; `unattributed = session total − Σ settled`
+keeps the cost identity exact. The fleet aggregate endpoint + UI are stages 2-3.
+See `docs/agent-dashboard-fleet-turns-design.md`.
 
 `/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates avoid the
@@ -101,6 +117,9 @@ boundaries / cache-read a cap would avoid) — diagnostic signals, not exact bil
 | `OBS_TITLE_INTERVAL_SEC` | `180` | auto-titler tick interval |
 | `OBS_TITLE_IDLE_SEC` | `30` | auto-titler quiet-gate: a session must be idle this long before it's titled (short, so active sessions get a title during natural pauses; avoids titling mid-turn) |
 | `OBS_TITLE_LIMIT` | `8` | auto-titler: max sessions titled per tick (caps `claude` spawns) |
+| `OBS_TURN_MAT` | `1` | #82 auto-materializer: the running collector persists SETTLED turns into the `turns` table on a timer (in-process on the shared connection — buildTurns is cheap, so no detached child and no write contention). `0` disables |
+| `OBS_TURN_MAT_INTERVAL_SEC` | `120` | auto-materializer tick interval |
+| `OBS_TURN_MAT_LIMIT` | `50` | auto-materializer: max sessions materialized per tick (bounds the event-loop stall) |
 
 ## Guarantees (held from stage 0)
 

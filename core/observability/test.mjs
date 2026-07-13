@@ -701,7 +701,7 @@ cli("ingest-usage");
   const curs = db2.prepare("SELECT COUNT(*) c FROM transcript_cursor WHERE session_id = ?").get(SESSION);
   const ver = db2.prepare("SELECT * FROM pragma_user_version").get();
   db2.close();
-  check("sub: v3 DB migrated to schema v6 (cursor PK rebuild + usage.agent_id)", ver && Object.values(ver)[0] === 6, JSON.stringify(ver));
+  check("sub: v3 DB migrated to schema v7 (cursor PK rebuild + usage.agent_id/inserted_at)", ver && Object.values(ver)[0] === 7, JSON.stringify(ver));
   check("sub: agent file ingested — sidechain=1 + agent_id from filename",
     subRows.length === 2 && subRows.every((r) => r.sidechain === 1 && r.agent_id === "agsub1"), JSON.stringify(subRows));
   check("sub: per-(session,path) cursors — main + 1 agent file = 2", curs && curs.c === 2, JSON.stringify(curs));
@@ -712,6 +712,66 @@ cli("ingest-usage"); // cursors at EOF → nothing re-ingested
   const n = db2.prepare("SELECT COUNT(*) c FROM usage WHERE msg_id IN ('ms1','ms2')").get();
   db2.close();
   check("sub: idempotent re-run (still 2 rows)", n && n.c === 2, JSON.stringify(n));
+}
+
+// ══ #82 — fleet turn materialization (turns table: gating, reconcile, freeze) ══
+process.stdout.write("\n# fleet turn materialization (#82)\n");
+cli("materialize-turns"); // backfill from the seeded events
+{
+  const db2 = new DatabaseSync(DB_PATH, { readOnly: true });
+  const rows = (sid) => db2.prepare("SELECT * FROM turns WHERE session_id=? ORDER BY turn_seq").all(sid);
+  const cur = (sid) => db2.prepare("SELECT * FROM turn_cursor WHERE session_id=?").get(sid);
+  const ver = db2.prepare("SELECT * FROM pragma_user_version").get();
+  const stRows = rows("sess-turn");
+  const t1 = stRows.find((r) => r.turn_seq === 300), t6 = stRows.find((r) => r.turn_seq === 350);
+  const stCur = cur("sess-turn");
+  const openRows = rows("sess-open").length;
+  const virt = rows("sess-zero").find((r) => r.turn_seq === 0);
+  db2.close();
+  check("mat: v7 turns/turn_cursor live", ver && Object.values(ver)[0] === 7, JSON.stringify(ver));
+  check("mat: sess-turn — all 6 settled turns materialized (idle session)", stRows.length === 6, JSON.stringify(stRows.map((r) => r.turn_seq)));
+  check("mat: row mirrors buildTurns (T1 tool_ms 40400 + long-tail flag+mask)",
+    t1 && t1.tool_ms === 40400 && JSON.parse(t1.flags).includes("long-tail") && (t1.flags_mask & 16) !== 0,
+    t1 && JSON.stringify({ m: t1.tool_ms, f: t1.flags, mask: t1.flags_mask }));
+  check("mat: per-turn cost persisted (T1 $1.0 main, T6 $1.0 sub)",
+    t1 && approx(t1.cost_usd, 1.0) && t6 && approx(t6.cost_subagent_usd, 1.0),
+    JSON.stringify({ t1: t1 && t1.cost_usd, t6sub: t6 && t6.cost_subagent_usd }));
+  check("mat: [residual] cursor unattributed = total − Σsettled = 0.5", stCur && approx(stCur.unattributed_cost_usd, 0.5), stCur && String(stCur.unattributed_cost_usd));
+  check("mat: [gate] open last turn NOT materialized (sess-open → 0 rows)", openRows === 0, String(openRows));
+  check("mat: virtual #0 materialized (n=0, status virtual)", virt && virt.n === 0 && virt.status === "virtual", JSON.stringify(virt));
+  check("mat: cursor healthy (not frozen, config_ver set)", stCur && stCur.frozen === 0 && stCur.config_ver !== 0, stCur && JSON.stringify({ f: stCur.frozen, cv: stCur.config_ver }));
+}
+// [reconcile] a turn_seq that buildTurns no longer produces must be deleted, not left as a ghost
+{
+  const dbw = new DatabaseSync(DB_PATH);
+  dbw.prepare(`INSERT INTO turns (session_id,turn_seq,source_app,n,status,started_at,ended_at,duration_ms,tool_ms,wait_ms,gap_ms,calls,subagent_calls,distinct_tools,errors,orphans,dup_calls,guard_denies,queued_prompts,precompacts,flags,flags_mask,config_ver,materialized_at)
+    VALUES ('sess-turn',99999,'x',9,'complete',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'[]',0,0,0)`).run();
+  dbw.prepare("UPDATE usage SET inserted_at=? WHERE session_id='sess-turn' AND msg_id='u1'").run(Date.now()); // bump arrival → candidate again (no cost change)
+  dbw.close();
+}
+cli("materialize-turns");
+{
+  const db2 = new DatabaseSync(DB_PATH, { readOnly: true });
+  const ghost = db2.prepare("SELECT COUNT(*) c FROM turns WHERE session_id='sess-turn' AND turn_seq=99999").get();
+  const n = db2.prepare("SELECT COUNT(*) c FROM turns WHERE session_id='sess-turn'").get();
+  db2.close();
+  check("mat: [reconcile] vanished turn_seq deleted (ghost 99999 gone)", ghost.c === 0, JSON.stringify(ghost));
+  check("mat: idempotent re-run keeps exactly 6 rows", n.c === 6, JSON.stringify(n));
+}
+// [freeze] trimming early events must NOT re-derive over the truncated stream
+{
+  const dbw = new DatabaseSync(DB_PATH);
+  dbw.prepare("DELETE FROM events WHERE session_id='sess-turn' AND seq <= 305").run(); // drop T1's events → MIN(seq) rises
+  dbw.prepare("UPDATE usage SET inserted_at=? WHERE session_id='sess-turn' AND msg_id='u1'").run(Date.now() + 1000); // force candidacy
+  dbw.close();
+}
+cli("materialize-turns");
+{
+  const db2 = new DatabaseSync(DB_PATH, { readOnly: true });
+  const c = db2.prepare("SELECT frozen FROM turn_cursor WHERE session_id='sess-turn'").get();
+  const n = db2.prepare("SELECT COUNT(*) c FROM turns WHERE session_id='sess-turn'").get();
+  db2.close();
+  check("mat: [freeze] trimmed session frozen, historical rows preserved", c && c.frozen === 1 && n.c === 6, JSON.stringify({ frozen: c && c.frozen, rows: n.c }));
 }
 
 // ── done ─────────────────────────────────────────────────────────────────────
