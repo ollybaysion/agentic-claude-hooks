@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.17.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3)
+const VERSION = "0.18.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -2424,6 +2424,96 @@ function handleStatsTurns(req, res, u) {
   } catch (e) { logSafe("stats turns", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── GET /stats/fleet-turns (#82 stage 2) ────────────────────────────────────
+// Fleet-wide turn aggregates over the MATERIALIZED `turns` table (no payload
+// read — that is the whole point of stage 1). Efficiency ratios exclude virtual
+// (#0) and harness-`auto` turns; cost totals include everything. `by_flag` cost
+// is "cost of turns carrying the flag" (an attention signal, NOT savings — a turn
+// with k flags counts in k buckets, so Σ by_flag ≠ total; the UI labels this).
+function handleStatsFleetTurns(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  const app = u.searchParams.get("source_app") || u.searchParams.get("app") || null;
+  const empty = { window_ms, source_app: app, bucket_ms: 0, totals: null, by_flag: [], by_app: [], series: [] };
+  if (!db) return json(res, 200, empty);
+  const since = Date.now() - window_ms;
+  const r2 = (v) => Math.round(v * 100) / 100, r3 = (v) => Math.round(v * 1000) / 1000;
+  try {
+    const where = app ? "started_at >= ? AND source_app = ?" : "started_at >= ?";
+    const params = app ? [since, app] : [since];
+    const rows = db.impl.prepare(
+      `SELECT session_id, source_app, status, auto, started_at, calls, errors, orphans,
+              cost_usd, cost_subagent_usd, cost_has_gap, flags_mask
+         FROM turns WHERE ${where}`
+    ).all(...params);
+    if (!rows.length) return json(res, 200, { ...empty, totals: { settled_turns: 0 } });
+
+    const bit = (f) => FLAG_BIT[f];
+    const hasFlag = (r, f) => (r.flags_mask & bit(f)) !== 0;
+    const isHuman = (r) => r.auto == null && r.status !== "virtual"; // efficiency denominator
+    const human = rows.filter(isHuman);
+    const sum = (arr, fn) => arr.reduce((s, r) => s + fn(r), 0);
+
+    // unattributed is a per-session residual (turn_cursor) — sum over the sessions present in this window
+    const sids = [...new Set(rows.map((r) => r.session_id))];
+    let unatt = 0;
+    try {
+      const q = db.impl.prepare(`SELECT COALESCE(SUM(unattributed_cost_usd),0) u FROM turn_cursor WHERE session_id IN (${sids.map(() => "?").join(",")})`).get(...sids);
+      unatt = q ? q.u || 0 : 0;
+    } catch (e) { logSafe("fleet unattributed", e); }
+
+    const totals = {
+      settled_turns: rows.length,
+      human_turns: human.length,
+      avg_calls_per_turn: human.length ? r2(sum(human, (r) => r.calls) / human.length) : 0,
+      dup_call_turn_ratio: human.length ? r3(human.filter((r) => hasFlag(r, "dup-call")).length / human.length) : 0,
+      gap_heavy_turns: rows.filter((r) => hasFlag(r, "gap-heavy")).length,
+      mega_turns: rows.filter((r) => hasFlag(r, "mega-turn")).length,
+      interrupted_turns: rows.filter((r) => r.status === "interrupted").length,
+      orphan_turns: rows.filter((r) => hasFlag(r, "orphaned")).length,
+      total_cost_usd: roundUsd(sum(rows, (r) => r.cost_usd || 0)),
+      total_subagent_cost_usd: roundUsd(sum(rows, (r) => r.cost_subagent_usd || 0)),
+      unattributed_cost_usd: roundUsd(unatt),
+      cost_incomplete_turns: rows.filter((r) => r.cost_has_gap).length,
+    };
+
+    const by_flag = Object.keys(FLAG_BIT).map((f) => ({
+      flag: f,
+      turns: rows.filter((r) => hasFlag(r, f)).length,
+      cost_usd: roundUsd(sum(rows.filter((r) => hasFlag(r, f)), (r) => r.cost_usd || 0)),
+    })).filter((x) => x.turns > 0).sort((a, b) => b.turns - a.turns);
+
+    const appMap = new Map();
+    for (const r of rows) {
+      const a = r.source_app || "?";
+      let m = appMap.get(a);
+      if (!m) appMap.set(a, (m = { app: a, turns: 0, human: 0, calls: 0, cost: 0 }));
+      m.turns++;
+      if (isHuman(r)) { m.human++; m.calls += r.calls; }
+      m.cost += (r.cost_usd || 0) + (r.cost_subagent_usd || 0);
+    }
+    const by_app = [...appMap.values()].map((m) => ({
+      app: m.app, turns: m.turns, avg_calls: m.human ? r2(m.calls / m.human) : 0, cost_usd: roundUsd(m.cost),
+    })).sort((a, b) => b.cost_usd - a.cost_usd);
+
+    const bucket_ms = window_ms <= 86_400_000 ? 3_600_000 : 86_400_000; // hourly ≤1d, else daily
+    const bMap = new Map();
+    for (const r of rows) {
+      const t = Math.floor(r.started_at / bucket_ms) * bucket_ms;
+      let b = bMap.get(t);
+      if (!b) bMap.set(t, (b = { t, turns: 0, human: 0, calls: 0, cost: 0 }));
+      b.turns++;
+      if (isHuman(r)) { b.human++; b.calls += r.calls; }
+      b.cost += (r.cost_usd || 0) + (r.cost_subagent_usd || 0);
+    }
+    const series = [...bMap.values()].map((b) => ({
+      t: b.t, turns: b.turns, avg_calls: b.human ? r2(b.calls / b.human) : 0, cost_usd: roundUsd(b.cost),
+    })).sort((a, b) => a.t - b.t);
+
+    json(res, 200, { window_ms, bucket_ms, source_app: app, totals, by_flag, by_app, series });
+  } catch (e) { logSafe("stats fleet-turns", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── dashboard (dependency-free, same-origin — design §8) ────────────────────
 // Strict CSP: the page loads /app.js from 'self' (no inline script), and the JS
 // renders every value via textContent (never innerHTML), so attacker-influenced
@@ -2507,6 +2597,7 @@ a.evlink:hover{color:#79c0ff}
     <a href="#guards" id="tab-guards">guards</a>
     <a href="#nudges" id="tab-nudges">nudges</a>
     <a href="#db" id="tab-db">db</a>
+    <a href="#fleetturns" id="tab-fleetturns">fleet turns</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
@@ -2655,6 +2746,29 @@ a.evlink:hover{color:#79c0ff}
     <tbody id="db-table-rows"></tbody>
   </table>
 </section>
+<section id="view-fleetturns">
+  <div class="cards" id="ft-cards"></div>
+  <div class="toolbar">기간
+    <select id="ft-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span data-help="fleetturns"></span>
+    <span class="dim">물질화된 정착 턴 집계 (#82) · 열린 턴 제외 · 효율 지표는 가상·auto 턴 제외</span>
+  </div>
+  <h2>by flag</h2>
+  <table>
+    <thead><tr><th>flag</th><th class="num">turns</th><th></th><th class="num">cost</th></tr></thead>
+    <tbody id="ft-flag-rows"></tbody>
+  </table>
+  <h2>by project</h2>
+  <table>
+    <thead><tr><th>app</th><th class="num">turns</th><th class="num">avg calls</th><th class="num">cost</th></tr></thead>
+    <tbody id="ft-app-rows"></tbody>
+  </table>
+  <h2>turns over time</h2>
+  <table>
+    <thead><tr><th>bucket</th><th class="num">turns</th><th></th><th class="num">avg calls</th><th class="num">cost</th></tr></thead>
+    <tbody id="ft-series-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
@@ -2690,6 +2804,7 @@ const DASHBOARD_JS = `(function(){
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     db:"agent-db-plugin이 실행한 조회의 감사 로그 (DbQuery 이벤트)\\n• by alias / tool — 접속 별칭·MCP 도구별 쿼리 수 (describe_table·list_tables의 내부 카탈로그 조회도 포함)\\n• slowest — elapsedMs 상위 · ⚠ = 에러로 끝난 쿼리\\n• errors — ORA 코드별 집계 (ORA-00942 반복 = 에이전트가 테이블명 헛짚음 → 스키마 문서 공백 신호)\\n• top tables — sql의 FROM/JOIN에서 추출 (근사) · sql은 원문 그대로 기록 (마스킹 없음, 로컬/리허설 한정)",
+    fleetturns:"물질화된 정착 턴(#82) 위의 fleet 집계 — 세션 하나가 아니라 전 세션을 가로지른 통계\\n• settled turns — 확정된 턴만 (열린 마지막 턴 제외) · avg calls/turn·dup-call%는 가상·auto 턴 뺀 사람 턴 기준\\n• by flag — 그 flag를 가진 턴 수와 비용 (주의 신호 · 절감액 아님 · 한 턴이 여러 flag면 중복 계상 → Σ≠total)\\n• by project — app별 턴·평균 호출·비용\\n• unattributed — 세션총 − Σ귀속 (열린 턴·미귀속 흡수) · ✂ = compaction으로 usage 누락된 턴(비용 하한)",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
     "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값",
     turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• $ — 그 턴의 API 비용 · +sub = 그 턴이 띄운 서브에이전트 지출 (별도 합산) · compact 호출은 기록에 없음(✂ 뱃지) · 빈칸 = 귀속된 기록 없음\\n• 미귀속 — 어느 턴에도 못 붙은 비용 (턴 사이 유휴 시각·수집 공백·resume 잔재)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
@@ -2719,7 +2834,7 @@ const DASHBOARD_JS = `(function(){
       for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
   // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges | #db) — hash routing
-  var TABS=["live","sessions","tools","tokens","guards","nudges","db"];
+  var TABS=["live","sessions","tools","tokens","guards","nudges","db","fleetturns"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
@@ -2727,7 +2842,8 @@ const DASHBOARD_JS = `(function(){
     if(name==="tokens")loadTokens();
     if(name==="guards")loadGuards();
     if(name==="nudges")loadNudges();
-    if(name==="db")loadDb(); }
+    if(name==="db")loadDb();
+    if(name==="fleetturns")loadFleetTurns(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
   // ── live tail (stage 5 behaviour, unchanged)
@@ -3224,8 +3340,53 @@ const DASHBOARD_JS = `(function(){
     }).catch(function(){}); }
   $("db-window").addEventListener("change",loadDb);
 
+  // ── fleet turns (#82 stage 3): aggregates over the materialized turns table
+  function ftEmpty(tb,cs){ var tr=document.createElement("tr"),td=el("td","dim","no turns in window"); td.colSpan=cs; tr.appendChild(td); tb.appendChild(tr); }
+  function loadFleetTurns(){ var w=$("ft-window").value;
+    getJson("/stats/fleet-turns?window="+w).then(function(d){
+      var box=$("ft-cards"); box.textContent=""; var t=d.totals||{};
+      box.appendChild(card("settled turns",t.settled_turns||0));
+      box.appendChild(card("avg calls/turn",t.human_turns?t.avg_calls_per_turn:"—"));
+      box.appendChild(card("dup-call turns",t.dup_call_turn_ratio!=null&&t.human_turns?Math.round(t.dup_call_turn_ratio*100)+"%":"—"));
+      box.appendChild(card("gap-heavy",t.gap_heavy_turns||0));
+      box.appendChild(card("mega",t.mega_turns||0));
+      box.appendChild(card("interrupted",t.interrupted_turns||0));
+      box.appendChild(card("total cost",fmtUsd(t.total_cost_usd)||"$0"));
+      if(t.total_subagent_cost_usd)box.appendChild(card("subagent cost",fmtUsd(t.total_subagent_cost_usd)));
+      box.appendChild(card("unattributed",fmtUsd(t.unattributed_cost_usd)||"$0"));
+      if(t.cost_incomplete_turns)box.appendChild(card("✂ cost-incomplete",t.cost_incomplete_turns));
+      var fr=$("ft-flag-rows"); fr.textContent=""; var fmax=0;
+      (d.by_flag||[]).forEach(function(f){ if(f.turns>fmax)fmax=f.turns; });
+      (d.by_flag||[]).forEach(function(f){ var tr=document.createElement("tr");
+        tr.appendChild(cell(f.flag));
+        tr.appendChild(cell(f.turns,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(f.turns,fmax,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(fmtUsd(f.cost_usd),"num"));
+        fr.appendChild(tr); });
+      if(!(d.by_flag||[]).length)ftEmpty(fr,4);
+      var ar=$("ft-app-rows"); ar.textContent="";
+      (d.by_app||[]).forEach(function(a){ var tr=document.createElement("tr");
+        tr.appendChild(cell(a.app));
+        tr.appendChild(cell(a.turns,"num"));
+        tr.appendChild(cell(a.avg_calls,"num"));
+        tr.appendChild(cell(fmtUsd(a.cost_usd),"num"));
+        ar.appendChild(tr); });
+      if(!(d.by_app||[]).length)ftEmpty(ar,4);
+      var sr=$("ft-series-rows"); sr.textContent=""; var smax=0;
+      (d.series||[]).forEach(function(s){ if(s.turns>smax)smax=s.turns; });
+      (d.series||[]).forEach(function(s){ var tr=document.createElement("tr");
+        tr.appendChild(cell(fmtDT(s.t)));
+        tr.appendChild(cell(s.turns,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(s.turns,smax,120,12)); tr.appendChild(td);
+        tr.appendChild(cell(s.avg_calls,"num"));
+        tr.appendChild(cell(fmtUsd(s.cost_usd),"num"));
+        sr.appendChild(tr); });
+      if(!(d.series||[]).length)ftEmpty(sr,5);
+    }).catch(function(){}); }
+  $("ft-window").addEventListener("change",loadFleetTurns);
+
   // 30s refresh of whichever analytics tab is visible
-  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); else if(h==="db")loadDb(); },30000);
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); else if(h==="db")loadDb(); else if(h==="fleetturns")loadFleetTurns(); },30000);
 
   initHints();
   showTab(location.hash.slice(1));
@@ -3278,6 +3439,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/nudges") return handleStatsNudges(req, res, u);
       if (pathname === "/stats/db") return handleStatsDb(req, res, u);
       if (pathname === "/stats/turns") return handleStatsTurns(req, res, u);
+      if (pathname === "/stats/fleet-turns") return handleStatsFleetTurns(req, res, u);
       return json(res, 404, { error: "not found" });
     }
     if (pathname === "/health") {

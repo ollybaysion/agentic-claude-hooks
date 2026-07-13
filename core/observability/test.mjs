@@ -773,6 +773,15 @@ cli("materialize-turns");
   db2.close();
   check("mat: [freeze] trimmed session frozen, historical rows preserved", c && c.frozen === 1 && n.c === 6, JSON.stringify({ frozen: c && c.frozen, rows: n.c }));
 }
+// stage 2: /stats/fleet-turns aggregates over the materialized table
+const ft = await statGet(45770, "/stats/fleet-turns?window=7d", null);
+check("fleet: totals over materialized turns", ft.totals && ft.totals.settled_turns > 0, JSON.stringify(ft.totals && ft.totals.settled_turns));
+check("fleet: by_app rolls up (Σ app turns = settled_turns)", (ft.by_app || []).reduce((s, a) => s + a.turns, 0) === ft.totals.settled_turns, JSON.stringify(ft.by_app));
+const ftFlags = (ft.by_flag || []).map((f) => f.flag);
+check("fleet: by_flag surfaces seeded inefficiencies (long-tail/search-storm/retry-loop)",
+  ["long-tail", "search-storm", "retry-loop"].every((f) => ftFlags.indexOf(f) >= 0), JSON.stringify(ftFlags));
+check("fleet: series + unattributed present", (ft.series || []).length > 0 && ft.totals.unattributed_cost_usd != null,
+  JSON.stringify({ series: (ft.series || []).length, unatt: ft.totals && ft.totals.unattributed_cost_usd }));
 
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
