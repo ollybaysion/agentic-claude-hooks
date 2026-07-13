@@ -4,7 +4,7 @@ argument-hint: "[table ...]"
 disable-model-invocation: true
 description: >-
   잘 만들어진 의미 제안(proposal.json)을 db-schema 문서에 안전하게 반영하고,
-  사람 검토 후 승격까지의 신뢰도 라이프사이클(scaffold → 추정) → confirmed)을
+  사람 검토 후 승격까지의 신뢰도 라이프사이클(scaffold → 자동) → confirmed)을
   집행한다 — dbdoc 마커 보존, confirmed 동결, dry-run→승인. 제안 생산(코드베이스
   분석)은 생산자 몫이며, 기본 생산자는 형제 스킬 db-schema-propose-codebase.
   /db-schema-apply 로만 호출된다 (모델 자동 발동 없음).
@@ -44,17 +44,21 @@ description: >-
 추론이 권위 있는 사실처럼 주입되면 빈 스캐폴드보다 나쁘다. 그래서 채운 값은
 전부 **신뢰도 티어를 문구 안에 드러낸다**:
 
-| 티어 | 표기 | 성격 |
-| --- | --- | --- |
-| scaffold | `{{설명}}` | 미상, 채울 수 있음 |
-| inferred | `추정) <설명> [근거: a.java:12]` | 코드 추론, **저신뢰**, 근거 동반, 재생성 가능, 주입 시 "추정)"이 곧 헤지 |
-| confirmed | `<설명> [근거: a.java:12]` | 사람 검토, **고신뢰**, 동결(덮어쓰지 않음) |
+| 티어 | 표기 (파일 마커) | 대시보드 표시 | 성격 |
+| --- | --- | --- | --- |
+| scaffold | `{{설명}}` | 미작성 | 미상, 채울 수 있음 |
+| inferred | `자동) <설명> [근거: a.java:12]` | 자동 | 코드 추론, **저신뢰**, 근거 동반, 재생성 가능, 주입 시 "자동)"이 곧 헤지 |
+| confirmed | `<설명> [근거: a.java:12]` | 채택됨 | 사람 검토, **고신뢰**, 동결(덮어쓰지 않음) |
+
+> #115 이전엔 inferred 마커가 `추정)`였다. `apply.mjs`는 둘 다 인식하고 새로 쓸 땐
+> `자동)`을 쓴다. 기존 문서는 `cli.mjs migrate --doc <path> --write`로 일괄 교체한다.
+> 사람 검토→confirmed 승격을 대시보드/UI에선 **채택**이라 부른다.
 
 - **신뢰도는 LLM 자기점수가 아니다.** 티어 + **근거 개수**(독립 코드 사이트가
   몇 곳에서 일치하는가)가 신뢰의 신호다.
 - **승격은 사람 전용.** 에이전트가 자기 추론을 스스로 confirmed로 올리면 안 된다.
 - **confirmed는 절대 안 덮어쓴다.** 사람이 확인한 건 재실행해도 보존된다.
-- 티어 접두어는 CLI가 붙인다 — 생산자가 `추정)`을 직접 쓰지 않는다.
+- 티어 접두어는 CLI가 붙인다 — 생산자가 `자동)`을 직접 쓰지 않는다.
 
 ## 전제
 
@@ -104,12 +108,12 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-apply/cli.mjs apply \
 
 ### 3. 기록
 
-승인되면 `--write`. 기존 `추정)` 값은 기본적으로 최신 추론으로 갱신되며,
+승인되면 `--write`. 기존 `자동)` 값은 기본적으로 최신 추론으로 갱신되며,
 `--keep-inferred`를 주면 남긴다.
 
 ### 4. 사람 검토 → 승격
 
-사용자가 `추정)` 슬롯을 근거와 대조해 맞다고 판단하면 confirmed로 올린다.
+사용자가 `자동)` 슬롯을 근거와 대조해 맞다고 판단하면 confirmed로 올린다.
 **판단은 반드시 사람이 한다** (커맨드 실행 대행은 가능, 판단 대행은 불가).
 
 ```bash
@@ -119,7 +123,7 @@ node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --column STATUS --slo
 node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 ```
 
-승격은 `추정)` 접두어만 떼고 근거는 남긴다(confirmed 사실의 출처로).
+승격은 `자동)` 접두어만 떼고 근거는 남긴다(confirmed 사실의 출처로).
 
 ## db-schema-docs와의 합성
 

@@ -7,10 +7,13 @@
 //
 //   apply   --doc <path> --proposal <json> [--keep-inferred] [--write]
 //     Fill meaning slots from a semantics proposal (agent's codebase analysis).
-//     --keep-inferred: do not overwrite existing 추정) values (default: refresh).
+//     --keep-inferred: do not overwrite existing 자동) values (default: refresh).
 //
 //   promote --doc <path> [--all | --column NAME ... | --slot NAME ...] [--write]
-//     Flip reviewed 추정) slots to confirmed (strip the 추정) prefix).
+//     채택: flip reviewed 자동) slots to confirmed (strip the 자동) prefix).
+//
+//   migrate --doc <path> [--write]
+//     Rewrite the legacy 추정) prefix → 자동) in place (idempotent, #115 rename).
 //
 // Exit: 0 ok, 1 fatal/usage, 2 apply hit a confirmed slot it left untouched.
 
@@ -23,7 +26,7 @@ import { postEnvelope, sourceApp } from "../../lib/obs-client.mjs";
 // ── observability (#90) ──────────────────────────────────────────────────────
 // On a real --write, tell the collector what changed so the dashboard's
 // keyword-docs review surface can show the apply/promote activity log alongside
-// the file-scanned 추정) queue. Pure builder (exposed for tests); emitSchemaDoc
+// the file-scanned 자동) queue. Pure builder (exposed for tests); emitSchemaDoc
 // POSTs it. Fire-and-forget: awaited only so a short-lived CLI actually flushes
 // the socket, but postEnvelope never throws and is timeout-bounded, so a
 // slow/absent collector can't fail the CLI.
@@ -114,12 +117,24 @@ async function cmdPromote(args) {
   }
 }
 
+// migrate: legacy 추정) prefix → 자동) in place (#115 rename). A plain string swap
+// — "추정) " only ever appears as the inferred prefix — so it's safe and idempotent.
+async function cmdMigrate(args) {
+  if (!args.doc) throw new Error("migrate: --doc 이 필요합니다");
+  const existing = await readText(args.doc);
+  const n = (existing.match(/추정\) /g) || []).length;
+  const migrated = existing.split("추정) ").join("자동) ");
+  console.error(`migrate: 추정) → 자동) ${n}건`);
+  await persist(args.doc, migrated, args.write, "migrate");
+}
+
 async function main() {
   const [sub, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
   if (sub === "apply") await cmdApply(args);
   else if (sub === "promote") await cmdPromote(args);
-  else throw new Error(`서브커맨드가 필요합니다: apply | promote (받음: ${sub ?? "없음"})`);
+  else if (sub === "migrate") await cmdMigrate(args);
+  else throw new Error(`서브커맨드가 필요합니다: apply | promote | migrate (받음: ${sub ?? "없음"})`);
 }
 
 // Run only when invoked directly (`node cli.mjs …`); stay importable so tests

@@ -946,16 +946,26 @@ process.stdout.write("\n# dashboard promote (POST /actions/schema-docs/promote)\
     const nopath = await postJson(45782, "/actions/schema-docs/promote", {});
     check("promote: missing path → 400", nopath.status === 400, JSON.stringify(nopath.status));
 
-    const ok = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
-    check("promote: 200 + promoted purpose+column, remaining 0",
-      ok.status === 200 && ok.body && ok.body.ok && ok.body.promoted_count === 2 && ok.body.remaining_inferred === 0,
-      JSON.stringify(ok.body));
+    // no target → 400 (safety: caller must say WHAT to 채택)
+    const notarget = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
+    check("promote: no target (all|columns|slots) → 400", notarget.status === 400, JSON.stringify(notarget.status));
+
+    // 개별 채택: just the SNSR_ID column → the purpose slot stays inferred
+    const col = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, columns: ["SNSR_ID"] });
+    check("promote: per-column 채택 (SNSR_ID) → 1 promoted, purpose still pending",
+      col.status === 200 && col.body.promoted_count === 1 && col.body.remaining_inferred === 1, JSON.stringify(col.body));
+
+    // 개별 채택: the purpose slot → nothing left
+    const slot = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, slots: ["purpose"] });
+    check("promote: per-slot 채택 (purpose) → 1 promoted, remaining 0",
+      slot.status === 200 && slot.body.promoted_count === 1 && slot.body.remaining_inferred === 0, JSON.stringify(slot.body));
 
     const after = fs.readFileSync(docPath, "utf8");
     check("promote: file rewritten, 추정) stripped (evidence kept)", !/추정\)/.test(after) && /센서 원장 \[근거:/.test(after), String((after.match(/추정\)/g) || []).length));
 
-    const again = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
-    check("promote: idempotent second run → 0 promoted", again.status === 200 && again.body.promoted_count === 0, JSON.stringify(again.body));
+    // 모두 채택 when nothing is left → 0 promoted (idempotent), still 200
+    const again = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, all: true });
+    check("promote: 모두 채택 when nothing left → 0 promoted", again.status === 200 && again.body.promoted_count === 0, JSON.stringify(again.body));
 
     // the CLI emitted SchemaDocPromote → appears in history (poll for the async commit)
     let sawPromote = false;
