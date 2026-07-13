@@ -556,6 +556,17 @@ process.stdout.write("\n# turn inspector (/stats/turns)\n");
   ev(552, "sess-auto", "PostToolUse", AT + 1300, { tool: "Read", tid: "tu-au1" });
   ev(553, "sess-auto", "Stop", AT + 2000);
 
+  // sess-gexact (#99): two orphan Pres in one turn; the GuardDecision carries the
+  // BLOCKED call's tool_use_id in its payload (tu-m1), not the top-level column.
+  // The ±3s time window would grab tu-m2 (Pre only 100ms from the deny); the
+  // exact id-match must instead correlate to tu-m1 (1100ms away) and count it.
+  const GX = Date.now() - 1_000_000; // idle → un-Posted Pres are orphans
+  ev(560, "sess-gexact", "UserPromptSubmit", GX, { payload: { prompt: "가드" } });
+  ev(561, "sess-gexact", "PreToolUse", GX + 1000, { tool: "Bash", tid: "tu-m1", payload: { tool_input: { command: "git commit --no-verify" } } });
+  ev(562, "sess-gexact", "PreToolUse", GX + 2000, { tool: "Grep", tid: "tu-m2", payload: { tool_input: { pattern: "x" } } });
+  ev(563, "sess-gexact", "GuardDecision", GX + 2100, { payload: { guard: "git-guard", rule: "no-verify", decision: "deny", tool_use_id: "tu-m1" } });
+  ev(564, "sess-gexact", "Stop", GX + 5000);
+
   // #73 stage 3 — usage rows for sess-turn (opus-4-8: in $5/M · out $25/M).
   // One row → one bucket: u1 emitted→T1($0.5), u2 follows-with-empty-emitted→T1
   // ($0.5), u3 id-less ts inside T2→T2($1.0), u4 id-less inter-turn ts→
@@ -614,6 +625,15 @@ check("detail: Stop + SubagentStop markers present", mkS.length === 1 && (td.mar
 const tg = await statGet(45747, "/stats/turns?session_id=sess-turn&turn=340", null);
 const mkG = (tg.markers || []).find((m) => m.type === "GuardDecision");
 check("detail: GuardDecision marker correlated to the orphan Pre", mkG && mkG.guard === "bash-guard" && mkG.correlated_tool_use_id === "tu-g1", JSON.stringify(mkG));
+
+// #99 exact id-match beats the time window: two orphans, the deny names tu-m1 in
+// its payload though tu-m2's Pre is 11× closer in time.
+const tgx = await statGet(45772, "/stats/turns?session_id=sess-gexact", null);
+const GX1 = (tgx.turns || [])[0];
+check("gexact: one turn, 2 orphans, exactly 1 guard-deny, orphaned", GX1 && tgx.count === 1 && GX1.orphans === 2 && GX1.guard_denies === 1 && GX1.flags.includes("orphaned"), JSON.stringify(GX1));
+const tgxd = await statGet(45773, "/stats/turns?session_id=sess-gexact&turn=560", null);
+const mkGx = (tgxd.markers || []).find((m) => m.type === "GuardDecision");
+check("gexact: exact tool_use_id match picks tu-m1, not time-nearest tu-m2", mkGx && mkGx.correlated_tool_use_id === "tu-m1", JSON.stringify(mkGx));
 
 // boundary race: the late Stop ends turn A; turn B keeps its own call
 const tr = await statGet(45748, "/stats/turns?session_id=sess-race", null);
