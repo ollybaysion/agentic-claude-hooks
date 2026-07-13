@@ -12,13 +12,13 @@
 // its tier inline, visibly:
 //
 //   scaffold   {{설명}}                        — unknown, fillable (표시: 미작성)
-//   inferred   자동) <text> [근거: a.java:12]   — agent-derived, LOW trust,
+//   inferred   미확인) <text> [근거: a.java:12]   — agent-derived, LOW trust,
 //                                                 carries evidence, regeneratable,
-//                                                 injected AS a hedge ("자동)")
+//                                                 injected AS a hedge ("미확인)")
 //   confirmed  <text> [근거: a.java:12]         — human-reviewed (채택됨), HIGH trust,
 //                                                 FROZEN (never overwritten)
 //
-// The prefix "자동) " is the only thing that distinguishes inferred from
+// The prefix "미확인) " is the only thing that distinguishes inferred from
 // confirmed, so 채택/promotion (§promote) is just stripping it. ("추정) " is the
 // pre-#115 prefix, still recognised for un-migrated docs.) Confidence is NOT a
 // fake numeric score — it's the tier plus the length of the evidence list (how
@@ -33,11 +33,11 @@
 
 import { extractRegion, hasMarkers } from "../db-schema-docs/render.mjs";
 
-// The prefix new fills are WRITTEN with ("자동) " = auto-derived, awaiting human
+// The prefix new fills are WRITTEN with ("미확인) " = auto-derived, awaiting human
 // 채택). "추정) " is the legacy prefix (pre-#115 rename); we still RECOGNISE it so
 // un-migrated docs keep working — `migrate` (cli) rewrites old → new in place.
-export const INFERRED_PREFIX = "자동) ";
-export const INFERRED_PREFIXES = ["자동) ", "추정) "];
+export const INFERRED_PREFIX = "미확인) ";
+export const INFERRED_PREFIXES = ["미확인) ", "추정) "];
 
 // Meaning slots this module manages. Column 설명 cells are handled separately
 // (they live inside the auto:columns table, keyed by column name).
@@ -122,7 +122,7 @@ function rewriteColumnCells(content, mapCell) {
  *
  * Each targeted slot is filled ONLY if currently fillable (scaffold/empty, or
  * inferred when overwriteInferred=true). A confirmed slot is never touched and
- * is reported in `skipped`. Filled values are written as inferred (자동) …).
+ * is reported in `skipped`. Filled values are written as inferred (미확인) …).
  *
  * @returns {{status:"applied"|"nochange"|"conflict", markdown?:string,
  *            filled:Array<{slot,from}>, skipped:Array<{slot,reason}>, reason?:string}}
@@ -229,4 +229,27 @@ export function promote(existing, target = { all: true }) {
   for (const name of changed) promoted.push(`column:${name}`);
 
   return { markdown: content, promoted };
+}
+
+/**
+ * Set one slot to a human-authored value → confirmed (no prefix). This is 채택
+ * with an edit: the reviewer rewrites the code-inferred (or blank) text and locks
+ * it in. Evidence is optional (provenance carries over when the reviewer keeps
+ * it). target = { slot: "purpose" } or { column: "STATUS" }. Any tier can be
+ * edited — a human write is authoritative.
+ *
+ * @returns {{markdown:string, edited:string[]}}
+ */
+export function editSlot(existing, target, text, evidence = []) {
+  const value = formatEvidence(text, evidence); // confirmed: no INFERRED_PREFIX
+  if (target && target.slot) {
+    const next = replaceRegion(existing, target.slot, value);
+    return { markdown: next ?? existing, edited: next != null ? [target.slot] : [] };
+  }
+  if (target && target.column) {
+    const want = String(target.column).toUpperCase();
+    const { content, changed } = rewriteColumnCells(existing, (name) => (name.toUpperCase() === want ? value : null));
+    return { markdown: content, edited: changed.map((n) => `column:${n}`) };
+  }
+  return { markdown: existing, edited: [] };
 }

@@ -982,6 +982,49 @@ process.stdout.write("\n# dashboard promote (POST /actions/schema-docs/promote)\
   }
 }
 
+// ══ #115 — dashboard edit (POST /actions/schema-docs/edit, 수정) ═══════════════
+// 수정: write a HUMAN value (→ confirmed) to one slot/column via the CLI `edit`.
+process.stdout.write("\n# dashboard edit (POST /actions/schema-docs/edit)\n");
+{
+  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-edit-"));
+  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
+  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
+    JSON.stringify([{ keywords: ["sensor"], path: ".claude/docs/db/sensor.md" }]));
+  const docPath = path.join(H, ".claude", "docs", "db", "sensor.md");
+  fs.writeFileSync(docPath,
+    "# TESTUSER.SENSOR\n\n" +
+    "<!-- dbdoc:manual:purpose -->\n미확인) 센서 원장 [근거: repo/schema.ts:24]\n<!-- dbdoc:end:purpose -->\n\n" +
+    "<!-- dbdoc:auto:columns -->\n| 컬럼 | 타입 | 널 | 기본값 | 설명 |\n| --- | --- | --- | --- | --- |\n" +
+    "| SNSR_ID | VARCHAR2(20) | N | - | 미확인) 센서 ID [근거: repo/schema.ts:27] |\n<!-- dbdoc:end:columns -->\n");
+
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45783", OBS_DOCS_HOME: H }, stdio: "ignore" });
+  try {
+    await waitHealth(45783);
+    const notext = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, slot: "purpose" });
+    check("edit: missing text → 400", notext.status === 400, JSON.stringify(notext.status));
+    const notgt = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, text: "x" });
+    check("edit: missing target → 400", notgt.status === 400, JSON.stringify(notgt.status));
+    const outside = await postJson(45783, "/actions/schema-docs/edit", { path: path.join(H, "secret.md"), slot: "purpose", text: "x" });
+    check("edit: outside allowlist → 403/404", outside.status === 403 || outside.status === 404, JSON.stringify(outside.status));
+
+    const e1 = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, slot: "purpose", text: "사람이 확정한 용도", evidence: ["a:1"] });
+    check("edit: 200 + purpose written confirmed, remaining 1",
+      e1.status === 200 && e1.body.ok && e1.body.edited_count === 1 && e1.body.remaining_inferred === 1, JSON.stringify(e1.body));
+    const after1 = fs.readFileSync(docPath, "utf8");
+    check("edit: purpose text written confirmed (no inferred prefix)",
+      /사람이 확정한 용도 \[근거: a:1\]/.test(after1) && !/(?:미확인|추정)\) 센서 원장/.test(after1), "ok");
+
+    const e2 = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, column: "SNSR_ID", text: "손으로 고친 센서 ID" });
+    check("edit: 200 + column written, remaining 0",
+      e2.status === 200 && e2.body.edited_count === 1 && e2.body.remaining_inferred === 0, JSON.stringify(e2.body));
+    check("edit: column text on disk", /\| SNSR_ID \|.*\| 손으로 고친 센서 ID \|/.test(fs.readFileSync(docPath, "utf8")), "ok");
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
+  }
+}
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);

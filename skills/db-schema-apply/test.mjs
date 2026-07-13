@@ -13,6 +13,7 @@ import { renderDoc } from "../db-schema-docs/render.mjs";
 import {
   applyProposal,
   promote,
+  editSlot,
   slotState,
   formatEvidence,
   INFERRED_PREFIX,
@@ -62,10 +63,10 @@ test("applyProposal: fills scaffold prose + column cells as inferred, with evide
   const res = applyProposal(freshDoc(), proposal);
   assert.equal(res.status, "applied");
   // purpose filled, tagged inferred, evidence present
-  assert.match(res.markdown, /자동\) 주문 헤더 \[근거: OrderService\.java:20\]/);
+  assert.match(res.markdown, /미확인\) 주문 헤더 \[근거: OrderService\.java:20\]/);
   // column 설명 cells filled inside the auto columns table
-  assert.match(res.markdown, /\| STATUS \| VARCHAR2\(1\) \| N \| 'N' \| 자동\) 주문 상태.*OrderStatus\.java:12; OrderMapper\.xml:45\] \|/);
-  assert.match(res.markdown, /\| GUBUN \|.*자동\) 주문 구분 코드 \[근거: OrderType\.java:8\] \|/);
+  assert.match(res.markdown, /\| STATUS \| VARCHAR2\(1\) \| N \| 'N' \| 미확인\) 주문 상태.*OrderStatus\.java:12; OrderMapper\.xml:45\] \|/);
+  assert.match(res.markdown, /\| GUBUN \|.*미확인\) 주문 구분 코드 \[근거: OrderType\.java:8\] \|/);
   // structure (auto) untouched
   assert.match(res.markdown, /- PK: ORDER_ID/);
   assert.deepEqual(res.filled.map((f) => f.slot).sort(), ["column:GUBUN", "column:STATUS", "purpose"]);
@@ -75,7 +76,7 @@ test("applyProposal: never overwrites a confirmed slot (frozen), reports it skip
   const confirmed = applyProposal(freshDoc(), {
     purpose: { text: "사람이 확인한 용도" },
   }).markdown;
-  // promote purpose so it becomes confirmed (no 자동) prefix)
+  // promote purpose so it becomes confirmed (no 미확인) prefix)
   const promoted = promote(confirmed, { slots: ["purpose"] }).markdown;
   assert.equal(slotState(regionOf(promoted, "purpose")), "confirmed");
 
@@ -89,16 +90,16 @@ test("applyProposal: never overwrites a confirmed slot (frozen), reports it skip
 
 test("applyProposal: refreshes an existing inferred value by default, keeps it with --keep-inferred", () => {
   const once = applyProposal(freshDoc(), { columns: { STATUS: { text: "구버전 추론" } } }).markdown;
-  assert.match(once, /자동\) 구버전 추론/);
+  assert.match(once, /미확인\) 구버전 추론/);
 
   // default: overwrite the inferred value
   const refreshed = applyProposal(once, { columns: { STATUS: { text: "신버전 추론", evidence: ["x:1"] } } }).markdown;
-  assert.match(refreshed, /자동\) 신버전 추론 \[근거: x:1\]/);
+  assert.match(refreshed, /미확인\) 신버전 추론 \[근거: x:1\]/);
   assert.doesNotMatch(refreshed, /구버전 추론/);
 
   // keep-inferred: leave the existing inferred value alone
   const kept = applyProposal(once, { columns: { STATUS: { text: "신버전 추론" } } }, { overwriteInferred: false });
-  assert.match(kept.markdown, /자동\) 구버전 추론/);
+  assert.match(kept.markdown, /미확인\) 구버전 추론/);
   assert.deepEqual(kept.skipped, [{ slot: "column:STATUS", reason: "inferred" }]);
 });
 
@@ -109,7 +110,7 @@ test("applyProposal: a doc without markers is a conflict (apply only runs on gen
   assert.match(res.reason, /마커가 없는/);
 });
 
-test("promote: strips 자동) prefix (keeps evidence) for targeted slots only", () => {
+test("promote: strips 미확인) prefix (keeps evidence) for targeted slots only", () => {
   const applied = applyProposal(freshDoc(), proposal).markdown;
   // promote only STATUS column + purpose
   const res = promote(applied, { columns: ["status"], slots: ["purpose"] });
@@ -118,13 +119,13 @@ test("promote: strips 자동) prefix (keeps evidence) for targeted slots only", 
   assert.match(res.markdown, /purpose -->\n주문 헤더 \[근거: OrderService\.java:20\]/);
   // STATUS promoted, GUBUN still inferred (not targeted)
   assert.match(res.markdown, /\| STATUS \|.*\| 주문 상태[^|]*\|/);
-  assert.match(res.markdown, /\| GUBUN \|.*자동\) 주문 구분 코드/);
+  assert.match(res.markdown, /\| GUBUN \|.*미확인\) 주문 구분 코드/);
 });
 
 test("promote: --all promotes every inferred slot", () => {
   const applied = applyProposal(freshDoc(), proposal).markdown;
   const res = promote(applied, { all: true });
-  assert.doesNotMatch(res.markdown, /자동\)/); // nothing inferred remains
+  assert.doesNotMatch(res.markdown, /미확인\)/); // nothing inferred remains
   assert.equal(res.promoted.length, 3); // purpose + STATUS + GUBUN
 });
 
@@ -151,7 +152,7 @@ test("applied fills survive a db-schema-docs structural regeneration (compose wi
   ).markdown;
 
   assert.match(regen, /\| STATUS \| VARCHAR2\(2\) \|.*주문 상태/); // confirmed 설명 preserved, type refreshed
-  assert.match(regen, /자동\) 주문 헤더/); // inferred purpose preserved (manual region)
+  assert.match(regen, /미확인\) 주문 헤더/); // inferred purpose preserved (manual region)
   assert.match(regen, /\| CREATED_AT \| DATE \| N \| - \| \{\{설명\}\} \|/); // new column scaffolded
 });
 
@@ -172,8 +173,22 @@ test("buildSchemaDocEnvelope: emit envelope shape for apply / promote (#90)", ()
   assert.deepEqual(p.payload.promoted, ["purpose"]);
 });
 
+test("editSlot: writes a human value as confirmed (no prefix) to a slot / column (#115 수정)", () => {
+  const doc = applyProposal(freshDoc(), proposal).markdown; // 미확인) purpose + STATUS/GUBUN
+  const r1 = editSlot(doc, { slot: "purpose" }, "사람이 고친 용도", ["Doc.java:1"]);
+  assert.deepEqual(r1.edited, ["purpose"]);
+  assert.equal(slotState(regionOf(r1.markdown, "purpose")), "confirmed"); // no 미확인) prefix
+  assert.match(r1.markdown, /사람이 고친 용도 \[근거: Doc\.java:1\]/);
+
+  const r2 = editSlot(doc, { column: "STATUS" }, "손으로 고친 상태", []);
+  assert.deepEqual(r2.edited, ["column:STATUS"]);
+  assert.match(r2.markdown, /\| STATUS \|.*\| 손으로 고친 상태 \|/);
+
+  assert.deepEqual(editSlot(doc, { column: "NOPE" }, "x", []).edited, []); // unknown → no-op
+});
+
 test("legacy 추정) prefix is still recognised + promotable (un-migrated pre-#115 docs)", () => {
-  // apply now WRITES 자동), but a doc filled before the rename still has 추정) —
+  // apply now WRITES 미확인), but a doc filled before the rename still has 추정) —
   // it must classify as inferred and 채택/promote must strip it just the same.
   assert.equal(slotState("추정) 옛 추론 [근거: a:1]"), "inferred");
   const doc = "<!-- dbdoc:manual:purpose -->\n추정) 옛 추론 [근거: a:1]\n<!-- dbdoc:end:purpose -->\n";
