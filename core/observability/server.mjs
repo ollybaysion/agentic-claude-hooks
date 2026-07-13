@@ -34,7 +34,7 @@ import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.19.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call)
+const VERSION = "0.19.2"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -2652,6 +2652,10 @@ tbody tr.sess{cursor:pointer}
 #doc-view .doc{border:1px solid #1c2230;border-radius:6px;padding:12px 16px;background:#0d1119;line-height:1.5}
 #doc-view .doc pre{background:#161b22;padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap}
 #doc-view .doc p{margin:6px 0}#doc-view .doc ul{margin:6px 0 6px 20px}
+#doc-view .doc table.doc-tbl{border-collapse:collapse;margin:8px 0;font-size:12px;display:block;overflow-x:auto;max-width:100%}
+#doc-view .doc table.doc-tbl th,#doc-view .doc table.doc-tbl td{border:1px solid #1c2230;padding:4px 8px;text-align:left;vertical-align:top;white-space:pre-wrap}
+#doc-view .doc table.doc-tbl th{background:#161b22;font-weight:600;white-space:nowrap}
+#doc-view .doc hr{border:0;border-top:1px solid #1c2230;margin:12px 0}
 #docs-rows tr:hover{background:#161b22}
 .cards{display:flex;gap:12px;padding:10px 16px;flex-wrap:wrap;align-items:stretch}
 .card{border:1px solid #1c2230;border-radius:6px;padding:8px 14px;min-width:100px}
@@ -3511,8 +3515,15 @@ const DASHBOARD_JS = `(function(){
     }
     if(last<s.length)container.appendChild(document.createTextNode(s.slice(last)));
   }
+  function docCells(ln){ var s=ln.trim().replace(/^\\|/,"").replace(/\\|$/,""); return s.split("|").map(function(c){ return c.trim(); }); }
+  function isRow(ln){ return /^\\s*\\|.*\\|\\s*$/.test(ln); }
+  function isSep(ln){ return /^\\s*\\|[\\s:|-]*\\|\\s*$/.test(ln)&&ln.indexOf("-")>=0; }
+  function isHr(ln){ return /^\\s*([-*_])(\\s*\\1){2,}\\s*$/.test(ln); }
   function renderDoc(text){
-    var root=el("div","doc"), lines=String(text).split("\\n"), i=0;
+    // Strip HTML/dbdoc comments (<!-- ... -->) so markers don't leak as text and
+    // merge into paragraphs. Tier highlighting keys off the text ({{}}/추정)), not
+    // the markers, so hiding them loses nothing.
+    var root=el("div","doc"), lines=String(text).replace(/<!--[\\s\\S]*?-->/g,"").split(/\\r?\\n/), i=0;
     while(i<lines.length){
       var ln=lines[i];
       if(/^\\s*\x60\x60\x60/.test(ln)){ var buf=[]; i++;
@@ -3520,11 +3531,21 @@ const DASHBOARD_JS = `(function(){
         i++; root.appendChild(el("pre",null,buf.join("\\n"))); continue; }
       var h=ln.match(/^(#{1,6})\\s+(.*)/);
       if(h){ var hd=el("h"+Math.min(6,h[1].length+1),null); docTierize(hd,h[2]); root.appendChild(hd); i++; continue; }
+      if(isRow(ln)&&i+1<lines.length&&isSep(lines[i+1])){
+        var tbl=el("table","doc-tbl"), thead=el("thead",null), htr=el("tr",null);
+        docCells(ln).forEach(function(c){ var th=el("th",null); docTierize(th,c); htr.appendChild(th); });
+        thead.appendChild(htr); tbl.appendChild(thead); i+=2;
+        var tb=el("tbody",null);
+        while(i<lines.length&&isRow(lines[i])){ var tr=el("tr",null);
+          docCells(lines[i]).forEach(function(c){ var td=el("td",null); docTierize(td,c); tr.appendChild(td); });
+          tb.appendChild(tr); i++; }
+        tbl.appendChild(tb); root.appendChild(tbl); continue; }
+      if(isHr(ln)){ root.appendChild(el("hr",null)); i++; continue; }
       if(/^\\s*[-*]\\s+/.test(ln)){ var ul=el("ul",null);
         while(i<lines.length&&/^\\s*[-*]\\s+/.test(lines[i])){ var li=el("li",null); docTierize(li,lines[i].replace(/^\\s*[-*]\\s+/,"")); ul.appendChild(li); i++; }
         root.appendChild(ul); continue; }
       if(!ln.trim()){ i++; continue; }
-      var para=[]; while(i<lines.length&&lines[i].trim()&&!/^\\s*(#{1,6}\\s|\x60\x60\x60|[-*]\\s)/.test(lines[i])){ para.push(lines[i]); i++; }
+      var para=[]; while(i<lines.length&&lines[i].trim()&&!/^\\s*(#{1,6}\\s|\x60\x60\x60|[-*]\\s|\\|)/.test(lines[i])&&!isHr(lines[i])){ para.push(lines[i]); i++; }
       var p=el("p",null); docTierize(p,para.join(" ")); root.appendChild(p);
     }
     return root;
