@@ -76,7 +76,7 @@ proposal.json — cli.mjs로 들어가는 **유일한 입력**:
 }
 ```
 
-- 키 4종(`purpose`/`queries`/`migration`/`columns`) 전부 선택 — 알아낸 것만.
+- 키 3종(`purpose`/`queries`/`columns`) 전부 선택 — 알아낸 것만.
   의미를 못 세운 컬럼은 통째로 생략(빈 스캐폴드로 남는 게 정상).
 - **text**: 한 줄. 값 코드는 `'N'=신규,'P'=처리중` 형태로 나열. **코드에서
   확인 못 한 내용은 쓰지 않는다** — 문장의 모든 조각이 evidence로 뒷받침돼야 한다.
@@ -124,7 +124,7 @@ node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 ## db-schema-docs와의 합성
 
 `db-schema-docs`를 나중에 다시 돌려 구조를 갱신해도 이 스킬이 채운 의미는
-살아남는다 — 컬럼 설명은 컬럼명 단위로, 용도·쿼리·마이그레이션은 manual 구역
+살아남는다 — 컬럼 설명은 컬럼명 단위로, 용도·쿼리는 manual 구역
 보존 규칙(render.mjs) 그대로. inferred는 inferred로, confirmed는 confirmed로
 유지된다. 세 생산자(구조=db-schema-docs / 의미=이 스킬 경유 / 사람 확정=승격)가
 **서로 다른 슬롯**을 쓰므로 충돌하지 않는다.

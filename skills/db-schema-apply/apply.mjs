@@ -36,7 +36,7 @@ export const INFERRED_PREFIX = "추정) ";
 
 // Meaning slots this module manages. Column 설명 cells are handled separately
 // (they live inside the auto:columns table, keyed by column name).
-export const PROSE_SLOTS = ["purpose", "queries", "migration"];
+export const PROSE_SLOTS = ["purpose", "queries"];
 
 // A cell/region value can't carry a raw pipe or newline without breaking a row.
 function escapeInline(value) {
@@ -112,7 +112,6 @@ function rewriteColumnCells(content, mapCell) {
  * proposal: {
  *   purpose?:   { text, evidence?: string[] },
  *   queries?:   { text, evidence? },
- *   migration?: { text, evidence? },
  *   columns?:   { [COLUMN_NAME]: { text, evidence? } },
  * }
  *
