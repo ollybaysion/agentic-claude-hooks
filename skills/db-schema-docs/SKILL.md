@@ -5,9 +5,10 @@ disable-model-invocation: true
 description: >-
   라이브 Oracle 스키마를 keyword-docs db-schema 문서로 생성/재생성한다:
   대상 테이블을 describe_table MCP tool로 조회 → 구조 슬롯 자동 채움 →
-  의미 슬롯은 비워 스캐폴딩 → 소비 레포 .claude/docs/db/에 저장 + 인덱스 등록.
-  재생성 시 사람이 채운 구역은 dbdoc 마커로 보존. Oracle MCP(agent-db-plugin)가
-  연결돼 있어야 한다. /db-schema-docs 로만 호출된다 (모델 자동 발동 없음).
+  의미 슬롯은 비워 스캐폴딩 → user 층(~/.claude/docs/db/)에 저장 + 인덱스 등록
+  (레포 커밋용은 --cwd 옵트인). 재생성 시 사람이 채운 구역은 dbdoc 마커로 보존.
+  Oracle MCP(agent-db-plugin)가 연결돼 있어야 한다. /db-schema-docs 로만
+  호출된다 (모델 자동 발동 없음).
 ---
 
 # db-schema-docs
@@ -35,13 +36,22 @@ dry-run 미리보기 → 사용자 승인 후에만** 한다.
 접속하지 않으며, MCP tool 출력(JSON)만 소비한다. DB 서버가 어디서 돌든(예:
 방화벽 때문에 Windows 쪽에서 실행하는 WSL 구성) tool만 보이면 동작한다.
 
-## 산출물이 저장되는 곳 (소비 레포)
+## 산출물이 저장되는 곳 (기본: user 층)
 
-- 문서: `<현재 레포>/.claude/docs/db/<테이블명 소문자>.md`
-- 인덱스: `<현재 레포>/.claude/context-docs.db-schema.json` — `{keywords, path}`
-  배열. `core/context`의 db-schema provider가 프롬프트에 DB/테이블명이 등장하면
-  이 문서를 주입한다. (인덱스가 `.claude/`에 있으므로 `path`는 레포 루트 기준 —
-  provider의 `docBaseFor` 규약.)
+- 문서: `~/.claude/docs/db/<테이블명 소문자>.md`
+- 인덱스: `~/.claude/context-docs.db-schema.json` — `{keywords, path}` 배열.
+  `core/context`의 db-schema provider가 프롬프트에 DB/테이블명이 등장하면
+  이 문서를 주입한다. (인덱스가 `.claude/` 폴더에 있으므로 `path`는 그 부모
+  기준 — provider의 `docBaseFor` 규약. user 층이면 `~` 기준이 되어 project
+  층과 같은 상대경로 `.claude/docs/db/...`를 그대로 쓴다.)
+- **user 층이 기본인 이유**: DB 문서는 여러 레포에서 소비된다 — provider는
+  user 층 인덱스를 **모든 레포에서** 읽으므로, `~/.claude` 한 벌이면 어느
+  레포에서 테이블명을 언급해도 주입된다. 레포마다 다시 생성할 필요 없고,
+  DB 내부 구조가 서비스 레포 커밋에 섞이지도 않는다.
+- **project 층 옵트인**: 특정 레포에 커밋해 팀과 공유하려면 3단계 커맨드에
+  `--cwd <레포 루트>`를 붙인다 → `<레포>/.claude/docs/db/` + 레포 인덱스에
+  기록. 같은 키워드는 project > user 섀도잉이라 그 레포에서는 레포 버전이
+  이긴다.
 - DB들이 거의 동일한 환경이면 **테이블당 문서 1개**(alias 무관)를 공유한다.
   DB별 차이는 문서 안에 주석으로 남긴다.
 
@@ -72,11 +82,13 @@ dry-run 미리보기 → 사용자 승인 후에만** 한다.
 
 ```bash
 node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-docs/generate.mjs \
-  --describe <tables.json> --cwd <문서를 둘 레포 루트>
+  --describe <tables.json>
 ```
 
 기본이 dry-run이라 디스크를 건드리지 않고 생성될 문서 전문과 요약
 (`created/updated/conflict`)만 출력한다. 이를 사용자에게 보여주고 승인을 받는다.
+대상은 기본 user 층(`~/.claude`)이며, 레포에 커밋할 문서만 예외적으로
+`--cwd <레포 루트>`를 붙인다(위 "산출물" 절).
 
 ### 4. 저장
 

@@ -1,12 +1,19 @@
 #!/usr/bin/env node
-// Regression tests for the db-schema-docs renderer.
+// Regression tests for the db-schema-docs renderer + generator CLI.
 // Run: node skills/db-schema-docs/test.mjs
 //
 // Pure offline tests — no DB, no MCP: render.mjs consumes describe_table JSON
 // (the agent-db-plugin MCP tool's output shape, mirrored in the fixture below).
+// The CLI tests spawn generate.mjs with $HOME pinned to a temp dir (os.homedir()
+// honors $HOME on POSIX), so the real ~/.claude is never touched.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   renderDoc,
   upsertIndexEntry,
@@ -15,6 +22,8 @@ import {
   hasMarkers,
   extractColumnDescriptions,
 } from "./render.mjs";
+
+const GENERATE = join(dirname(fileURLToPath(import.meta.url)), "generate.mjs");
 
 // A describe_table result (the exact shape agent-db-plugin's tool returns).
 function glAccounts() {
@@ -148,4 +157,65 @@ test("upsertIndexEntry: adds a repo-root-relative entry, replaces by path, sets 
 test("docRelPath / keywordsFor: lowercase, schema-qualified + bare keyword", () => {
   assert.equal(docRelPath("GL_ACCOUNTS"), ".claude/docs/db/gl_accounts.md");
   assert.deepEqual(keywordsFor("ERP", "GL_ACCOUNTS"), ["gl_accounts", "erp.gl_accounts"]);
+});
+
+// --- generate.mjs CLI: write targets (issue #84) -----------------------------
+
+// Run the CLI in a sandbox: $HOME pinned to a fresh temp dir, describe fixture
+// on disk. Returns { home, run(...extraArgs) } — caller cleans up with rmSync.
+function cliSandbox() {
+  const home = mkdtempSync(join(tmpdir(), "dbdocs-home-"));
+  const describe = join(home, "tables.json");
+  writeFileSync(describe, JSON.stringify([glAccounts()]));
+  const run = (...extraArgs) =>
+    spawnSync(process.execPath, [GENERATE, "--describe", describe, ...extraArgs], {
+      env: { ...process.env, HOME: home },
+      encoding: "utf8",
+    });
+  return { home, run };
+}
+
+test("generate CLI: --write with no --cwd lands in the user layer ($HOME/.claude)", () => {
+  const { home, run } = cliSandbox();
+  try {
+    const res = run("--write");
+    assert.equal(res.status, 0, res.stderr);
+    const doc = join(home, ".claude", "docs", "db", "gl_accounts.md");
+    const index = join(home, ".claude", "context-docs.db-schema.json");
+    assert.ok(existsSync(doc), "doc under ~/.claude/docs/db/");
+    assert.ok(existsSync(index), "index at ~/.claude/context-docs.db-schema.json");
+    // index entry keeps the .claude-relative path (docBaseFor: base = index's
+    // parent-of-.claude, i.e. $HOME — same convention as the project layer)
+    const entries = JSON.parse(readFileSync(index, "utf8"));
+    assert.equal(entries[0].path, ".claude/docs/db/gl_accounts.md");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("generate CLI: --cwd targets that repo's project layer, not $HOME", () => {
+  const { home, run } = cliSandbox();
+  const repo = mkdtempSync(join(tmpdir(), "dbdocs-repo-"));
+  try {
+    const res = run("--cwd", repo, "--write");
+    assert.equal(res.status, 0, res.stderr);
+    assert.ok(existsSync(join(repo, ".claude", "docs", "db", "gl_accounts.md")));
+    assert.ok(existsSync(join(repo, ".claude", "context-docs.db-schema.json")));
+    assert.ok(!existsSync(join(home, ".claude")), "user layer untouched when --cwd is given");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
+
+test("generate CLI: default dry-run writes nothing anywhere", () => {
+  const { home, run } = cliSandbox();
+  try {
+    const res = run();
+    assert.equal(res.status, 0, res.stderr);
+    assert.match(res.stdout, /ERP\.GL_ACCOUNTS/); // preview printed
+    assert.ok(!existsSync(join(home, ".claude")), "dry-run must not create ~/.claude");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
