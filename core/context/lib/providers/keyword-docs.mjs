@@ -53,9 +53,10 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative } from "node:path";
 import { loadLedger, saveLedger } from "../ledger.mjs";
 import { recordInjection } from "../stats.mjs";
+import { docBaseFor, expandTilde, readIndex } from "../../../../lib/doc-index.mjs";
 
 const TOKEN = /[a-z0-9_]+/g;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -73,25 +74,10 @@ function matcherFor(keyword, mode) {
   return (lower) => re.test(lower);
 }
 
-const expandTilde = (p) =>
-  p === "~" ? homedir() : p.startsWith("~/") ? join(homedir(), p.slice(2)) : p;
-
-// Base folder for a doc `path` inside the index at indexPath: the index's own
-// folder, except a folder literally named `.claude` delegates to its parent
-// (backward compat with the <cwd>/.claude layout).
-function docBaseFor(indexPath) {
-  const dir = dirname(indexPath);
-  return basename(dir) === ".claude" ? dirname(dir) : dir;
-}
-
-function readIndex(path) {
-  try {
-    const arr = JSON.parse(readFileSync(path, "utf8"));
-    return Array.isArray(arr) ? arr : null;
-  } catch {
-    return null; // missing/invalid index -> this layer contributes nothing
-  }
-}
+// expandTilde / docBaseFor / readIndex now live in lib/doc-index.mjs, so the
+// collector's /docs viewer (#92) resolves a doc entry's path to the same file
+// this provider injects — one source of truth for path resolution (and thus for
+// the /docs content allowlist, which must not diverge from what gets injected).
 
 // The config entry for this instance in one raw layer config.
 const entryFor = (layerCfg, id) =>

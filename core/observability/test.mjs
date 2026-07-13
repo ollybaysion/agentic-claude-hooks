@@ -783,6 +783,69 @@ check("fleet: by_flag surfaces seeded inefficiencies (long-tail/search-storm/ret
 check("fleet: series + unattributed present", (ft.series || []).length > 0 && ft.totals.unattributed_cost_usd != null,
   JSON.stringify({ series: (ft.series || []).length, unatt: ft.totals && ft.totals.unattributed_cost_usd }));
 
+// ══ #92 — keyword-docs corpus viewer (/docs + /docs/content) ═════════════════
+process.stdout.write("\n# keyword-docs corpus viewer (/docs)\n");
+function getRaw(port, p) {
+  return new Promise((resolve, reject) => {
+    http.get({ host: "127.0.0.1", port, path: p, headers: { Host: "127.0.0.1" } }, (res) => {
+      const c = []; res.on("data", (x) => c.push(x));
+      res.on("end", () => { let body = {}; try { body = JSON.parse(Buffer.concat(c).toString()); } catch {} resolve({ status: res.statusCode, body }); });
+    }).on("error", reject);
+  });
+}
+{
+  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-docs-"));
+  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
+  // keyword-docs instance: one plain doc + one entry whose file is missing
+  fs.writeFileSync(path.join(H, ".claude", "context-docs.json"),
+    JSON.stringify([{ keywords: ["alpha"], path: ".claude/docs/alpha.md" },
+                    { keywords: ["gone"], path: ".claude/docs/missing.md" }]));
+  // db-schema instance: one dbdoc-marked doc
+  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
+    JSON.stringify([{ keywords: ["orders"], path: ".claude/docs/db/orders.md" }]));
+  // msg-format instance: a BROKEN index → must fail-soft (contribute nothing, no 500)
+  fs.writeFileSync(path.join(H, ".claude", "context-docs.msg-format.json"), "{ not json ]");
+  fs.writeFileSync(path.join(H, ".claude", "docs", "alpha.md"), "# Alpha\n\nplain doc, no markers.\n");
+  fs.writeFileSync(path.join(H, ".claude", "docs", "db", "orders.md"),
+    "# ORDERS\n\n용도: 추정) 주문 원장 [근거: OrderMapper.java:12]\n\n컬럼 status: {{설명 미작성}}\n");
+  fs.writeFileSync(path.join(H, "secret.md"), "under home but not indexed, not under docs\n");
+  const outside = path.join(os.tmpdir(), "obs-docs-outside-" + path.basename(H) + ".md");
+  fs.writeFileSync(outside, "outside the home entirely\n");
+
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45780", OBS_DOCS_HOME: H }, stdio: "ignore" });
+  try {
+    await waitHealth(45780);
+    const list = await get(45780, "/docs");
+    check("docs: lists user-layer docs across instances (broken index skipped)", list.count === 3, JSON.stringify(list.count));
+    const alpha = (list.docs || []).find((d) => d.display.endsWith("alpha.md"));
+    const orders = (list.docs || []).find((d) => d.display.endsWith("orders.md"));
+    const missing = (list.docs || []).find((d) => d.display.endsWith("missing.md"));
+    check("docs: instances labelled (keyword-docs / db-schema)",
+      alpha && alpha.instance === "keyword-docs" && orders && orders.instance === "db-schema",
+      JSON.stringify([alpha && alpha.instance, orders && orders.instance]));
+    check("docs: broken index contributes nothing (fail-soft)", !(list.docs || []).some((d) => d.instance === "msg-format"), JSON.stringify(list.docs.map((d) => d.instance)));
+    check("docs: plain doc → no tier chrome", alpha && alpha.exists && alpha.tiers.dbdoc === false, JSON.stringify(alpha && alpha.tiers));
+    check("docs: dbdoc doc tiers counted", orders && orders.tiers.dbdoc === true && orders.tiers.scaffold === 1 && orders.tiers.inferred === 1, JSON.stringify(orders && orders.tiers));
+    check("docs: missing file flagged exists:false", missing && missing.exists === false, JSON.stringify(missing));
+
+    const good = await getRaw(45780, "/docs/content?path=" + encodeURIComponent(orders.path));
+    check("docs/content: serves an indexed doc verbatim", good.status === 200 && /추정\)/.test(good.body.content || ""), JSON.stringify(good.status));
+    const sec = await getRaw(45780, "/docs/content?path=" + encodeURIComponent(path.join(H, "secret.md")));
+    check("docs/content: refuses a non-indexed file (under home, not under docs)", sec.status === 403, JSON.stringify(sec.status));
+    const out = await getRaw(45780, "/docs/content?path=" + encodeURIComponent(outside));
+    check("docs/content: refuses a path outside home", out.status === 403, JSON.stringify(out.status));
+    const trav = await getRaw(45780, "/docs/content?path=" + encodeURIComponent(path.join(H, ".claude", "docs", "..", "..", "secret.md")));
+    check("docs/content: `..` traversal collapses out of the allowlist → 403", trav.status === 403, JSON.stringify(trav.status));
+    const gone = await getRaw(45780, "/docs/content?path=" + encodeURIComponent(path.join(H, ".claude", "docs", "missing.md")));
+    check("docs/content: missing file → 404", gone.status === 404, JSON.stringify(gone.status));
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
+    try { fs.rmSync(outside, { force: true }); } catch {}
+  }
+}
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);
