@@ -1,5 +1,5 @@
 ---
-name: db-schema-enrich
+name: db-schema-apply
 argument-hint: "[table ...]"
 disable-model-invocation: true
 description: >-
@@ -7,18 +7,18 @@ description: >-
   사람 검토 후 승격까지의 신뢰도 라이프사이클(scaffold → 추정) → confirmed)을
   집행한다 — dbdoc 마커 보존, confirmed 동결, dry-run→승인. 제안 생산(코드베이스
   분석)은 생산자 몫이며, 생산자가 없을 때의 기본 분석 절차는 부록 A.
-  /db-schema-enrich 로만 호출된다 (모델 자동 발동 없음).
+  /db-schema-apply 로만 호출된다 (모델 자동 발동 없음).
 ---
 
-# db-schema-enrich
+# db-schema-apply
 
 ## 책임 경계 (이 스킬이 무엇인가)
 
 **핵심 책임 = 반영과 승격.** 이미 만들어진 의미 제안(proposal.json)을 받아:
 
 1. db-schema 문서에 **안전하게 반영** — dbdoc 마커 보존, 신뢰도 티어 강제,
-   confirmed 동결, dry-run→승인 (`enrich-cli apply`)
-2. 사람이 검토한 추론의 **승격 집행** (`enrich-cli promote`)
+   confirmed 동결, dry-run→승인 (`cli.mjs apply`)
+2. 사람이 검토한 추론의 **승격 집행** (`cli.mjs promote`)
 
 제안을 **만드는 것**(코드베이스 분석)은 이 스킬의 핵심 책임이 아니라
 **생산자의 몫**이다. 생산자는 여럿일 수 있다:
@@ -28,7 +28,7 @@ description: >-
 - 이 스킬을 단독 호출했을 때의 에이전트 직접 분석 — **부록 A**의 기본 절차
 
 어느 생산자든 계약은 하나 — §제안 스키마의 proposal.json. 그리고 문서로
-들어가는 문은 이 스킬(enrich-cli)뿐이다: 생산자는 문서를 직접 수정하지 않는다.
+들어가는 문은 이 스킬(cli.mjs)뿐이다: 생산자는 문서를 직접 수정하지 않는다.
 
 ## 배경
 
@@ -63,7 +63,7 @@ description: >-
 
 ## 제안 스키마 (생산자 계약)
 
-proposal.json — enrich-cli로 들어가는 **유일한 입력**:
+proposal.json — cli.mjs로 들어가는 **유일한 입력**:
 
 ```json
 {
@@ -92,7 +92,7 @@ proposal.json — enrich-cli로 들어가는 **유일한 입력**:
 ### 2. dry-run 미리보기 → 승인
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-enrich/enrich-cli.mjs apply \
+node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-apply/cli.mjs apply \
   --doc ~/.claude/docs/db/orders.md --proposal <proposal.json>
 ```
 
@@ -112,9 +112,9 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-enrich/enrich-cli.mjs apply \
 
 ```bash
 # 특정 컬럼/슬롯만
-node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --column STATUS --slot purpose --write
+node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --column STATUS --slot purpose --write
 # 전부
-node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
+node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 ```
 
 승격은 `추정)` 접두어만 떼고 근거는 남긴다(confirmed 사실의 출처로).
@@ -171,5 +171,5 @@ node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 > 누락 감소). ②~④는 동일하고, 근거 표기도 그대로 `파일:라인` — 그래프는
 > 사이트를 찾는 수단이고, 출처는 항상 코드다.
 
-관련 코드: `enrich.mjs`(순수 병합·티어·승격), `enrich-cli.mjs`(파일 IO CLI),
-`test.mjs`(오프라인 회귀 — `node skills/db-schema-enrich/test.mjs`).
+관련 코드: `apply.mjs`(순수 병합·티어·승격), `cli.mjs`(파일 IO CLI),
+`test.mjs`(오프라인 회귀 — `node skills/db-schema-apply/test.mjs`).
