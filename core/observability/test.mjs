@@ -866,10 +866,13 @@ function getRaw(port, p) {
   }
 }
 
-// ══ #90 — enrich review queue (/stats/schema-docs: file-scan queue + event log) ═
-process.stdout.write("\n# enrich review queue (/stats/schema-docs)\n");
+// ══ #90 — enrich apply/promote activity log (/stats/schema-docs, events only) ══
+// The review "queue" folded into the keyword-docs corpus table's 추정) column: a
+// live /docs file scan whose tiers.inferred is asserted in the docs-viewer test
+// above. This endpoint is now the events-only apply/promote HISTORY under it.
+process.stdout.write("\n# enrich apply/promote log (/stats/schema-docs)\n");
 {
-  // history: seed apply/promote events into the shared DB
+  // seed apply/promote events into the shared DB
   const db = new DatabaseSync(DB_PATH);
   const insSD = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
   const SDT = Date.now();
@@ -879,40 +882,20 @@ process.stdout.write("\n# enrich review queue (/stats/schema-docs)\n");
     JSON.stringify({ doc: "sensor.md", promoted: ["purpose"] }));
   db.close();
 
-  // queue: a fixture home with a db-schema doc — purpose slot + a columns table
-  // whose STATE cell carries an ESCAPED pipe (A\|I), to prove the cell-splitter
-  // doesn't truncate the slot on it.
-  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-review-"));
-  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
-  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
-    JSON.stringify([{ keywords: ["sensor"], path: ".claude/docs/db/sensor.md" }]));
-  fs.writeFileSync(path.join(H, ".claude", "docs", "db", "sensor.md"),
-    "# TESTUSER.SENSOR\n\n" +
-    "<!-- dbdoc:manual:purpose -->\n추정) 센서 원장 [근거: repo/schema.ts:24; repo/sensor.ts:39-52]\n<!-- dbdoc:end:purpose -->\n\n" +
-    "<!-- dbdoc:auto:columns -->\n| 컬럼 | 타입 | 설명 |\n| --- | --- | --- |\n" +
-    "| SNSR_ID | VARCHAR2(20) | 추정) 센서 ID [근거: repo/schema.ts:27] |\n" +
-    "| STATE | VARCHAR2(1) | 추정) 상태(A\\|I 중 하나) [근거: repo/state.ts:8] |\n" +
-    "<!-- dbdoc:end:columns -->\n");
-
-  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45781", OBS_DOCS_HOME: H }, stdio: "ignore" });
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45781" }, stdio: "ignore" });
   try {
     await waitHealth(45781);
     const sd = await get(45781, "/stats/schema-docs?window=90d");
-    check("schema-docs: queue counts pending docs + slots (file scan)", (sd.totals || {}).docs_pending === 1 && sd.totals.slots_pending === 3, JSON.stringify(sd.totals));
-    const q = (sd.queue || [])[0];
-    check("schema-docs: queue doc + inferred count", q && q.inferred === 3 && /sensor\.md$/.test(q.doc || ""), JSON.stringify(q && { doc: q.doc, inferred: q.inferred }));
-    const state = q && (q.slots || []).find((s) => /상태/.test(s.text));
-    check("schema-docs: escaped pipe in a table cell isn't truncated (unescaped to A|I)", state && state.text.includes("A|I") && (state.evidence || [])[0] === "repo/state.ts:8", JSON.stringify(state));
-    const purpose = q && (q.slots || []).find((s) => /원장/.test(s.text));
-    check("schema-docs: slot evidence parsed (multi-ref split on ;)", purpose && purpose.evidence.length === 2, JSON.stringify(purpose && purpose.evidence));
-    check("schema-docs: history totals from apply/promote events", sd.totals.applies === 1 && sd.totals.promotes === 1 && sd.totals.promoted_slots === 1, JSON.stringify(sd.totals));
+    check("schema-docs: events-only now (no file-scan queue)", sd.queue === undefined, JSON.stringify(Object.keys(sd)));
+    check("schema-docs: history totals from apply/promote events",
+      sd.totals.applies === 1 && sd.totals.promotes === 1 && sd.totals.promoted_slots === 1 && sd.totals.filled_slots === 2,
+      JSON.stringify(sd.totals));
     const ap = (sd.history || []).find((h) => h.type === "apply");
     const pr = (sd.history || []).find((h) => h.type === "promote");
     check("schema-docs: history entries carry doc + counts", ap && ap.doc === "sensor.md" && ap.filled === 2 && pr && pr.promoted === 1, JSON.stringify({ ap, pr }));
   } finally {
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
-    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
   }
 }
 
