@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.15.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand)
+const VERSION = "0.16.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -148,6 +148,9 @@ const KNOWN_EVENTS = new Set([
   "PreToolUse", "PostToolUse", "UserPromptSubmit", "Notification",
   "Stop", "SubagentStop", "PreCompact", "SessionStart", "SessionEnd",
 ]);
+// Custom observation types (GuardDecision, NudgeFired, NudgeOutcome, DbQuery) are
+// intentionally NOT listed above: they store with unknown_event=1 like any other
+// non-CC type and are read back by their own /stats/* handlers.
 const PROMOTED = ["tool_name", "tool_use_id", "error", "agent_id", "agent_type", "source", "reason"];
 
 function normalize(env, received_at) {
@@ -1622,6 +1625,83 @@ function handleStatsNudges(req, res, u) {
   } catch (e) { logSafe("stats nudges", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── GET /stats/db (#87) ─────────────────────────────────────────────────────
+// Roll up DbQuery events (agent-db-plugin audit → observability). Same
+// payload-read rationale as /stats/guards: DbQuery rows are the plugin's local /
+// rehearsal query volume (the in-office Windows MCP host has no reachable
+// collector — #87 scope note), so per-row json_extract over the idx_type_time
+// range is fine. `sql` is stored verbatim (masking scoped out of #87), so table
+// extraction is a best-effort FROM/JOIN scan, not a parser.
+const DB_SLOW_LIMIT = 20;
+const DB_ORA_CODE_RE = /ORA-\d{5}/;
+const DB_TABLE_RE = /\b(?:from|join)\s+("?[a-zA-Z_][\w$#]*"?(?:\."?[a-zA-Z_][\w$#]*"?)?)/gi;
+
+function dbExtractTables(sql) {
+  const out = [];
+  if (typeof sql !== "string") return out;
+  DB_TABLE_RE.lastIndex = 0;
+  let m;
+  while ((m = DB_TABLE_RE.exec(sql))) out.push(m[1].replace(/"/g, "").toUpperCase());
+  return out;
+}
+
+function handleStatsDb(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const window_ms = windowOf(u, "7d");
+  const empty = { window_ms, count: 0, errors: 0, by_alias: [], by_tool: [], by_error: [], slow: [], top_tables: [] };
+  if (!db) return json(res, 200, empty);
+  const since = Date.now() - window_ms;
+  try {
+    const rows = db.impl.prepare(
+      `SELECT received_at,
+              json_extract(payload, '$.alias')     alias,
+              json_extract(payload, '$.tool')      tool,
+              json_extract(payload, '$.sql')       sql,
+              json_extract(payload, '$.elapsedMs') elapsedMs,
+              json_extract(payload, '$.oraError')  oraError
+       FROM events
+       WHERE hook_event_type = 'DbQuery' AND received_at >= ?`
+    ).all(since);
+    const aliases = new Map(), tools = new Map(), errs = new Map(), tables = new Map();
+    let errors = 0;
+    for (const r of rows) {
+      const alias = r.alias || "(unknown)";
+      const tool = r.tool || "(unknown)";
+      const ms = Number(r.elapsedMs) || 0;
+      let a = aliases.get(alias);
+      if (!a) aliases.set(alias, (a = { alias, total: 0, errors: 0, slowest_ms: 0 }));
+      a.total++;
+      if (ms > a.slowest_ms) a.slowest_ms = ms;
+      tools.set(tool, (tools.get(tool) || 0) + 1);
+      if (r.oraError) {
+        errors++; a.errors++;
+        const code = (DB_ORA_CODE_RE.exec(String(r.oraError)) || [])[0] || String(r.oraError).slice(0, 40);
+        errs.set(code, (errs.get(code) || 0) + 1);
+      }
+      for (const t of dbExtractTables(r.sql)) tables.set(t, (tables.get(t) || 0) + 1);
+    }
+    const slow = rows
+      .map((r) => ({
+        alias: r.alias, tool: r.tool,
+        sql: typeof r.sql === "string" ? r.sql.slice(0, 200) : "",
+        elapsedMs: Number(r.elapsedMs) || 0,
+        oraError: r.oraError ? String(r.oraError).slice(0, 120) : null,
+        ts: r.received_at,
+      }))
+      .sort((a, b) => b.elapsedMs - a.elapsedMs)
+      .slice(0, DB_SLOW_LIMIT);
+    json(res, 200, {
+      window_ms, count: rows.length, errors,
+      by_alias: [...aliases.values()].sort((a, b) => b.total - a.total),
+      by_tool: [...tools.entries()].map(([tool, count]) => ({ tool, count })).sort((a, b) => b.count - a.count),
+      by_error: [...errs.entries()].map(([code, count]) => ({ code, count })).sort((a, b) => b.count - a.count),
+      slow,
+      top_tables: [...tables.entries()].map(([table, count]) => ({ table, count }))
+        .sort((a, b) => b.count - a.count).slice(0, 20),
+    });
+  } catch (e) { logSafe("stats db", e); json(res, 500, { error: "query failed" }); }
+}
+
 // ── GET /stats/turns (#73 — Turn Inspector, stage 1) ────────────────────────
 // One session's events grouped into turns (UserPromptSubmit → last Stop before
 // the next prompt) with per-call Pre↔Post pairing, the tool/wait/gap time split
@@ -2187,6 +2267,7 @@ a.evlink:hover{color:#79c0ff}
     <a href="#tokens" id="tab-tokens">tokens</a>
     <a href="#guards" id="tab-guards">guards</a>
     <a href="#nudges" id="tab-nudges">nudges</a>
+    <a href="#db" id="tab-db">db</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
   <span id="meta"></span>
@@ -2302,6 +2383,39 @@ a.evlink:hover{color:#79c0ff}
     <tbody id="nudge-app-rows"></tbody>
   </table>
 </section>
+<section id="view-db">
+  <div class="cards" id="db-cards"></div>
+  <div class="toolbar">기간
+    <select id="db-window"><option>24h</option><option selected>7d</option><option>30d</option></select>
+    <span data-help="db"></span>
+    <span class="dim">agent-db-plugin 조회 감사 · 로컬/리허설 한정 (사내 Windows MCP는 수집기 미도달) · sql 원문 기록</span>
+  </div>
+  <h2>by alias</h2>
+  <table>
+    <thead><tr><th>alias</th><th class="num">queries</th><th class="num">errors</th><th class="num">slowest</th><th></th></tr></thead>
+    <tbody id="db-alias-rows"></tbody>
+  </table>
+  <h2>by tool</h2>
+  <table>
+    <thead><tr><th>tool</th><th class="num">count</th><th></th></tr></thead>
+    <tbody id="db-tool-rows"></tbody>
+  </table>
+  <h2>slowest queries</h2>
+  <table>
+    <thead><tr><th>time</th><th>alias</th><th>tool</th><th class="num">ms</th><th>sql</th></tr></thead>
+    <tbody id="db-slow-rows"></tbody>
+  </table>
+  <h2>errors</h2>
+  <table>
+    <thead><tr><th>code</th><th class="num">count</th></tr></thead>
+    <tbody id="db-error-rows"></tbody>
+  </table>
+  <h2>top tables</h2>
+  <table>
+    <thead><tr><th>table</th><th class="num">queries</th><th></th></tr></thead>
+    <tbody id="db-table-rows"></tbody>
+  </table>
+</section>
 <script src="/app.js"></script>
 </body></html>`;
 
@@ -2336,6 +2450,7 @@ const DASHBOARD_JS = `(function(){
     "tok-anat":"AI 요금이 어디서 새는지 4갈래로 분해\\n• input — 처음 보내는(캐시 안 된) 프롬프트\\n• cache write — 프롬프트를 캐시에 저장 (5분 1.25배 / 1시간 2배)\\n• cache read — 캐시된 문맥을 매 턴 다시 읽음 (0.1배) · 보통 제일 큼\\n• output — 생성된 답변 · 토큰당 제일 비쌈\\n아래 turn tax·baseline·switch rewrite 카드는 어림값",
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
+    db:"agent-db-plugin이 실행한 조회의 감사 로그 (DbQuery 이벤트)\\n• by alias / tool — 접속 별칭·MCP 도구별 쿼리 수 (describe_table·list_tables의 내부 카탈로그 조회도 포함)\\n• slowest — elapsedMs 상위 · ⚠ = 에러로 끝난 쿼리\\n• errors — ORA 코드별 집계 (ORA-00942 반복 = 에이전트가 테이블명 헛짚음 → 스키마 문서 공백 신호)\\n• top tables — sql의 FROM/JOIN에서 추출 (근사) · sql은 원문 그대로 기록 (마스킹 없음, 로컬/리허설 한정)",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
     "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값",
     turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• $ — 그 턴의 API 비용 · +sub = 그 턴이 띄운 서브에이전트 지출 (별도 합산) · compact 호출은 기록에 없음(✂ 뱃지) · 빈칸 = 귀속된 기록 없음\\n• 미귀속 — 어느 턴에도 못 붙은 비용 (턴 사이 유휴 시각·수집 공백·resume 잔재)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
@@ -2364,15 +2479,16 @@ const DASHBOARD_JS = `(function(){
     window.addEventListener("scroll",function(){ var t=document.querySelectorAll(".hint .tip");
       for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
-  // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges) — hash routing
-  var TABS=["live","sessions","tools","tokens","guards","nudges"];
+  // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges | #db) — hash routing
+  var TABS=["live","sessions","tools","tokens","guards","nudges","db"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
     if(name==="tools")loadTools();
     if(name==="tokens")loadTokens();
     if(name==="guards")loadGuards();
-    if(name==="nudges")loadNudges(); }
+    if(name==="nudges")loadNudges();
+    if(name==="db")loadDb(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
   // ── live tail (stage 5 behaviour, unchanged)
@@ -2817,8 +2933,60 @@ const DASHBOARD_JS = `(function(){
     }).catch(function(){}); }
   $("nudge-window").addEventListener("change",loadNudges);
 
+  // ── db tab (#87 — /stats/db): agent-db-plugin query audit → DbQuery events.
+  // Local/rehearsal only (the in-office Windows MCP host has no reachable
+  // collector). sql is stored verbatim (masking scoped out).
+  function loadDb(){ var w=$("db-window").value;
+    getJson("/stats/db?window="+w).then(function(d){
+      var box=$("db-cards"); box.textContent="";
+      box.appendChild(card("queries",d.count||0));
+      box.appendChild(card("errors",d.errors||0));
+      box.appendChild(card("aliases",(d.by_alias||[]).length));
+      var top=(d.slow||[])[0]; if(top)box.appendChild(card("slowest",fmtDur(top.elapsedMs)));
+      var ar=$("db-alias-rows"); ar.textContent=""; var amax=0;
+      (d.by_alias||[]).forEach(function(a){ if(a.total>amax)amax=a.total; });
+      (d.by_alias||[]).forEach(function(a){ var tr=document.createElement("tr");
+        tr.appendChild(cell(a.alias));
+        tr.appendChild(cell(a.total,"num"));
+        tr.appendChild(cell(a.errors||"",a.errors?"err":"num"));
+        tr.appendChild(cell(fmtDur(a.slowest_ms),"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(a.total,amax,120,12)); tr.appendChild(td);
+        ar.appendChild(tr); });
+      if(!(d.by_alias||[]).length){ var etr=document.createElement("tr"),etd=el("td","dim","no queries in window"); etd.colSpan=5; etr.appendChild(etd); ar.appendChild(etr); }
+      var tr2=$("db-tool-rows"); tr2.textContent=""; var tmax=0;
+      (d.by_tool||[]).forEach(function(t){ if(t.count>tmax)tmax=t.count; });
+      (d.by_tool||[]).forEach(function(t){ var tr=document.createElement("tr");
+        tr.appendChild(cell(t.tool));
+        tr.appendChild(cell(t.count,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(t.count,tmax,120,12)); tr.appendChild(td);
+        tr2.appendChild(tr); });
+      var sr=$("db-slow-rows"); sr.textContent="";
+      (d.slow||[]).forEach(function(s){ var tr=document.createElement("tr");
+        tr.appendChild(cell(fmtDT(s.ts)));
+        tr.appendChild(cell(s.alias));
+        tr.appendChild(cell(s.tool));
+        tr.appendChild(cell(s.elapsedMs,s.oraError?"err":"num"));
+        tr.appendChild(cell(s.oraError?("⚠ "+s.sql):s.sql,"pay"));
+        sr.appendChild(tr); });
+      if(!(d.slow||[]).length){ var str=document.createElement("tr"),std=el("td","dim","no queries in window"); std.colSpan=5; str.appendChild(std); sr.appendChild(str); }
+      var er=$("db-error-rows"); er.textContent="";
+      (d.by_error||[]).forEach(function(e){ var tr=document.createElement("tr");
+        tr.appendChild(cell(e.code,"err"));
+        tr.appendChild(cell(e.count,"num"));
+        er.appendChild(tr); });
+      if(!(d.by_error||[]).length){ var e2=document.createElement("tr"),e2d=el("td","dim","no errors in window"); e2d.colSpan=2; e2.appendChild(e2d); er.appendChild(e2); }
+      var br=$("db-table-rows"); br.textContent=""; var bmax=0;
+      (d.top_tables||[]).forEach(function(t){ if(t.count>bmax)bmax=t.count; });
+      (d.top_tables||[]).forEach(function(t){ var tr=document.createElement("tr");
+        tr.appendChild(cell(t.table));
+        tr.appendChild(cell(t.count,"num"));
+        var td=document.createElement("td"); td.appendChild(hbar(t.count,bmax,120,12)); tr.appendChild(td);
+        br.appendChild(tr); });
+    }).catch(function(){}); }
+  $("db-window").addEventListener("change",loadDb);
+
   // 30s refresh of whichever analytics tab is visible
-  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); },30000);
+  setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); else if(h==="db")loadDb(); },30000);
 
   initHints();
   showTab(location.hash.slice(1));
@@ -2869,6 +3037,7 @@ function onRequest(req, res) {
       if (pathname === "/stats/tokens") return handleStatsTokens(req, res, u);
       if (pathname === "/stats/guards") return handleStatsGuards(req, res, u);
       if (pathname === "/stats/nudges") return handleStatsNudges(req, res, u);
+      if (pathname === "/stats/db") return handleStatsDb(req, res, u);
       if (pathname === "/stats/turns") return handleStatsTurns(req, res, u);
       return json(res, 404, { error: "not found" });
     }
