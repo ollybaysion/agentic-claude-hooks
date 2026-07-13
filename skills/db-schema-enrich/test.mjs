@@ -17,6 +17,7 @@ import {
   formatEvidence,
   INFERRED_PREFIX,
 } from "./enrich.mjs";
+import { buildSchemaDocEnvelope } from "./enrich-cli.mjs";
 
 // A freshly generated db-schema doc: structure filled, meaning slots scaffolded.
 function freshDoc() {
@@ -152,6 +153,23 @@ test("enrich fills survive a db-schema-docs structural regeneration (compose wit
   assert.match(regen, /\| STATUS \| VARCHAR2\(2\) \|.*주문 상태/); // confirmed 설명 preserved, type refreshed
   assert.match(regen, /추정\) 주문 헤더/); // inferred purpose preserved (manual region)
   assert.match(regen, /\| CREATED_AT \| DATE \| N \| - \| \{\{설명\}\} \|/); // new column scaffolded
+});
+
+test("buildSchemaDocEnvelope: emit envelope shape for apply / promote (#90)", () => {
+  const a = buildSchemaDocEnvelope("SchemaDocApply", "/home/u/.claude/docs/db/fdc_sensor.md", {
+    filled: [{ slot: "purpose" }, { slot: "column:STATUS" }],
+    skipped: [],
+  });
+  assert.equal(a.hook_event_type, "SchemaDocApply");
+  assert.equal(a.payload.doc, "fdc_sensor.md"); // basename, not the full path
+  assert.equal(a.payload.path, "/home/u/.claude/docs/db/fdc_sensor.md");
+  assert.equal(a.payload.filled.length, 2);
+  assert.equal(typeof a.timestamp, "number");
+  assert.ok(a.source_app); // labelled for the fleet
+
+  const p = buildSchemaDocEnvelope("SchemaDocPromote", "x/erp_orders.md", { promoted: ["purpose"] });
+  assert.equal(p.hook_event_type, "SchemaDocPromote");
+  assert.deepEqual(p.payload.promoted, ["purpose"]);
 });
 
 // helper: read a region body out of a doc for assertions
