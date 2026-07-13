@@ -35,7 +35,7 @@ import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.22.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only by default (--all-tools includes catalog reads), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change)
+const VERSION = "0.22.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1739,21 +1739,28 @@ function displaySql(sql, max = 600) {
 //   rows: {alias, tool, sql, elapsedMs, oraError, ts}
 //   → [{table, total, distinct, queries:[{sql, normalized, count, aliases,
 //        lastTs, errorRate, avgMs}]}] sorted by total desc.
+// By DEFAULT only SUCCESSFUL executions feed representatives — a 대표 쿼리 that
+// seeds a doc must be runnable, so a query that only ever errored (agent typo'd a
+// column, ORA-00942, …) is noise here, not an example. `includeErrors` opts the
+// failures back in (for a "where does the agent keep failing on this table" view),
+// and only then can errorRate be > 0.
 // A JOIN attributes its query to EACH table it touches. Per table, queries are
 // grouped by normalized shape and ranked count desc → errorRate asc → recency
 // desc, then sliced to perTable. The representative sql shown is the most recent
-// SUCCESSFUL instance of the group (fallback: most recent, if all errored).
-// Rows whose FROM/JOIN can't be parsed collect under REP_UNKNOWN_TABLE so nothing
-// vanishes silently. `table` (if set) filters to one table (case-insensitive).
-function collectRepresentative(rows, { perTable = 3, minCount = 1, table = null } = {}) {
+// SUCCESSFUL instance of the group (fallback, only under includeErrors: most
+// recent, if every instance errored). Rows whose FROM/JOIN can't be parsed collect
+// under REP_UNKNOWN_TABLE so nothing vanishes silently. `table` (if set) filters
+// to one table (case-insensitive).
+function collectRepresentative(rows, { perTable = 3, minCount = 1, table = null, includeErrors = false } = {}) {
   const want = table ? String(table).toUpperCase() : null;
   const byTable = new Map(); // table -> Map(normalized -> group)
   for (const r of rows) {
+    const ok = !r.oraError;
+    if (!ok && !includeErrors) continue; // representatives come from successful runs
     const key = normalizeSql(r.sql);
     if (!key) continue;
     let tables = [...new Set(dbExtractTables(r.sql))];
     if (!tables.length) tables = [REP_UNKNOWN_TABLE];
-    const ok = !r.oraError;
     const ts = Number(r.ts) || 0;
     const ms = Number(r.elapsedMs);
     for (const t of tables) {
@@ -1802,10 +1809,11 @@ function repDate(ts) {
 }
 
 // Render the per-table proposal a human pastes into each table's manual slot.
-function renderRepresentativeMarkdown(tables, { window_ms, allTools }) {
+function renderRepresentativeMarkdown(tables, { window_ms, allTools, includeErrors }) {
   const win = Object.keys(WINDOW_MS).find((k) => WINDOW_MS[k] === window_ms) || `${window_ms}ms`;
+  const scope = `${allTools ? "all tools" : "run_query"}, ${includeErrors ? "실패 포함" : "성공 실행만"}`;
   const lines = [
-    `<!-- 대표 쿼리 제안 — 관측 DbQuery ${allTools ? "(all tools)" : "(run_query)"} · 최근 ${win} -->`,
+    `<!-- 대표 쿼리 제안 — 관측 DbQuery (${scope}) · 최근 ${win} -->`,
     "<!-- 사람이 검토 후, 각 테이블 문서의 '## 대표 쿼리' 구역(dbdoc:manual:queries 마커 안)에 붙이세요. -->",
     "",
   ];
@@ -4301,8 +4309,10 @@ async function cliMaterializeTurns() {
 }
 
 // #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs.
-// Read-only, proposal-only (prints; never writes a doc). Flags: --window 30d,
-// --alias X, --table T, --per-table N, --min-count N, --all-tools, --json.
+// Read-only, proposal-only (prints; never writes a doc). Representatives come from
+// SUCCESSFUL executions only; --include-errors opts failures back in. Flags:
+// --window 30d, --alias X, --table T, --per-table N, --min-count N, --all-tools,
+// --include-errors, --json.
 async function cliRepresentativeQueries() {
   await startBackend();
   if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
@@ -4315,6 +4325,7 @@ async function cliRepresentativeQueries() {
   const perTable = Math.max(1, Number(opt("--per-table", "3")) || 3);
   const minCount = Math.max(1, Number(opt("--min-count", "1")) || 1);
   const allTools = has("--all-tools");
+  const includeErrors = has("--include-errors");
   const asJson = has("--json");
   const since = Date.now() - window_ms;
   let rows;
@@ -4336,7 +4347,7 @@ async function cliRepresentativeQueries() {
     process.stdout.write(`${SERVICE}: query failed — ${e.message}\n`);
     process.exit(1);
   }
-  const tables = collectRepresentative(rows, { perTable, minCount, table });
+  const tables = collectRepresentative(rows, { perTable, minCount, table, includeErrors });
   if (asJson) {
     process.stdout.write(`${JSON.stringify({ window_ms, all_tools: allTools, observed: rows.length, tables }, null, 2)}\n`);
     process.exit(0);
@@ -4352,7 +4363,7 @@ async function cliRepresentativeQueries() {
     process.stdout.write(`관측 ${rows.length}건이 있으나 조건(min-count ${minCount}${table ? `, table ${table}` : ""})에 맞는 대표 쿼리가 없습니다.\n`);
     process.exit(0);
   }
-  process.stdout.write(`${renderRepresentativeMarkdown(tables, { window_ms, allTools })}\n`);
+  process.stdout.write(`${renderRepresentativeMarkdown(tables, { window_ms, allTools, includeErrors })}\n`);
   process.exit(0);
 }
 

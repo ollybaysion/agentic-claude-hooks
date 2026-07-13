@@ -114,12 +114,16 @@ node ${CLAUDE_PLUGIN_ROOT}/core/observability/server.mjs representative-queries 
   [--alias fdc]           # 한 접속 별칭만
   [--per-table 3] [--min-count 2]
   [--all-tools]           # describe_table/list_tables 내부 카탈로그 조회까지 포함
+  [--include-errors]      # 실패한 쿼리도 포함(기본은 성공 실행만)
   [--json]                # 구조화 출력
 ```
 
 - **정규화**: 리터럴·바인드·`IN (?,…)`만 다른 쿼리는 한 그룹으로 묶고(빈도 desc →
   성공률 → 최근성 순 랭킹), 대표 SQL은 그 그룹의 **가장 최근 성공** 인스턴스를 보여준다.
 - **기본은 `run_query`만** — 카탈로그 조회는 대표 쿼리가 아니므로 제외(`--all-tools`로 포함).
+- **기본은 성공 실행만** — 대표 쿼리는 실제로 돌아가는 예시여야 하므로, 항상 실패한
+  쿼리(컬럼명 헛짚음·ORA-00942 등)는 후보에서 뺀다. `--include-errors`로 포함하면
+  실패율과 함께 "이 테이블에서 에이전트가 자주 헛짚는 쿼리"(스키마 갭 신호)도 볼 수 있다.
 - **읽기 전용·제안 전용**: 문서를 직접 쓰지 않는다. 출력된 블록을 **사람이 검토한 뒤**
   해당 테이블 문서의 `## 대표 쿼리` 구역(`dbdoc:manual:queries` 마커 안)에 붙인다 —
   manual 슬롯 원문 보존 + enrich의 propose→promote 규율과 같은 계약.

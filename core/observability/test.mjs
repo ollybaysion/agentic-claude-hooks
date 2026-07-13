@@ -460,19 +460,23 @@ check("repq: empty → 0-row notice", /관측된 DbQuery 없음/.test(rqEmpty), 
 const J = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--json"));
 check("repq: run_query only (catalog excluded)", J.observed === 8, JSON.stringify(J.observed));
 const lot = (J.tables || []).find((t) => t.table === "FDC.LOT_HISTORY");
-check("repq: table attributed + total over all shapes", lot && lot.total === 6 && lot.distinct === 3, JSON.stringify(lot && { total: lot.total, distinct: lot.distinct }));
+check("repq: success-only — total over successful shapes (failed B dropped)", lot && lot.total === 5 && lot.distinct === 2, JSON.stringify(lot && { total: lot.total, distinct: lot.distinct }));
 const gA = lot && lot.queries.find((q) => q.count === 3);
 check("repq: literal-varied queries grouped (count 3)", !!gA, JSON.stringify(lot && lot.queries.map((q) => q.count)));
 check("repq: representative = most recent success", gA && /'L3'/.test(gA.sql) && gA.errorRate === 0, JSON.stringify(gA && gA.sql));
 check("repq: ranked count desc (A first)", lot && lot.queries[0].count === 3, JSON.stringify(lot && lot.queries.map((q) => q.count)));
-const gB = lot && lot.queries.find((q) => q.errorRate === 1);
-check("repq: errored-only group carries errorRate 1", !!gB, JSON.stringify(lot && lot.queries.map((q) => q.errorRate)));
+check("repq: failed-only shape excluded by default (no errorRate>0, no 'bad')", lot && lot.queries.every((q) => q.errorRate === 0) && !lot.queries.some((q) => /\bbad\b/.test(q.sql)), JSON.stringify(lot && lot.queries.map((q) => ({ c: q.count, e: q.errorRate }))));
 const sensor = (J.tables || []).find((t) => t.table === "FDC.SENSOR");
 check("repq: JOIN attributes query to 2nd table", sensor && sensor.queries[0] && sensor.queries[0].count === 2, JSON.stringify(sensor));
 const alarm = (J.tables || []).find((t) => t.table === "FDC.ALARM");
-const gD = alarm && alarm.queries[0];
-check("repq: success preferred over newer error", gD && /id = 1/.test(gD.sql) && gD.count === 2 && approx(gD.errorRate, 0.5), JSON.stringify(gD));
+check("repq: one good + one failed → only the good one proposed", alarm && alarm.queries.length === 1 && /id = 1/.test(alarm.queries[0].sql) && alarm.queries[0].errorRate === 0, JSON.stringify(alarm));
 check("repq: catalog table absent by default", !(J.tables || []).some((t) => t.table === "ALL_TAB_COLUMNS"), JSON.stringify((J.tables || []).map((t) => t.table)));
+// --include-errors opts failures back in (with errorRate), for a "where does the agent keep failing" view
+const Jerr = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--include-errors", "--json"));
+const lotE = (Jerr.tables || []).find((t) => t.table === "FDC.LOT_HISTORY");
+check("repq: --include-errors surfaces the errorRate-1 shape", lotE && lotE.queries.some((q) => q.errorRate === 1 && /\bbad\b/.test(q.sql)), JSON.stringify(lotE && lotE.queries.map((q) => q.errorRate)));
+const gD = (Jerr.tables || []).find((t) => t.table === "FDC.ALARM") && ((Jerr.tables || []).find((t) => t.table === "FDC.ALARM")).queries[0];
+check("repq: --include-errors — success is still the rep of a mixed group", gD && /id = 1/.test(gD.sql) && gD.count === 2 && approx(gD.errorRate, 0.5), JSON.stringify(gD));
 const Jall = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--all-tools", "--json"));
 check("repq: --all-tools includes catalog read", Jall.observed === 9 && (Jall.tables || []).some((t) => t.table === "ALL_TAB_COLUMNS"), JSON.stringify(Jall.observed));
 const Jmc = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--min-count", "2", "--json"));
@@ -481,7 +485,7 @@ check("repq: --min-count drops low-frequency shapes", mcCounts.length > 0 && mcC
 const Jtbl = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--table", "fdc.alarm", "--json"));
 check("repq: --table filters to one (case-insensitive)", (Jtbl.tables || []).length === 1 && Jtbl.tables[0].table === "FDC.ALARM", JSON.stringify((Jtbl.tables || []).map((t) => t.table)));
 const rqMd = cliEnv(RQ_ENV, "representative-queries", "--window", "7d");
-check("repq: markdown has table heading + sql fence", /### FDC\.LOT_HISTORY/.test(rqMd) && rqMd.includes("```sql") && /'L3'/.test(rqMd), rqMd.slice(0, 120));
+check("repq: markdown heading + sql fence, no 실패율 by default", /### FDC\.LOT_HISTORY/.test(rqMd) && rqMd.includes("```sql") && /'L3'/.test(rqMd) && !/실패율/.test(rqMd), rqMd.slice(0, 120));
 const rqNone = cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--alias", "__none__");
 check("repq: unknown alias → 0-row notice", /관측된 DbQuery 없음/.test(rqNone), rqNone.slice(0, 60));
 
