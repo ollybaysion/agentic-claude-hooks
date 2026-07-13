@@ -1,4 +1,4 @@
-// db-schema-propose — the default PRODUCER of db-schema meaning proposals.
+// db-schema-propose-codebase — the default PRODUCER of db-schema meaning proposals.
 //
 // The actual codebase reading (finding sites, deriving meanings, cross-
 // checking) is agent judgment work defined in SKILL.md. This module is the

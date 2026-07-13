@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Offline regression tests for db-schema-propose.
-// Run: node skills/db-schema-propose/test.mjs
+// Offline regression tests for db-schema-propose-codebase.
+// Run: node skills/db-schema-propose-codebase/test.mjs
 //
 // Pure — no DB, no codebase. What's tested is the deterministic rim of the
 // producer: slot inventory and proposal lint (contract shape + doc cross-

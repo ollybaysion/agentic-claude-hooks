@@ -1,16 +1,17 @@
 ---
-name: db-schema-propose
+name: db-schema-propose-codebase
 argument-hint: "[table 또는 문서 경로]"
 disable-model-invocation: true
 description: >-
-  db-schema 문서의 의미 제안(proposal.json)을 만드는 기본 생산자. 문서의 채울
+  코드베이스를 근거 원천으로 db-schema 문서의 의미 제안(proposal.json)을
+  만드는 생산자. 문서의 채울
   슬롯을 인벤토리하고, 코드베이스에서 근거(사이트)를 찾아 교차 확인한 의미
   후보를 proposal.json으로 구조화한 뒤, lint로 계약·문서 정합을 자가 점검해
   db-schema-apply에 넘긴다. 문서는 직접 수정하지 않는다(쓰기는 apply 전용).
-  /db-schema-propose 로만 호출된다 (모델 자동 발동 없음).
+  /db-schema-propose-codebase 로만 호출된다 (모델 자동 발동 없음).
 ---
 
-# db-schema-propose — 의미 제안 생산자
+# db-schema-propose-codebase — 의미 제안 생산자 (원천: 코드베이스)
 
 **생산 전용.** 산출물은 proposal.json 하나이고, 문서로 들어가는 문은
 [db-schema-apply](../db-schema-apply/SKILL.md)(유일한 쓰기 게이트웨이)뿐이다.
@@ -18,7 +19,9 @@ description: >-
 생산자는 이 스킬 말고도 여럿일 수 있고 전부 같은 계약(apply의 §제안
 스키마)으로 수렴한다:
 
-- **이 스킬** — 생산자가 따로 없을 때의 기본 경로(코드베이스 분석)
+- **이 스킬** — 원천 = 코드베이스. 생산자가 따로 없을 때의 기본 경로.
+  (원천별 생산자는 `db-schema-propose-<원천>` 이름을 따른다 — 예: 관측
+  쿼리 기반이 생기면 `db-schema-propose-obs`)
 - **도메인 스킬 부산물** — agent-skill-foundry 산출 스킬이 절차 실행 중 알게
   된 의미를 분리 산출
 - **전문가 구술** — 사람이 아는 것을 서술하면 구조화만 해서 제안으로. 본인이
@@ -33,7 +36,7 @@ description: >-
 [db-schema-docs](../db-schema-docs/SKILL.md)로 생성한다. 있으면:
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-propose/propose-cli.mjs slots \
+node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-propose-codebase/propose-cli.mjs slots \
   --doc ~/.claude/docs/db/orders.md
 ```
 
@@ -82,7 +85,7 @@ apply의 §제안 스키마 규약대로 스크래치패드에 작성한다. 요
 ### 6. lint — 넘기기 전 자가 점검
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-propose/propose-cli.mjs lint \
+node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-propose-codebase/propose-cli.mjs lint \
   --doc ~/.claude/docs/db/orders.md --proposal <proposal.json>
 ```
 
@@ -105,4 +108,4 @@ dry-run 미리보기 → 승인 → `--write`, 이후의 검토·승격(promote)
 
 관련 코드: `propose.mjs`(순수: 슬롯 인벤토리·제안 lint),
 `propose-cli.mjs`(읽기 전용 CLI), `test.mjs`(오프라인 회귀 —
-`node skills/db-schema-propose/test.mjs`).
+`node skills/db-schema-propose-codebase/test.mjs`).
