@@ -376,6 +376,42 @@ check("nudges: complied fire marked ✓", recA && recA.complied === true, JSON.s
 const recC = (nu2.recent || []).find((r) => r.costShown === "unpriced");
 check("nudges: unmatched fire stays null", recC && recC.complied === null, JSON.stringify(recC));
 
+// ══ #87 — DB query observation (/stats/db: agent-db-plugin DbQuery events) ════
+process.stdout.write("\n# db query observation (/stats/db)\n");
+const DBT = Date.now();
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insD = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,tool_name,received_at,payload) VALUES (?,?,?,?,?,?,?,?)`);
+  const dq = (seq, alias, tool, sql, elapsedMs, oraError, at) =>
+    insD.run(seq, "d" + seq, "agent-db-plugin", "agent-db", "DbQuery", tool, at, JSON.stringify({
+      alias, tool, sql, elapsedMs, rowCount: oraError ? null : 1, truncated: oraError ? null : false, oraError }));
+  dq(250, "erp-prod", "run_query", "SELECT * FROM gl_accounts WHERE id = 1", 120, null, DBT);
+  dq(251, "erp-prod", "run_query", "SELECT a.* FROM gl_accounts a JOIN gl_periods p ON a.pid = p.id", 350, null, DBT + 1); // slowest
+  dq(252, "erp-prod", "run_query", "SELECT * FROM missing_tbl", 5, "ORA-00942: table or view does not exist", DBT + 2);
+  dq(253, "hr-stg", "describe_table", "SELECT column_name FROM all_tab_columns WHERE table_name = 'EMP'", 30, null, DBT + 3);
+  dq(254, "hr-stg", "run_query", "SELECT * FROM employees", 60, null, DBT + 4);
+  dq(255, "erp-prod", "run_query", "SELECT * FROM another_missing", 8, "ORA-00942: table or view does not exist", DBT + 5);
+  db.close();
+}
+const dbs = await statGet(45760, "/stats/db?window=7d", null);
+check("db: rows counted", dbs.count === 6, JSON.stringify(dbs.count));
+check("db: errors counted", dbs.errors === 2, JSON.stringify(dbs.errors));
+const aErp = (dbs.by_alias || []).find((a) => a.alias === "erp-prod");
+check("db: by_alias totals + errors", aErp && aErp.total === 4 && aErp.errors === 2, JSON.stringify(aErp));
+check("db: by_alias slowest_ms", aErp && aErp.slowest_ms === 350, JSON.stringify(aErp));
+const tRun = (dbs.by_tool || []).find((t) => t.tool === "run_query");
+const tDesc = (dbs.by_tool || []).find((t) => t.tool === "describe_table");
+check("db: by_tool groups (run_query vs catalog reads)", tRun && tRun.count === 5 && tDesc && tDesc.count === 1, JSON.stringify(dbs.by_tool));
+const e942 = (dbs.by_error || []).find((e) => e.code === "ORA-00942");
+check("db: ORA code aggregated", e942 && e942.count === 2, JSON.stringify(dbs.by_error));
+check("db: slowest first, non-error", (dbs.slow || [])[0] && dbs.slow[0].elapsedMs === 350 && dbs.slow[0].oraError === null, JSON.stringify((dbs.slow || [])[0]));
+const errRow = (dbs.slow || []).find((s) => s.oraError);
+check("db: errored query carries oraError", errRow && /ORA-00942/.test(errRow.oraError), JSON.stringify(errRow));
+const tGl = (dbs.top_tables || []).find((t) => t.table === "GL_ACCOUNTS");
+check("db: top_tables from FROM/JOIN (approx)", tGl && tGl.count === 2, JSON.stringify(dbs.top_tables));
+const tPer = (dbs.top_tables || []).find((t) => t.table === "GL_PERIODS");
+check("db: JOIN table extracted", tPer && tPer.count === 1, JSON.stringify(tPer));
+
 // ══ #73 — Turn Inspector (/stats/turns: grouping, pairing, time split, flags) ═
 process.stdout.write("\n# turn inspector (/stats/turns)\n");
 {
