@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// db-schema-enrich CLI — the side-effecting wrapper around enrich.mjs.
+// db-schema-apply CLI — the side-effecting wrapper around apply.mjs.
 //
 // Two subcommands, both DRY-RUN by default (print the result, touch nothing);
 // pass --write to persist. The skill shows the dry-run for approval first, and
@@ -15,7 +15,7 @@
 // Exit: 0 ok, 1 fatal/usage, 2 apply hit a confirmed slot it left untouched.
 
 import { readFile, writeFile } from "node:fs/promises";
-import { applyEnrichment, promote } from "./enrich.mjs";
+import { applyProposal, promote } from "./apply.mjs";
 
 function parseArgs(argv) {
   const args = { write: false, columns: [], slots: [], all: false, keepInferred: false };
@@ -54,7 +54,7 @@ async function cmdApply(args) {
   if (!args.doc || !args.proposal) throw new Error("apply: --doc 와 --proposal 이 필요합니다");
   const existing = await readText(args.doc);
   const proposal = await readJson(args.proposal);
-  const res = applyEnrichment(existing, proposal, { overwriteInferred: !args.keepInferred });
+  const res = applyProposal(existing, proposal, { overwriteInferred: !args.keepInferred });
 
   if (res.status === "conflict") {
     console.error(res.reason);

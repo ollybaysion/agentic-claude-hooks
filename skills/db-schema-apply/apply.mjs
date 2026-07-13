@@ -1,4 +1,4 @@
-// db-schema-enrich — fills the MEANING slots of a db-schema doc from evidence
+// db-schema-apply — fills the MEANING slots of a db-schema doc from evidence
 // mined out of a codebase, and manages the confidence lifecycle of those fills.
 //
 // db-schema-docs (sibling skill) generates the STRUCTURE (columns/PK/index from
@@ -28,7 +28,7 @@
 // extractColumnDescriptions, hasMarkers). This module only WRITES back into the
 // meaning slots; it never touches the auto structure regions. And because
 // render.mjs preserves non-scaffold column 설명 and manual regions across a
-// structural regeneration, enrich's fills survive a later db-schema-docs run.
+// structural regeneration, these fills survive a later db-schema-docs run.
 
 import { extractRegion, hasMarkers } from "../db-schema-docs/render.mjs";
 
@@ -120,16 +120,16 @@ function rewriteColumnCells(content, mapCell) {
  * inferred when overwriteInferred=true). A confirmed slot is never touched and
  * is reported in `skipped`. Filled values are written as inferred (추정) …).
  *
- * @returns {{status:"enriched"|"nochange"|"conflict", markdown?:string,
+ * @returns {{status:"applied"|"nochange"|"conflict", markdown?:string,
  *            filled:Array<{slot,from}>, skipped:Array<{slot,reason}>, reason?:string}}
  */
-export function applyEnrichment(existing, proposal, { overwriteInferred = true } = {}) {
+export function applyProposal(existing, proposal, { overwriteInferred = true } = {}) {
   if (!hasMarkers(existing)) {
     return {
       status: "conflict",
       filled: [],
       skipped: [],
-      reason: "dbdoc 마커가 없는 문서입니다 — enrich는 db-schema-docs가 생성한 문서에만 적용됩니다.",
+      reason: "dbdoc 마커가 없는 문서입니다 — 이 스킬은 db-schema-docs가 생성한 문서에만 적용됩니다.",
     };
   }
 
@@ -175,7 +175,7 @@ export function applyEnrichment(existing, proposal, { overwriteInferred = true }
   }
 
   return {
-    status: filled.length ? "enriched" : "nochange",
+    status: filled.length ? "applied" : "nochange",
     markdown: content,
     filled,
     skipped,
