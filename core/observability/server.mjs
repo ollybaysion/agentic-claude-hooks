@@ -33,7 +33,7 @@ import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.14.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only)
+const VERSION = "0.15.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -386,7 +386,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 5;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66)
+  impl.exec("PRAGMA user_version = 6;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -428,6 +428,7 @@ function initSchema(impl) {
     cache_create INTEGER NOT NULL DEFAULT 0, cache_read INTEGER NOT NULL DEFAULT 0,
     cache_create_1h INTEGER NOT NULL DEFAULT 0,
     sidechain INTEGER NOT NULL DEFAULT 0,
+    agent_id TEXT,
     emitted_tool_ids TEXT NOT NULL DEFAULT '[]',
     follows_tool_ids TEXT NOT NULL DEFAULT '[]',
     UNIQUE(session_id, msg_id))`);
@@ -440,13 +441,35 @@ function initSchema(impl) {
     try { impl.exec("ALTER TABLE usage ADD COLUMN cache_create_1h INTEGER NOT NULL DEFAULT 0"); }
     catch (e) { logSafe("migrate v4", e); } // already present → ignore
   }
+  // v5→v6 (#81): subagent usage. CC writes each subagent conversation to its own
+  // <dir>/<sessionId>/subagents/agent-<id>.jsonl, so a session tracks MANY
+  // transcript files — the cursor key grows to (session_id, path) via a table
+  // rebuild (SQLite can't alter a PK), and usage rows learn which agent spent
+  // the tokens. Old rows keep agent_id NULL (main chain).
+  if (exists && prevVersion < 6) {
+    try { impl.exec("ALTER TABLE usage ADD COLUMN agent_id TEXT"); }
+    catch (e) { logSafe("migrate v6 usage", e); } // already present → ignore
+    try {
+      impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor_v6 (
+        session_id TEXT NOT NULL, path TEXT NOT NULL,
+        offset INTEGER NOT NULL DEFAULT 0,
+        last_emitted TEXT NOT NULL DEFAULT '[]',
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (session_id, path));
+        INSERT OR IGNORE INTO transcript_cursor_v6
+          SELECT session_id, path, offset, last_emitted, updated_at FROM transcript_cursor;
+        DROP TABLE transcript_cursor;
+        ALTER TABLE transcript_cursor_v6 RENAME TO transcript_cursor;`);
+    } catch (e) { logSafe("migrate v6 cursor", e); } // fresh DB / already rebuilt
+  }
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id, ts)");
   impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor (
-    session_id TEXT PRIMARY KEY, path TEXT NOT NULL,
+    session_id TEXT NOT NULL, path TEXT NOT NULL,
     offset INTEGER NOT NULL DEFAULT 0,
     last_emitted TEXT NOT NULL DEFAULT '[]',
-    updated_at INTEGER NOT NULL)`);
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, path))`);
   // #66: human-readable session titles, generated offline by the `title-sessions`
   // batch (a cheap LLM summary of the session's user prompts). Separate table so
   // titling never touches the ingest hot path; prompt_count records how many
@@ -959,13 +982,15 @@ function handleStatsTools(req, res, u) {
   } catch (e) { logSafe("stats tools", e); json(res, 500, { error: "query failed" }); }
 }
 
-// ── token usage (transcript tail parser — stage 10a, issue #38) ─────────────
+// ── token usage (transcript tail parser — stage 10a, issue #38; subagents #81) ─
 // CC transcripts are append-only JSONL and every hook payload carries
-// transcript_path. On Stop/SubagentStop/SessionEnd we parse that session's file
-// from a per-session byte bookmark, off the response path. Rules: read-only,
-// per-line fail-open, sidechain rows kept but flagged. The format is CC's
-// internal contract — if it changes, parsing quietly stops and the rest of the
-// collector is unaffected.
+// transcript_path. On Stop/SubagentStop/SessionEnd we parse that session's MAIN
+// file plus its subagent files (<dir>/<sessionId>/subagents/agent-*.jsonl —
+// CC keeps each Task/Agent conversation separate) from per-(session,path) byte
+// bookmarks, off the response path. Rules: read-only, per-line fail-open,
+// sidechain rows kept and flagged (subagent files carry isSidechain:true in
+// the data). The format is CC's internal contract — if it changes, parsing
+// quietly stops and the rest of the collector is unaffected.
 const USAGE_TRIGGERS = new Set(["Stop", "SubagentStop", "SessionEnd"]);
 const USAGE_CHUNK = 8 * 1024 * 1024; // bytes per read pass (loops until caught up)
 const usageBusy = new Set();
@@ -982,20 +1007,49 @@ function scheduleUsageParse(sessionId, tPath, app) {
   if (!db || usageBusy.has(sessionId)) return;
   usageBusy.add(sessionId);
   setImmediate(() => {
-    try { parseTranscriptTail(sessionId, tPath, app); }
+    try { parseSessionTranscripts(sessionId, tPath, app); }
     catch (e) { logSafe("usage parse", e); }
     finally { usageBusy.delete(sessionId); }
   });
+}
+
+// Subagent transcripts (#81): CC writes each Task/Agent conversation to its own
+// file — <dir>/<sessionId>/subagents/agent-<id>.jsonl next to the main
+// transcript. Same JSONL shape (message.usage + TTL split), rows carry
+// isSidechain:true and the parent sessionId, so the same parser ingests them;
+// the filename's agent id keeps per-agent attribution. No directory → the
+// common case (no subagents yet) → empty.
+function subagentTranscripts(sessionId, tPath) {
+  const dir = path.join(path.dirname(tPath), sessionId, "subagents");
+  let names;
+  try { names = fs.readdirSync(dir); } catch { return []; }
+  const out = [];
+  for (const n of names) {
+    const m = /^agent-([A-Za-z0-9_-]+)\.jsonl$/.exec(n);
+    if (m) out.push({ path: path.join(dir, n), agentId: m[1] });
+  }
+  return out;
+}
+
+// One trigger parses the whole session: the main transcript, then every
+// subagent file. Per-(session,path) cursors (v6) keep each file incremental —
+// a dozen agent files cost a readdir + a stat each once caught up.
+function parseSessionTranscripts(sessionId, tPath, app) {
+  parseTranscriptTail(sessionId, tPath, app, null);
+  for (const s of subagentTranscripts(sessionId, tPath)) {
+    try { parseTranscriptTail(sessionId, s.path, app, s.agentId); }
+    catch (e) { logSafe("usage sub parse", e); }
+  }
 }
 
 // One pass of complete lines → usage rows. Lines of one API message are
 // adjacent and share message.id; we fold them into one row (merging tool_use
 // ids). follows = the PREVIOUS main-chain message's emitted ids — a tool result
 // feeds the NEXT call's input, so that is where its input cost lands.
-function ingestUsageLines(sessionId, app, text, lastEmitted) {
+function ingestUsageLines(sessionId, app, text, lastEmitted, agentId) {
   const ins = db.impl.prepare(`INSERT OR IGNORE INTO usage
-    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, emitted_tool_ids, follows_tool_ids)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+    (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, agent_id, emitted_tool_ids, follows_tool_ids)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const sel = db.impl.prepare("SELECT emitted_tool_ids FROM usage WHERE session_id = ? AND msg_id = ?");
   // On conflict (rescan, or a message straddling a read boundary) refresh the
   // token/TTL columns from this parse and UNION the tool ids. The numbers are
@@ -1011,7 +1065,7 @@ function ingestUsageLines(sessionId, app, text, lastEmitted) {
     if (!cur) return;
     try {
       const info = ins.run(sessionId, cur.id, app, cur.ts, cur.model,
-        cur.input, cur.output, cur.cc, cur.cr, cur.cc1h, cur.side,
+        cur.input, cur.output, cur.cc, cur.cr, cur.cc1h, cur.side, agentId ?? null,
         JSON.stringify(cur.emitted), JSON.stringify(cur.follows));
       if (info.changes === 0) {
         // row already existed (rescan / straddled pass) → refresh columns and
@@ -1056,10 +1110,12 @@ function ingestUsageLines(sessionId, app, text, lastEmitted) {
   return last;
 }
 
-function parseTranscriptTail(sessionId, tPath, appHint) {
+function parseTranscriptTail(sessionId, tPath, appHint, agentId = null) {
   if (!db) return;
-  const cur = db.impl.prepare("SELECT path, offset, last_emitted FROM transcript_cursor WHERE session_id = ?").get(sessionId);
-  let offset = cur && cur.path === tPath ? Number(cur.offset) : 0; // new/changed file → from the top
+  // v6: one cursor per (session, path) — a session tracks its main transcript
+  // plus every subagent file, each incrementally.
+  const cur = db.impl.prepare("SELECT offset, last_emitted FROM transcript_cursor WHERE session_id = ? AND path = ?").get(sessionId, tPath);
+  let offset = cur ? Number(cur.offset) : 0; // new file → from the top
   let lastEmitted = [];
   if (cur) { try { lastEmitted = JSON.parse(cur.last_emitted) || []; } catch {} }
   let app = appHint;
@@ -1069,7 +1125,7 @@ function parseTranscriptTail(sessionId, tPath, appHint) {
   }
   const saveCursor = db.impl.prepare(`INSERT INTO transcript_cursor (session_id, path, offset, last_emitted, updated_at)
     VALUES (?,?,?,?,?)
-    ON CONFLICT(session_id) DO UPDATE SET path=excluded.path, offset=excluded.offset,
+    ON CONFLICT(session_id, path) DO UPDATE SET offset=excluded.offset,
       last_emitted=excluded.last_emitted, updated_at=excluded.updated_at`);
   let fd;
   try { fd = fs.openSync(tPath, "r"); } catch (e) { logSafe("usage open", e); return; }
@@ -1085,7 +1141,7 @@ function parseTranscriptTail(sessionId, tPath, appHint) {
       if (nl < 0) break; // no complete line yet — wait for the next trigger
       db.impl.exec("BEGIN IMMEDIATE");
       try {
-        lastEmitted = ingestUsageLines(sessionId, app, buf.toString("utf8", 0, nl), lastEmitted);
+        lastEmitted = ingestUsageLines(sessionId, app, buf.toString("utf8", 0, nl), lastEmitted, agentId);
         offset += nl + 1;
         saveCursor.run(sessionId, tPath, offset, JSON.stringify(lastEmitted.slice(0, 32)), Date.now());
         db.impl.exec("COMMIT");
@@ -1951,30 +2007,31 @@ function buildTurns(rows, now) {
   return out;
 }
 
-// #73 stage 3: per-turn cost from the usage table. MAIN-CHAIN ONLY — subagent
-// transcripts live in separate files the parser never reads (sidechain is 0 on
-// every live row), so subagent API spend is invisible here by design; a
-// subagent-heavy turn's cost is a documented undercount. One usage row lands in
+// #73 stage 3 + #81: per-turn cost from the usage table. One usage row lands in
 // exactly ONE bucket (no double counting): emitted-id match first, follows only
 // when emitted is EMPTY (the row after a tool-ending turn follows the previous
 // turn's ids — emitted-first blocks that misattribution), ts window last, else
 // `unattributed` — surfaced in the drill so cost never silently evaporates.
-// Mutates each turn's cost_usd (null = zero rows attributed, NEVER $0.00) and
-// returns { usage_cost_usd, unattributed_cost_usd } | null when usage is empty.
+// Since #81 sidechain rows exist (subagent transcripts ARE ingested): their
+// emitted ids match the agent's own tool calls, which already sit in the turn
+// map's subagent lane — the same id join attributes them, summed SEPARATELY as
+// cost_subagent_usd. Mutates each turn's cost_usd / cost_subagent_usd (null =
+// zero rows attributed, NEVER $0.00) and returns
+// { usage_cost_usd, unattributed_cost_usd } | null when usage is empty.
 function attachTurnCosts(all, sid) {
   let usage;
   try {
     usage = db.impl.prepare(
       `SELECT ts, model, input, output, cache_create, cache_read, cache_create_1h,
-              emitted_tool_ids, follows_tool_ids
+              sidechain, emitted_tool_ids, follows_tool_ids
          FROM usage WHERE session_id = ?`
     ).all(sid);
   } catch (e) { logSafe("turns cost", e); usage = []; }
-  if (!usage.length) { for (const t of all) t.cost_usd = null; return null; }
+  if (!usage.length) { for (const t of all) { t.cost_usd = null; t.cost_subagent_usd = null; } return null; }
   const turnByToolId = new Map();
   for (const t of all) for (const c of t._calls) turnByToolId.set(c.tool_use_id, t);
   const ids = (s) => { try { const a = JSON.parse(s); return Array.isArray(a) ? a : []; } catch { return []; } };
-  const sums = new Map(); // turn → {usd, rows}
+  const sums = new Map(); // turn → {usd, rows, subUsd, subRows}
   let total = 0, unattributed = 0;
   for (const r of usage) {
     const p = priceOf(r.model);
@@ -1989,12 +2046,16 @@ function attachTurnCosts(all, sid) {
       const ts = Number(r.ts); // transcript time vs received_at — documented skew
       target = all.find((t) => ts >= t.started_at && ts <= t.ended_at) || null;
     }
-    if (target) { const s = sums.get(target) || { usd: 0, rows: 0 }; s.usd += usd; s.rows++; sums.set(target, s); }
-    else unattributed += usd; // inter-turn ts, resume re-ingest ghosts, retention gaps
+    if (target) {
+      const s = sums.get(target) || { usd: 0, rows: 0, subUsd: 0, subRows: 0 };
+      if (r.sidechain) { s.subUsd += usd; s.subRows++; } else { s.usd += usd; s.rows++; }
+      sums.set(target, s);
+    } else unattributed += usd; // inter-turn ts, resume re-ingest ghosts, retention gaps
   }
   for (const t of all) {
     const s = sums.get(t);
     t.cost_usd = s && s.rows ? roundUsd(s.usd) : null;
+    t.cost_subagent_usd = s && s.subRows ? roundUsd(s.subUsd) : null;
   }
   return { usage_cost_usd: roundUsd(total), unattributed_cost_usd: roundUsd(unattributed) };
 }
@@ -2276,7 +2337,7 @@ const DASHBOARD_JS = `(function(){
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
     "sess-whatif":"이 세션이 문맥 상한을 넘길 때마다 /compact 했다면 아꼈을 '다시 읽기' 비용\\n• @200k / @300k — 20만 / 30만 토큰에서 잘랐을 경우\\n문맥이 클수록 매 턴 통째로 다시 읽어 요금이 계속 붙음 · 어디까지나 어림값",
-    turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• $ — 그 턴의 API 비용 (메인 체인만: 서브에이전트 지출은 미수집, compact 호출도 기록에 없음 → ✂ 뱃지) · 빈칸 = 귀속된 기록 없음\\n• 미귀속 — 어느 턴에도 못 붙은 비용 (턴 사이 유휴 시각·수집 공백·resume 잔재)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
+    turns:"프롬프트 하나가 응답을 마칠 때까지(=턴)의 도구 호출 궤적\\n• 턴 = UserPromptSubmit → 마지막 Stop · #번호는 보존창 기준이라 리로드마다 밀릴 수 있음 (seq가 고정 키)\\n• ⚙ 기울임 턴 — 사람이 입력한 게 아니라 하네스가 주입한 메시지 (백그라운드 작업 완료 알림 등) · 원문은 마우스 올리면\\n• +N queued — 턴 도중 미리 입력해 둔 메시지 (루프가 계속 달린 게 확인될 때만 병합)\\n• ✕ interrupted — Stop 없이 끊긴 턴 (Esc·크래시·수집기 다운)\\n• Stop 뒤 흐린 행 — 응답이 끝난 뒤에도 돌던 서브에이전트 꼬리 (시간 계산엔 제외)\\n• $ — 그 턴의 API 비용 · +sub = 그 턴이 띄운 서브에이전트 지출 (별도 합산) · compact 호출은 기록에 없음(✂ 뱃지) · 빈칸 = 귀속된 기록 없음\\n• 미귀속 — 어느 턴에도 못 붙은 비용 (턴 사이 유휴 시각·수집 공백·resume 잔재)\\n• 행의 시각을 누르면 원본 이벤트 JSON (오래되면 404 = 보존기간 만료)",
     "turn-split":"턴의 벽시계 시간 3분해 — 전부 근사\\n• tool — 도구 실행 (병렬은 겹침 합집합, 이중계산 없음)\\n• wait — 권한 프롬프트 앞 사람 대기 (해당 도구 시간에서 차감 · 상한 추정 · 캡 30m)\\n• gap — 나머지 전부: 모델 생성 · API 지연 · 관측 못한 대기\\n• bg 배지 — 백그라운드 실행이라 실제 작업 시간은 관측 불가",
     "turn-flags":"기계적으로 셀 수 있는 비효율 신호 (메인 체인만 · 질적 판단은 사람 몫)\\n• dup-call — 같은 도구+같은 입력 반복 (사이에 상태 변경 있으면 정당한 재확인으로 제외)\\n• re-read — 같은 파일을 겹치는 범위로 3회+ 읽기\\n• retry-loop — 같은 호출이 에러로 3연속\\n• search-storm — 첫 Read 전에 탐색만 5배치+ (병렬 배치는 1로 접음)\\n• long-tail — 호출 하나가 턴 도구 시간의 절반+ (30s+)\\n• gap-heavy — 미분류 시간이 도구 시간의 2배+ (60s+)\\n• orphaned — 끝(Post)이 없는 호출 (1순위 원인 = 훅 가드 deny)\\n• mega-turn — 호출 30+ 또는 10분+ · 임계값은 config {turns}로 조정"
   };
@@ -2479,7 +2540,9 @@ const DASHBOARD_JS = `(function(){
     if(t.subagent_calls)meta+=" ("+t.subagent_calls+" sub)";
     if(t.queued_prompts)meta+=" · +"+t.queued_prompts+" queued";
     sm.appendChild(el("span","dim",meta));
-    if(t.cost_usd!=null)sm.appendChild(el("span","dim","  "+fmtUsd(t.cost_usd)));
+    if(t.cost_usd!=null||t.cost_subagent_usd!=null){
+      var cstr=(t.cost_usd!=null?fmtUsd(t.cost_usd):"")+(t.cost_subagent_usd!=null?" +sub "+fmtUsd(t.cost_subagent_usd):"");
+      sm.appendChild(el("span","dim","  "+cstr.trim())); }
     if(t.errors)sm.appendChild(el("span","err"," "+t.errors+" err"));
     if(t.orphans)sm.appendChild(el("span","warn"," "+t.orphans+" orphan"));
     var stm=statusMark(t); if(stm)sm.appendChild(stm);
@@ -2495,7 +2558,8 @@ const DASHBOARD_JS = `(function(){
         var lg=el("div","tsplit"); lg.appendChild(stackbar(det.turn));
         var parts="tool "+fmtDur(det.turn.tool_ms)+" · wait "+fmtDur(det.turn.wait_ms)+" · gap "+fmtDur(det.turn.gap_ms);
         if(det.turn.subagent_ms)parts+="  ·  sub "+fmtDur(det.turn.subagent_ms)+" (별도 레인)";
-        if(det.turn.cost_usd!=null)parts+="  ·  "+fmtUsd(det.turn.cost_usd)+" (메인 체인만)";
+        if(det.turn.cost_usd!=null)parts+="  ·  "+fmtUsd(det.turn.cost_usd);
+        if(det.turn.cost_subagent_usd!=null)parts+=" +sub "+fmtUsd(det.turn.cost_subagent_usd);
         lg.appendChild(el("span",null,parts));
         lg.appendChild(hint("turn-split"));
         body.appendChild(lg);
@@ -3030,7 +3094,7 @@ async function cliIngestUsage() {
     let p = null;
     if (row) { try { p = JSON.parse(row.payload)?.transcript_path ?? null; } catch {} }
     if (typeof p === "string" && p) {
-      try { parseTranscriptTail(session_id, p); parsed++; }
+      try { parseSessionTranscripts(session_id, p); parsed++; } // main + subagent files (#81)
       catch (e) { logSafe("ingest-usage", e); skipped++; }
     } else skipped++;
   }

@@ -524,15 +524,17 @@ process.stdout.write("\n# turn inspector (/stats/turns)\n");
   // One row → one bucket: u1 emitted→T1($0.5), u2 follows-with-empty-emitted→T1
   // ($0.5), u3 id-less ts inside T2→T2($1.0), u4 id-less inter-turn ts→
   // unattributed($0.5), u5 emitted(T5)+follows(T4)→emitted wins→T5($1.0).
+  // #81: u6 sidechain row, emitted = T6's subagent call → cost_subagent_usd($1.0).
   const insU = db.prepare(`INSERT INTO usage
     (session_id, msg_id, source_app, ts, model, input, output, cache_create, cache_read, cache_create_1h, sidechain, emitted_tool_ids, follows_tool_ids)
-    VALUES (?,?,?,?,?,?,?,?,?,?,0,?,?)`);
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   const uMODEL = "claude-opus-4-8";
-  insU.run("sess-turn", "u1", "testapp", BT + 500, uMODEL, 100000, 0, 0, 0, 0, '["tu-a"]', "[]");
-  insU.run("sess-turn", "u2", "testapp", BT + 2500, uMODEL, 0, 20000, 0, 0, 0, "[]", '["tu-b"]');
-  insU.run("sess-turn", "u3", "testapp", BT + 61000, uMODEL, 200000, 0, 0, 0, 0, "[]", "[]");
-  insU.run("sess-turn", "u4", "testapp", BT + 100000, uMODEL, 100000, 0, 0, 0, 0, "[]", "[]");
-  insU.run("sess-turn", "u5", "testapp", BT + 186100, uMODEL, 0, 40000, 0, 0, 0, '["tu-z1"]', '["tu-g1"]');
+  insU.run("sess-turn", "u1", "testapp", BT + 500, uMODEL, 100000, 0, 0, 0, 0, 0, '["tu-a"]', "[]");
+  insU.run("sess-turn", "u2", "testapp", BT + 2500, uMODEL, 0, 20000, 0, 0, 0, 0, "[]", '["tu-b"]');
+  insU.run("sess-turn", "u3", "testapp", BT + 61000, uMODEL, 200000, 0, 0, 0, 0, 0, "[]", "[]");
+  insU.run("sess-turn", "u4", "testapp", BT + 100000, uMODEL, 100000, 0, 0, 0, 0, 0, "[]", "[]");
+  insU.run("sess-turn", "u5", "testapp", BT + 186100, uMODEL, 0, 40000, 0, 0, 0, 0, '["tu-z1"]', '["tu-g1"]');
+  insU.run("sess-turn", "u6", "testapp", BT + 252500, uMODEL, 0, 40000, 0, 0, 0, 1, '["tu-sub1"]', "[]");
   db.close();
 }
 
@@ -625,7 +627,8 @@ check("cost: emitted→T1 + follows(empty emitted)→T1 = $1.0", T1 && approx(T1
 check("cost: id-less row falls to the ts window (T2 $1.0)", T2 && approx(T2.cost_usd, 1.0), T2 && String(T2.cost_usd));
 check("cost: zero attributed rows → null, never $0.00", T3 && T3.cost_usd === null && T4 && T4.cost_usd === null && T6 && T6.cost_usd === null, JSON.stringify([T3 && T3.cost_usd, T4 && T4.cost_usd, T6 && T6.cost_usd]));
 check("cost: emitted wins over follows (T5 $1.0, not T4)", T5 && approx(T5.cost_usd, 1.0), T5 && String(T5.cost_usd));
-check("cost: session total 3.5 / unattributed 0.5 (inter-turn ts)", approx(tu.usage_cost_usd, 3.5) && approx(tu.unattributed_cost_usd, 0.5), JSON.stringify({ t: tu.usage_cost_usd, u: tu.unattributed_cost_usd }));
+check("cost: session total 4.5 (sub 포함) / unattributed 0.5 (inter-turn ts)", approx(tu.usage_cost_usd, 4.5) && approx(tu.unattributed_cost_usd, 0.5), JSON.stringify({ t: tu.usage_cost_usd, u: tu.unattributed_cost_usd }));
+check("cost: sidechain row → cost_subagent_usd (T6 sub $1.0, main null 유지)", T6 && approx(T6.cost_subagent_usd, 1.0) && T6.cost_usd === null, T6 && JSON.stringify({ sub: T6.cost_subagent_usd, main: T6.cost_usd }));
 check("cost: session without usage → totals null + turn cost null", tr.usage_cost_usd === null && tr.unattributed_cost_usd === null && tr.turns[0].cost_usd === null, JSON.stringify({ t: tr.usage_cost_usd, c: tr.turns && tr.turns[0].cost_usd }));
 
 // API contract: session_id required; unknown turn → error body
@@ -637,6 +640,43 @@ check("unknown turn → not-found error", !!tmiss.error, JSON.stringify(tmiss));
 // config override: a huge storm threshold suppresses the sess-storm flag
 const tcfg = await statGet(45761, "/stats/turns?session_id=sess-storm", { turns: { storm: 99 } });
 check("config {turns:{storm}} overrides the threshold", tcfg.turns && !tcfg.turns[0].flags.includes("search-storm"), JSON.stringify(tcfg.turns && tcfg.turns[0].flags));
+
+// ══ #81 — subagent usage (subagents/agent-*.jsonl ingestion, schema v6) ══════
+process.stdout.write("\n# subagent usage (#81)\n");
+{
+  // subagent transcripts live at <dir(main transcript)>/<sessionId>/subagents/
+  const subDir = path.join(DATA_DIR, SESSION, "subagents");
+  fs.mkdirSync(subDir, { recursive: true });
+  const subMsg = (id, out, ids) => JSON.stringify({
+    type: "assistant", timestamp: NOW, isSidechain: true, sessionId: SESSION,
+    message: {
+      id, model: "claude-haiku-4-5-20251001",
+      usage: { input_tokens: 10, output_tokens: out, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+      content: ids ? ids.map((x) => ({ type: "tool_use", id: x })) : [],
+    },
+  });
+  fs.writeFileSync(path.join(subDir, "agent-agsub1.jsonl"),
+    subMsg("ms1", 100, ["tu-sub-x"]) + "\n" + subMsg("ms2", 200, null) + "\n");
+}
+cli("ingest-usage");
+{
+  const db2 = new DatabaseSync(DB_PATH, { readOnly: true });
+  const subRows = db2.prepare("SELECT msg_id, sidechain, agent_id, output FROM usage WHERE msg_id IN ('ms1','ms2') ORDER BY msg_id").all();
+  const curs = db2.prepare("SELECT COUNT(*) c FROM transcript_cursor WHERE session_id = ?").get(SESSION);
+  const ver = db2.prepare("SELECT * FROM pragma_user_version").get();
+  db2.close();
+  check("sub: v3 DB migrated to schema v6 (cursor PK rebuild + usage.agent_id)", ver && Object.values(ver)[0] === 6, JSON.stringify(ver));
+  check("sub: agent file ingested — sidechain=1 + agent_id from filename",
+    subRows.length === 2 && subRows.every((r) => r.sidechain === 1 && r.agent_id === "agsub1"), JSON.stringify(subRows));
+  check("sub: per-(session,path) cursors — main + 1 agent file = 2", curs && curs.c === 2, JSON.stringify(curs));
+}
+cli("ingest-usage"); // cursors at EOF → nothing re-ingested
+{
+  const db2 = new DatabaseSync(DB_PATH, { readOnly: true });
+  const n = db2.prepare("SELECT COUNT(*) c FROM usage WHERE msg_id IN ('ms1','ms2')").get();
+  db2.close();
+  check("sub: idempotent re-run (still 2 rows)", n && n.c === 2, JSON.stringify(n));
+}
 
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
