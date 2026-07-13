@@ -11,18 +11,18 @@
 // to Oracle.
 //
 // The generated doc fills the same slots as templates/db-schema.md
-// (테이블명 / 용도 / 컬럼표 / PK / FK·관계 / 인덱스 / 대표쿼리 / 마이그레이션 주의) —
+// (테이블명 / 용도 / 컬럼표 / PK / FK·관계 / 인덱스 / 대표쿼리) —
 // but generated, not hand-filled, so structural slots stay in sync with the
 // live catalog while human-authored meaning survives regeneration.
 //
 // Two slot classes, split by HTML-comment markers (invisible in rendered MD):
 //   auto   — 컬럼표 구조(명/타입/널/기본값) · PK · 인덱스 · FK/관계. Fully
 //            re-derived from describe_table on every run.
-//   manual — 용도 · (컬럼별) 설명 · 대표쿼리 · 마이그레이션 주의. Written by a
+//   manual — 용도 · (컬럼별) 설명 · 대표쿼리. Written by a
 //            human/agent; PRESERVED verbatim across regeneration.
 //
 // Regeneration merge (renderDoc with `existing`):
-//   - manual regions (purpose/queries/migration): existing text kept as-is.
+//   - manual regions (purpose/queries): existing text kept as-is.
 //   - column 설명 cells: preserved PER COLUMN NAME — a fresh structural row gets
 //     back the human description that was on the row of the same name. New
 //     columns seed from the Oracle column comment (or a {{설명}} scaffold);
@@ -38,7 +38,6 @@
 const SCAFFOLD = {
   purpose: "{{용도 한 줄 — 무엇을 저장하는가}}. {{쓰기 주체 → 읽기 주체}}",
   queries: "{{선택 — 이 테이블을 쓰는 전형적 쿼리 1~2개}}",
-  migration: "{{선택 — 변경 이력, 함부로 바꾸면 안 되는 컬럼과 이유}}",
   cell: "{{설명}}",
 };
 
@@ -145,7 +144,6 @@ export function renderDoc(desc, { tableComment = null, existing = null } = {}) {
   const preserved = existing ? extractColumnDescriptions(existing) : new Map();
   const purpose = (existing && extractRegion(existing, "purpose")) ?? purposeScaffold(tableComment);
   const queries = (existing && extractRegion(existing, "queries")) ?? SCAFFOLD.queries;
-  const migration = (existing && extractRegion(existing, "migration")) ?? SCAFFOLD.migration;
 
   const markdown = [
     `# ${desc.owner}.${desc.table}`,
@@ -161,10 +159,6 @@ export function renderDoc(desc, { tableComment = null, existing = null } = {}) {
     "## 대표 쿼리",
     "",
     region("manual", "queries", queries),
-    "",
-    "## 마이그레이션 주의",
-    "",
-    region("manual", "migration", migration),
     "",
   ].join("\n");
 
