@@ -31,9 +31,10 @@ import zlib from "node:zlib";
 import crypto from "node:crypto";
 import { spawnSync, spawn } from "node:child_process";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
+import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.18.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon)
+const VERSION = "0.19.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1751,6 +1752,88 @@ function handleStatsDb(req, res, u) {
   } catch (e) { logSafe("stats db", e); json(res, 500, { error: "query failed" }); }
 }
 
+// ── GET /docs + /docs/content (#92 — keyword-docs corpus viewer) ────────────
+// List every doc the keyword-docs instances can inject at the USER layer, and
+// serve one doc's raw text. Path resolution + the content allowlist come from
+// the SHARED lib/doc-index.mjs — the exact resolution the hook injects with — so
+// discovery and the allowlist can't diverge. Files are the source of truth: read
+// fresh each request (no cache), everything fail-soft (a broken index or missing
+// doc contributes nothing, never a 500).
+const DOCS_MAX_BYTES = 512 * 1024;
+
+// Home root the docs viewer reads under. OBS_DOCS_HOME overrides it (test seam /
+// escape hatch, same spirit as OBS_DATA_DIR); production uses the real home.
+function docsHomeDir() {
+  return process.env.OBS_DOCS_HOME || os.homedir();
+}
+
+// dbdoc tier markers (db-schema-docs / enrich #89). Best-effort: scaffold {{…}}
+// and inferred "추정)" are positively marked; a confirmed slot drops its prefix
+// so it isn't separately counted. Marker-less docs → dbdoc:false (plain render).
+function docTiers(text) {
+  const scaffold = (text.match(/\{\{[^}]*\}\}/g) || []).length;
+  const inferred = (text.match(/추정\)/g) || []).length;
+  return { dbdoc: /<!--\s*dbdoc:/.test(text) || scaffold > 0 || inferred > 0, scaffold, inferred };
+}
+
+function handleDocsList(req, res) {
+  if (!statsGate(req, res)) return;
+  const docs = [];
+  try {
+    for (const { id, index } of userDocIndexes(docsHomeDir())) {
+      for (const e of resolveIndexEntries(index)) {
+        let exists = true, bytes = 0, tiers = { dbdoc: false, scaffold: 0, inferred: 0 };
+        try {
+          const text = fs.readFileSync(e.abs, "utf8");
+          bytes = Buffer.byteLength(text);
+          tiers = docTiers(text);
+        } catch { exists = false; }
+        docs.push({ instance: id, index, path: e.abs, display: e.path, keywords: e.keywords, exists, bytes, tiers });
+      }
+    }
+  } catch (e) { logSafe("docs list", e); return json(res, 500, { error: "docs failed" }); }
+  json(res, 200, { count: docs.length, docs });
+}
+
+function docUnder(child, parent) {
+  const rel = path.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
+// realpath both the requested path and the allowlist so legit symlinked docs
+// work while an escape (a symlink to /etc/… or a `..` climb) resolves OUTSIDE
+// the allowed set and is refused.
+function docsAllowReal() {
+  const set = new Set();
+  for (const { index } of userDocIndexes(docsHomeDir()))
+    for (const e of resolveIndexEntries(index)) {
+      try { set.add(fs.realpathSync(e.abs)); } catch { /* missing doc — skip */ }
+    }
+  let root = null;
+  try { root = fs.realpathSync(path.join(docsHomeDir(), ".claude", "docs")); } catch { /* no docs dir */ }
+  return { set, root };
+}
+
+function handleDocsContent(req, res, u) {
+  if (!statsGate(req, res)) return;
+  const raw = u.searchParams.get("path");
+  if (!raw || raw.includes("\0")) return json(res, 400, { error: "path required" });
+  let real;
+  try { real = fs.realpathSync(path.resolve(expandTilde(raw))); }
+  catch { return json(res, 404, { error: "not found" }); }
+  const { set, root } = docsAllowReal();
+  if (!set.has(real) && !(root && docUnder(real, root)))
+    return json(res, 403, { error: "path not allowed" });
+  let content;
+  try {
+    const st = fs.statSync(real);
+    if (!st.isFile()) return json(res, 404, { error: "not found" });
+    if (st.size > DOCS_MAX_BYTES) return json(res, 413, { error: "doc too large" });
+    content = fs.readFileSync(real, "utf8");
+  } catch (e) { logSafe("docs content", e); return json(res, 500, { error: "read failed" }); }
+  json(res, 200, { path: real, bytes: Buffer.byteLength(content), content });
+}
+
 // ── GET /stats/turns (#73 — Turn Inspector, stage 1) ────────────────────────
 // One session's events grouped into turns (UserPromptSubmit → last Stop before
 // the next prompt) with per-call Pre↔Post pairing, the tool/wait/gap time split
@@ -2555,6 +2638,13 @@ tbody tr.sess{cursor:pointer}
 .bar{fill:#2f6feb}
 .spark{stroke:#3fb950;fill:none;stroke-width:1.5}
 .err{color:#f85149}.warn{color:#d29922}.ok{color:#3fb950}.dim{color:#6b7686}
+.tsc{color:#6b7686}.tin{color:#d29922}
+#doc-view{margin-top:14px}
+#doc-view h2,#doc-view h3,#doc-view h4,#doc-view h5,#doc-view h6{margin:12px 0 4px}
+#doc-view .doc{border:1px solid #1c2230;border-radius:6px;padding:12px 16px;background:#0d1119;line-height:1.5}
+#doc-view .doc pre{background:#161b22;padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap}
+#doc-view .doc p{margin:6px 0}#doc-view .doc ul{margin:6px 0 6px 20px}
+#docs-rows tr:hover{background:#161b22}
 .cards{display:flex;gap:12px;padding:10px 16px;flex-wrap:wrap;align-items:stretch}
 .card{border:1px solid #1c2230;border-radius:6px;padding:8px 14px;min-width:100px}
 .card .k{font-size:11px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em}
@@ -2597,6 +2687,7 @@ a.evlink:hover{color:#79c0ff}
     <a href="#guards" id="tab-guards">guards</a>
     <a href="#nudges" id="tab-nudges">nudges</a>
     <a href="#db" id="tab-db">db</a>
+    <a href="#docs" id="tab-docs">docs</a>
     <a href="#fleetturns" id="tab-fleetturns">fleet turns</a>
   </nav>
   <span id="status" class="warn">connecting…</span>
@@ -2746,6 +2837,17 @@ a.evlink:hover{color:#79c0ff}
     <tbody id="db-table-rows"></tbody>
   </table>
 </section>
+<section id="view-docs">
+  <div class="cards" id="docs-cards"></div>
+  <div class="toolbar">keyword-docs 코퍼스 (user 층)<span data-help="docs"></span>
+    <span class="dim">파일이 진실원 · 매 요청 새로 읽음 · 행을 누르면 전체 문서 · dbdoc 마커 있으면 티어 표시</span>
+  </div>
+  <table>
+    <thead><tr><th>instance</th><th>doc</th><th class="num">{{scaffold}}</th><th class="num">추정)</th><th>keywords</th></tr></thead>
+    <tbody id="docs-rows"></tbody>
+  </table>
+  <div id="doc-view"></div>
+</section>
 <section id="view-fleetturns">
   <div class="cards" id="ft-cards"></div>
   <div class="toolbar">기간
@@ -2804,6 +2906,7 @@ const DASHBOARD_JS = `(function(){
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     db:"agent-db-plugin이 실행한 조회의 감사 로그 (DbQuery 이벤트)\\n• by alias / tool — 접속 별칭·MCP 도구별 쿼리 수 (describe_table·list_tables의 내부 카탈로그 조회도 포함)\\n• slowest — elapsedMs 상위 · ⚠ = 에러로 끝난 쿼리\\n• errors — ORA 코드별 집계 (ORA-00942 반복 = 에이전트가 테이블명 헛짚음 → 스키마 문서 공백 신호)\\n• top tables — sql의 FROM/JOIN에서 추출 (근사) · sql은 원문 그대로 기록 (마스킹 없음, 로컬/리허설 한정)",
+    docs:"context 훅의 keyword-docs가 주입하는 문서 (user 층)\\n• 대상 = keyword-docs·msg-format·db-schema·domain-docs 인스턴스의 ~/.claude 인덱스 (project/bundle 층은 스코프 밖)\\n• 행을 누르면 전체 문서를 마크다운으로 렌더 (파일이 진실원, 매번 새로 읽음)\\n• {{scaffold}} = 미작성 슬롯(회색) · 추정) = 코드 추정 슬롯(주황, enrich #89) · 마커 없으면 일반 문서\\n• 경로는 인덱스가 가리키는 파일 + ~/.claude/docs/ 아래만 열람 (그 밖은 거부)",
     fleetturns:"한 세션이 아니라 전 세션을 가로질러, 프롬프트 하나에 대한 응답(=턴)이 도구를 얼마나·얼마나 효율적으로 썼는지 보는 화면. 특정 작업 유형에서 도구 호출이 새는 곳을 찾는 용도다\\n• settled turns — 응답이 끝난(확정된) 턴만 셈 · 아직 진행 중인 마지막 턴은 뺀다\\n• avg calls/turn·dup-call% — 사람이 보낸 턴 기준 (내부 자동 턴·프롬프트 이전 잔여 턴은 제외)\\n• total/subagent cost — 그 기간 턴 비용 합 · subagent = 그 턴이 띄운 서브에이전트 지출\\n• unattributed — 어느 턴에도 안 붙은 잔여 비용 (진행 중 턴 비용 등을 흡수, 합을 정직하게 유지)\\n• ✂ cost-incomplete — 압축(compaction)이 낀 턴은 그 지출이 usage에 안 잡혀 비용이 하한값",
     "ft-flags":"턴에서 자동으로 잡아낸 비효율 패턴. 한 턴이 여러 flag를 가질 수 있어 flag별 비용을 다 더하면 총비용을 넘는다(중복 계상) · 비용은 '그 패턴을 보인 턴들의 비용'이지 아낄 수 있는 금액이 아님\\n• dup-call — 같은 도구를 같은 입력으로 반복 호출\\n• re-read — 한 파일을 겹치는 범위로 여러 번 읽음\\n• retry-loop — 같은 호출이 에러로 반복됨\\n• search-storm — 첫 Read/Edit 전에 Grep/Glob 검색만 연달아(5+ 배치)\\n• long-tail — 한 호출이 그 턴 도구 시간의 절반 이상을 잡아먹음\\n• gap-heavy — 도구 호출 사이 설명 안 되는 빈 시간이 많음\\n• orphaned — Pre만 있고 Post가 없는 호출(가드 deny·중단·크래시)\\n• mega-turn — 한 턴이 지나치게 길거나 호출이 너무 많음",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
@@ -2835,7 +2938,7 @@ const DASHBOARD_JS = `(function(){
       for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
   // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges | #db) — hash routing
-  var TABS=["live","sessions","tools","tokens","guards","nudges","db","fleetturns"];
+  var TABS=["live","sessions","tools","tokens","guards","nudges","db","docs","fleetturns"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
@@ -2844,6 +2947,7 @@ const DASHBOARD_JS = `(function(){
     if(name==="guards")loadGuards();
     if(name==="nudges")loadNudges();
     if(name==="db")loadDb();
+    if(name==="docs")loadDocs();
     if(name==="fleetturns")loadFleetTurns(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
@@ -3386,6 +3490,62 @@ const DASHBOARD_JS = `(function(){
     }).catch(function(){}); }
   $("ft-window").addEventListener("change",loadFleetTurns);
 
+  // ── docs tab (#92 — keyword-docs corpus viewer): list every doc the
+  // keyword-docs instances inject at the user layer; click a row to render the
+  // full doc. dbdoc tier markers ({{scaffold}} gray, 추정) amber) are highlighted.
+  // Not on the 30s poll — docs are read fresh from disk on each click.
+  function docTierize(container,s){
+    var re=/(\\{\\{[^}]*\\}\\})|(추정\\)[^\\n]*)/g, last=0, m;
+    while((m=re.exec(s))){
+      if(m.index>last)container.appendChild(document.createTextNode(s.slice(last,m.index)));
+      container.appendChild(el("span",m[1]?"tsc":"tin",m[0]));
+      last=re.lastIndex;
+    }
+    if(last<s.length)container.appendChild(document.createTextNode(s.slice(last)));
+  }
+  function renderDoc(text){
+    var root=el("div","doc"), lines=String(text).split("\\n"), i=0;
+    while(i<lines.length){
+      var ln=lines[i];
+      if(/^\\s*\x60\x60\x60/.test(ln)){ var buf=[]; i++;
+        while(i<lines.length&&!/^\\s*\x60\x60\x60/.test(lines[i])){ buf.push(lines[i]); i++; }
+        i++; root.appendChild(el("pre",null,buf.join("\\n"))); continue; }
+      var h=ln.match(/^(#{1,6})\\s+(.*)/);
+      if(h){ var hd=el("h"+Math.min(6,h[1].length+1),null); docTierize(hd,h[2]); root.appendChild(hd); i++; continue; }
+      if(/^\\s*[-*]\\s+/.test(ln)){ var ul=el("ul",null);
+        while(i<lines.length&&/^\\s*[-*]\\s+/.test(lines[i])){ var li=el("li",null); docTierize(li,lines[i].replace(/^\\s*[-*]\\s+/,"")); ul.appendChild(li); i++; }
+        root.appendChild(ul); continue; }
+      if(!ln.trim()){ i++; continue; }
+      var para=[]; while(i<lines.length&&lines[i].trim()&&!/^\\s*(#{1,6}\\s|\x60\x60\x60|[-*]\\s)/.test(lines[i])){ para.push(lines[i]); i++; }
+      var p=el("p",null); docTierize(p,para.join(" ")); root.appendChild(p);
+    }
+    return root;
+  }
+  function openDoc(p,display){
+    var view=$("doc-view"); view.textContent=""; view.appendChild(el("div","dim","loading…"));
+    getJson("/docs/content?path="+encodeURIComponent(p)).then(function(d){
+      view.textContent=""; view.appendChild(el("h2",null,display));
+      view.appendChild(renderDoc(d.content||"")); view.scrollIntoView({block:"nearest"});
+    }).catch(function(){ view.textContent=""; view.appendChild(el("div","err","문서를 불러올 수 없습니다 (삭제됐거나 접근 불가)")); });
+  }
+  function loadDocs(){
+    getJson("/docs").then(function(d){
+      var box=$("docs-cards"); box.textContent="";
+      box.appendChild(card("docs",d.count||0));
+      var inst={}; (d.docs||[]).forEach(function(x){ inst[x.instance]=(inst[x.instance]||0)+1; });
+      Object.keys(inst).forEach(function(k){ box.appendChild(card(k,inst[k])); });
+      var tb=$("docs-rows"); tb.textContent="";
+      (d.docs||[]).forEach(function(x){ var tr=document.createElement("tr");
+        tr.appendChild(cell(x.instance,"dim"));
+        var dtd=cell(x.display); if(!x.exists){ dtd.appendChild(el("span","err"," (missing)")); } tr.appendChild(dtd);
+        tr.appendChild(cell(x.tiers&&x.tiers.scaffold?x.tiers.scaffold:"","num"));
+        tr.appendChild(cell(x.tiers&&x.tiers.inferred?x.tiers.inferred:"","num"));
+        tr.appendChild(cell((x.keywords||[]).join(", "),"dim"));
+        if(x.exists){ tr.style.cursor="pointer"; tr.addEventListener("click",function(){ openDoc(x.path,x.display); }); }
+        tb.appendChild(tr); });
+      if(!(d.docs||[]).length){ var e=document.createElement("tr"),etd=el("td","dim","user 층(~/.claude/context-docs*.json)에 keyword-docs 인덱스 없음"); etd.colSpan=5; e.appendChild(etd); tb.appendChild(e); }
+    }).catch(function(){}); }
+
   // 30s refresh of whichever analytics tab is visible
   setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); else if(h==="db")loadDb(); else if(h==="fleetturns")loadFleetTurns(); },30000);
 
@@ -3442,6 +3602,10 @@ function onRequest(req, res) {
       if (pathname === "/stats/turns") return handleStatsTurns(req, res, u);
       if (pathname === "/stats/fleet-turns") return handleStatsFleetTurns(req, res, u);
       return json(res, 404, { error: "not found" });
+    }
+    if (pathname === "/docs" || pathname === "/docs/content") {
+      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+      return pathname === "/docs" ? handleDocsList(req, res) : handleDocsContent(req, res, u);
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
