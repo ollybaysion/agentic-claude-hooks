@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// db-schema-enrich CLI — the side-effecting wrapper around enrich.mjs.
+// db-schema-apply CLI — the side-effecting wrapper around apply.mjs.
 //
 // Two subcommands, both DRY-RUN by default (print the result, touch nothing);
 // pass --write to persist. The skill shows the dry-run for approval first, and
@@ -14,22 +14,22 @@
 //
 // Exit: 0 ok, 1 fatal/usage, 2 apply hit a confirmed slot it left untouched.
 
-import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyEnrichment, promote } from "./enrich.mjs";
+import { applyProposal, promote } from "./apply.mjs";
 import { postEnvelope, sourceApp } from "../../lib/obs-client.mjs";
 
 // ── observability (#90) ──────────────────────────────────────────────────────
-// On a real --write, tell the collector what changed so the dashboard review
-// tab can show apply/promote history alongside the file-scanned queue. Pure
-// builder (exposed for tests); emitSchemaDoc POSTs it. Fire-and-forget: awaited
-// only so a short-lived CLI actually flushes the socket, but postEnvelope never
-// throws and is timeout-bounded, so a slow/absent collector can't fail the CLI.
+// On a real --write, tell the collector what changed so the dashboard's
+// keyword-docs review surface can show the apply/promote activity log alongside
+// the file-scanned 추정) queue. Pure builder (exposed for tests); emitSchemaDoc
+// POSTs it. Fire-and-forget: awaited only so a short-lived CLI actually flushes
+// the socket, but postEnvelope never throws and is timeout-bounded, so a
+// slow/absent collector can't fail the CLI.
 export function buildSchemaDocEnvelope(type, doc, extra) {
   return {
     source_app: sourceApp(),
-    session_id: process.env.CLAUDE_SESSION_ID || "db-schema-enrich",
+    session_id: process.env.CLAUDE_SESSION_ID || "db-schema-apply",
     hook_event_type: type, // "SchemaDocApply" | "SchemaDocPromote"
     payload: { doc: basename(doc), path: doc, ...extra },
     timestamp: Date.now(),
@@ -39,7 +39,7 @@ async function emitSchemaDoc(type, doc, extra) {
   try {
     await postEnvelope(buildSchemaDocEnvelope(type, doc, extra), { timeoutMs: 2000 });
   } catch {
-    /* an emit bug must never change the enrich outcome */
+    /* an emit bug must never change the apply/promote outcome */
   }
 }
 
@@ -80,7 +80,7 @@ async function cmdApply(args) {
   if (!args.doc || !args.proposal) throw new Error("apply: --doc 와 --proposal 이 필요합니다");
   const existing = await readText(args.doc);
   const proposal = await readJson(args.proposal);
-  const res = applyEnrichment(existing, proposal, { overwriteInferred: !args.keepInferred });
+  const res = applyProposal(existing, proposal, { overwriteInferred: !args.keepInferred });
 
   if (res.status === "conflict") {
     console.error(res.reason);
@@ -121,8 +121,8 @@ async function main() {
   else throw new Error(`서브커맨드가 필요합니다: apply | promote (받음: ${sub ?? "없음"})`);
 }
 
-// Run only when invoked directly (`node enrich-cli.mjs …`); stay importable so
-// tests can exercise buildSchemaDocEnvelope without main() firing on import.
+// Run only when invoked directly (`node cli.mjs …`); stay importable so tests
+// can exercise buildSchemaDocEnvelope without main() firing on import.
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main().catch((err) => {
     console.error(err.message);

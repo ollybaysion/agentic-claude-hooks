@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Offline regression tests for db-schema-enrich.
-// Run: node skills/db-schema-enrich/test.mjs
+// Offline regression tests for db-schema-apply.
+// Run: node skills/db-schema-apply/test.mjs
 //
 // Pure — no DB, no codebase, no MCP. The agent's codebase analysis is upstream
 // and produces the "semantics proposal" object these tests feed in directly;
@@ -11,13 +11,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderDoc } from "../db-schema-docs/render.mjs";
 import {
-  applyEnrichment,
+  applyProposal,
   promote,
   slotState,
   formatEvidence,
   INFERRED_PREFIX,
-} from "./enrich.mjs";
-import { buildSchemaDocEnvelope } from "./enrich-cli.mjs";
+} from "./apply.mjs";
+import { buildSchemaDocEnvelope } from "./cli.mjs";
 
 // A freshly generated db-schema doc: structure filled, meaning slots scaffolded.
 function freshDoc() {
@@ -58,9 +58,9 @@ test("formatEvidence: appends 근거 and escapes pipes/newlines", () => {
   assert.equal(formatEvidence("a|b\nc", ["x|y:1"]), "a\\|b c [근거: x\\|y:1]");
 });
 
-test("applyEnrichment: fills scaffold prose + column cells as inferred, with evidence", () => {
-  const res = applyEnrichment(freshDoc(), proposal);
-  assert.equal(res.status, "enriched");
+test("applyProposal: fills scaffold prose + column cells as inferred, with evidence", () => {
+  const res = applyProposal(freshDoc(), proposal);
+  assert.equal(res.status, "applied");
   // purpose filled, tagged inferred, evidence present
   assert.match(res.markdown, /추정\) 주문 헤더 \[근거: OrderService\.java:20\]/);
   // column 설명 cells filled inside the auto columns table
@@ -71,8 +71,8 @@ test("applyEnrichment: fills scaffold prose + column cells as inferred, with evi
   assert.deepEqual(res.filled.map((f) => f.slot).sort(), ["column:GUBUN", "column:STATUS", "purpose"]);
 });
 
-test("applyEnrichment: never overwrites a confirmed slot (frozen), reports it skipped", () => {
-  const confirmed = applyEnrichment(freshDoc(), {
+test("applyProposal: never overwrites a confirmed slot (frozen), reports it skipped", () => {
+  const confirmed = applyProposal(freshDoc(), {
     purpose: { text: "사람이 확인한 용도" },
   }).markdown;
   // promote purpose so it becomes confirmed (no 추정) prefix)
@@ -80,39 +80,39 @@ test("applyEnrichment: never overwrites a confirmed slot (frozen), reports it sk
   assert.equal(slotState(regionOf(promoted, "purpose")), "confirmed");
 
   // a new proposal must NOT clobber the confirmed purpose
-  const res = applyEnrichment(promoted, { purpose: { text: "에이전트 재추론" } });
+  const res = applyProposal(promoted, { purpose: { text: "에이전트 재추론" } });
   assert.match(res.markdown, /사람이 확인한 용도/);
   assert.doesNotMatch(res.markdown, /에이전트 재추론/);
   assert.deepEqual(res.skipped, [{ slot: "purpose", reason: "confirmed" }]);
   assert.equal(res.status, "nochange");
 });
 
-test("applyEnrichment: refreshes an existing inferred value by default, keeps it with --keep-inferred", () => {
-  const once = applyEnrichment(freshDoc(), { columns: { STATUS: { text: "구버전 추론" } } }).markdown;
+test("applyProposal: refreshes an existing inferred value by default, keeps it with --keep-inferred", () => {
+  const once = applyProposal(freshDoc(), { columns: { STATUS: { text: "구버전 추론" } } }).markdown;
   assert.match(once, /추정\) 구버전 추론/);
 
   // default: overwrite the inferred value
-  const refreshed = applyEnrichment(once, { columns: { STATUS: { text: "신버전 추론", evidence: ["x:1"] } } }).markdown;
+  const refreshed = applyProposal(once, { columns: { STATUS: { text: "신버전 추론", evidence: ["x:1"] } } }).markdown;
   assert.match(refreshed, /추정\) 신버전 추론 \[근거: x:1\]/);
   assert.doesNotMatch(refreshed, /구버전 추론/);
 
   // keep-inferred: leave the existing inferred value alone
-  const kept = applyEnrichment(once, { columns: { STATUS: { text: "신버전 추론" } } }, { overwriteInferred: false });
+  const kept = applyProposal(once, { columns: { STATUS: { text: "신버전 추론" } } }, { overwriteInferred: false });
   assert.match(kept.markdown, /추정\) 구버전 추론/);
   assert.deepEqual(kept.skipped, [{ slot: "column:STATUS", reason: "inferred" }]);
 });
 
-test("applyEnrichment: a doc without markers is a conflict (enrich only runs on generated docs)", () => {
-  const res = applyEnrichment("# 손으로 쓴 문서\n마커 없음", proposal);
+test("applyProposal: a doc without markers is a conflict (apply only runs on generated docs)", () => {
+  const res = applyProposal("# 손으로 쓴 문서\n마커 없음", proposal);
   assert.equal(res.status, "conflict");
   assert.equal(res.markdown, undefined);
   assert.match(res.reason, /마커가 없는/);
 });
 
 test("promote: strips 추정) prefix (keeps evidence) for targeted slots only", () => {
-  const enriched = applyEnrichment(freshDoc(), proposal).markdown;
+  const applied = applyProposal(freshDoc(), proposal).markdown;
   // promote only STATUS column + purpose
-  const res = promote(enriched, { columns: ["status"], slots: ["purpose"] });
+  const res = promote(applied, { columns: ["status"], slots: ["purpose"] });
   assert.deepEqual(res.promoted.sort(), ["column:STATUS", "purpose"]);
   // purpose is now confirmed (prefix gone, evidence stays)
   assert.match(res.markdown, /purpose -->\n주문 헤더 \[근거: OrderService\.java:20\]/);
@@ -122,16 +122,16 @@ test("promote: strips 추정) prefix (keeps evidence) for targeted slots only", 
 });
 
 test("promote: --all promotes every inferred slot", () => {
-  const enriched = applyEnrichment(freshDoc(), proposal).markdown;
-  const res = promote(enriched, { all: true });
+  const applied = applyProposal(freshDoc(), proposal).markdown;
+  const res = promote(applied, { all: true });
   assert.doesNotMatch(res.markdown, /추정\)/); // nothing inferred remains
   assert.equal(res.promoted.length, 3); // purpose + STATUS + GUBUN
 });
 
-test("enrich fills survive a db-schema-docs structural regeneration (compose with sibling)", () => {
-  // enrich then confirm the STATUS description
-  const enriched = applyEnrichment(freshDoc(), proposal).markdown;
-  const confirmed = promote(enriched, { columns: ["STATUS"] }).markdown;
+test("applied fills survive a db-schema-docs structural regeneration (compose with sibling)", () => {
+  // apply then confirm the STATUS description
+  const applied = applyProposal(freshDoc(), proposal).markdown;
+  const confirmed = promote(applied, { columns: ["STATUS"] }).markdown;
 
   // regenerate structure: STATUS widened, GUBUN dropped, a new column added
   const regen = renderDoc(

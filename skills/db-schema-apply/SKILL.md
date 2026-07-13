@@ -1,34 +1,35 @@
 ---
-name: db-schema-enrich
+name: db-schema-apply
 argument-hint: "[table ...]"
 disable-model-invocation: true
 description: >-
   잘 만들어진 의미 제안(proposal.json)을 db-schema 문서에 안전하게 반영하고,
   사람 검토 후 승격까지의 신뢰도 라이프사이클(scaffold → 추정) → confirmed)을
   집행한다 — dbdoc 마커 보존, confirmed 동결, dry-run→승인. 제안 생산(코드베이스
-  분석)은 생산자 몫이며, 생산자가 없을 때의 기본 분석 절차는 부록 A.
-  /db-schema-enrich 로만 호출된다 (모델 자동 발동 없음).
+  분석)은 생산자 몫이며, 기본 생산자는 형제 스킬 db-schema-propose.
+  /db-schema-apply 로만 호출된다 (모델 자동 발동 없음).
 ---
 
-# db-schema-enrich
+# db-schema-apply
 
 ## 책임 경계 (이 스킬이 무엇인가)
 
 **핵심 책임 = 반영과 승격.** 이미 만들어진 의미 제안(proposal.json)을 받아:
 
 1. db-schema 문서에 **안전하게 반영** — dbdoc 마커 보존, 신뢰도 티어 강제,
-   confirmed 동결, dry-run→승인 (`enrich-cli apply`)
-2. 사람이 검토한 추론의 **승격 집행** (`enrich-cli promote`)
+   confirmed 동결, dry-run→승인 (`cli.mjs apply`)
+2. 사람이 검토한 추론의 **승격 집행** (`cli.mjs promote`)
 
 제안을 **만드는 것**(코드베이스 분석)은 이 스킬의 핵심 책임이 아니라
 **생산자의 몫**이다. 생산자는 여럿일 수 있다:
 
+- **기본 생산자 = [db-schema-propose](../db-schema-propose/SKILL.md)** —
+  코드베이스 분석 + 제안 lint(조용한 증발 방지)
 - agent-skill-foundry가 찍는 도메인 스킬들 (주 생산자, 예정)
-- 사내 정적 분석 MCP(Neo4j 관계도) 기반 분석 (사내 이관 후)
-- 이 스킬을 단독 호출했을 때의 에이전트 직접 분석 — **부록 A**의 기본 절차
+- 전문가 구술의 구조화, 사내 정적 분석 MCP(Neo4j) 기반 분석 (사내 이관 후)
 
 어느 생산자든 계약은 하나 — §제안 스키마의 proposal.json. 그리고 문서로
-들어가는 문은 이 스킬(enrich-cli)뿐이다: 생산자는 문서를 직접 수정하지 않는다.
+들어가는 문은 이 스킬(cli.mjs)뿐이다: 생산자는 문서를 직접 수정하지 않는다.
 
 ## 배경
 
@@ -63,7 +64,7 @@ description: >-
 
 ## 제안 스키마 (생산자 계약)
 
-proposal.json — enrich-cli로 들어가는 **유일한 입력**:
+proposal.json — cli.mjs로 들어가는 **유일한 입력**:
 
 ```json
 {
@@ -87,12 +88,13 @@ proposal.json — enrich-cli로 들어가는 **유일한 입력**:
 ### 1. 입력 확인
 
 대상 문서(`~/.claude/docs/db/<table>.md`)와 proposal.json이 준비됐는지 확인.
-제안이 아직 없으면 — 생산자가 따로 없다면 — 부록 A로 직접 만든다.
+제안이 아직 없으면 — 생산자가 따로 없다면 —
+[db-schema-propose](../db-schema-propose/SKILL.md)로 만든다.
 
 ### 2. dry-run 미리보기 → 승인
 
 ```bash
-node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-enrich/enrich-cli.mjs apply \
+node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-apply/cli.mjs apply \
   --doc ~/.claude/docs/db/orders.md --proposal <proposal.json>
 ```
 
@@ -112,9 +114,9 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-enrich/enrich-cli.mjs apply \
 
 ```bash
 # 특정 컬럼/슬롯만
-node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --column STATUS --slot purpose --write
+node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --column STATUS --slot purpose --write
 # 전부
-node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
+node .../cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 ```
 
 승격은 `추정)` 접두어만 떼고 근거는 남긴다(confirmed 사실의 출처로).
@@ -134,42 +136,5 @@ node .../enrich-cli.mjs promote --doc ~/.claude/docs/db/orders.md --all --write
 - 제안의 품질은 생산자 책임이다 — 이 스킬은 티어·동결·근거 형식을 강제할 뿐,
   틀린 추론 자체를 검증하지는 못한다(그래서 승격이 사람 전용이다).
 
-## 부록 A — 기본 생산 절차 (생산자가 없을 때)
-
-단독 호출에서 제안을 직접 만들어야 할 때의 코드베이스 분석 절차. 컬럼 하나의
-의미는 다음 4단계로 세운다(테이블 purpose도 동일, 단위만 다름):
-
-**① 사이트 발견** — 이 컬럼을 만지는 코드를 찾는다:
-
-- `rg -i '<테이블명>'` (스키마 접두 유/무 모두) → 매퍼 XML·엔티티·SQL 파일
-- 찾은 매퍼/엔티티 안에서 컬럼명 검색: `resultMap`의 `column="STATUS"
-  property="orderStatus"`, `@Column(name = "STATUS")` 붙은 필드
-- `rg -i '<컬럼명>'`으로 직접 검색 (컬럼명이 흔한 단어면 테이블 파일 안으로 한정)
-
-**② 의미 후보 도출** — 발견한 사이트에서 의미를 읽는다:
-
-- **매핑된 property/필드명이 1차 후보다**: `column="STATUS"
-  property="orderStatus"` → "주문 상태". 개발자가 이미 번역해 둔 이름이다.
-- **값을 해석하는 enum/상수/분기**: `if (status.equals("P")) // 처리중`,
-  `OrderStatus.NEW("N")` → 값 코드표가 나온다.
-- **Javadoc·주석·DTO 필드 설명** — 있으면 문장 그대로가 후보.
-
-**③ 교차 확인** — 후보들이 서로 일치하는가:
-
-- 독립 사이트 **2곳 이상**이 같은 의미를 가리키면 채택.
-- **1곳뿐이면** 텍스트를 보수적으로 쓴다 — 단정("주문 상태") 대신 관찰
-  서술("OrderMapper가 orderStatus로 매핑") 수준까지만.
-- 사이트끼리 **모순**이면(같은 컬럼을 다른 뜻으로) 그 컬럼은 제안에서 빼고
-  사용자에게 모순 사실을 보고한다.
-
-**④ 근거 기록** — 채택한 의미마다 ①에서 본 위치를 `파일:라인`으로 남기고,
-§제안 스키마의 규칙대로 proposal.json을 스크래치패드에 작성한다.
-
-> **TODO (사내 이관 후)**: 사내에는 MyBatis Mapper/Loader 관계를 정적 분석해
-> Neo4j에 넣고 MCP화한 코드베이스 분석 플러그인이 있다. 그 MCP가 연결돼
-> 있으면 ①(사이트 발견)을 grep 대신 **그래프 조회로 먼저** 한다(탐색 가속·
-> 누락 감소). ②~④는 동일하고, 근거 표기도 그대로 `파일:라인` — 그래프는
-> 사이트를 찾는 수단이고, 출처는 항상 코드다.
-
-관련 코드: `enrich.mjs`(순수 병합·티어·승격), `enrich-cli.mjs`(파일 IO CLI),
-`test.mjs`(오프라인 회귀 — `node skills/db-schema-enrich/test.mjs`).
+관련 코드: `apply.mjs`(순수 병합·티어·승격), `cli.mjs`(파일 IO CLI),
+`test.mjs`(오프라인 회귀 — `node skills/db-schema-apply/test.mjs`).
