@@ -7,23 +7,26 @@
 //
 //   apply   --doc <path> --proposal <json> [--keep-inferred] [--write]
 //     Fill meaning slots from a semantics proposal (agent's codebase analysis).
-//     --keep-inferred: do not overwrite existing 추정) values (default: refresh).
+//     --keep-inferred: do not overwrite existing 미확인) values (default: refresh).
 //
 //   promote --doc <path> [--all | --column NAME ... | --slot NAME ...] [--write]
-//     Flip reviewed 추정) slots to confirmed (strip the 추정) prefix).
+//     채택: flip reviewed 미확인) slots to confirmed (strip the 미확인) prefix).
+//
+//   migrate --doc <path> [--write]
+//     Rewrite the legacy 추정) prefix → 미확인) in place (idempotent, #115 rename).
 //
 // Exit: 0 ok, 1 fatal/usage, 2 apply hit a confirmed slot it left untouched.
 
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { fileURLToPath } from "node:url";
-import { applyProposal, promote } from "./apply.mjs";
+import { applyProposal, promote, editSlot } from "./apply.mjs";
 import { postEnvelope, sourceApp } from "../../lib/obs-client.mjs";
 
 // ── observability (#90) ──────────────────────────────────────────────────────
 // On a real --write, tell the collector what changed so the dashboard's
 // keyword-docs review surface can show the apply/promote activity log alongside
-// the file-scanned 추정) queue. Pure builder (exposed for tests); emitSchemaDoc
+// the file-scanned 미확인) queue. Pure builder (exposed for tests); emitSchemaDoc
 // POSTs it. Fire-and-forget: awaited only so a short-lived CLI actually flushes
 // the socket, but postEnvelope never throws and is timeout-bounded, so a
 // slow/absent collector can't fail the CLI.
@@ -55,6 +58,8 @@ function parseArgs(argv) {
     else if (a === "--proposal") args.proposal = argv[++i];
     else if (a === "--column") args.columns.push(argv[++i]);
     else if (a === "--slot") args.slots.push(argv[++i]);
+    else if (a === "--text") args.text = argv[++i];
+    else if (a === "--evidence") args.evidence = argv[++i];
     else throw new Error(`알 수 없는 인자: ${a}`);
   }
   return args;
@@ -114,12 +119,41 @@ async function cmdPromote(args) {
   }
 }
 
+// migrate: legacy 추정) prefix → 미확인) in place (#115 rename). A plain string swap
+// — "추정) " only ever appears as the inferred prefix — so it's safe and idempotent.
+async function cmdMigrate(args) {
+  if (!args.doc) throw new Error("migrate: --doc 이 필요합니다");
+  const existing = await readText(args.doc);
+  const n = (existing.match(/추정\) /g) || []).length;
+  const migrated = existing.split("추정) ").join("미확인) ");
+  console.error(`migrate: 추정) → 미확인) ${n}건`);
+  await persist(args.doc, migrated, args.write, "migrate");
+}
+
+// edit: set one slot to a human-authored value → confirmed (대시보드 "수정").
+// Any tier can be edited — a human write is authoritative. Emits as a promote
+// (the slot ends up confirmed either way).
+async function cmdEdit(args) {
+  if (!args.doc) throw new Error("edit: --doc 이 필요합니다");
+  const target = args.columns.length ? { column: args.columns[0] } : args.slots.length ? { slot: args.slots[0] } : null;
+  if (!target) throw new Error("edit: --column 또는 --slot 중 하나가 필요합니다");
+  if (args.text == null) throw new Error("edit: --text 가 필요합니다");
+  const evidence = args.evidence ? args.evidence.split(";").map((s) => s.trim()).filter(Boolean) : [];
+  const existing = await readText(args.doc);
+  const res = editSlot(existing, target, args.text, evidence);
+  console.error(`edited=${res.edited.length} (${res.edited.join(", ") || "-"})`);
+  await persist(args.doc, res.markdown, args.write, "edit");
+  if (args.write && res.edited.length) await emitSchemaDoc("SchemaDocPromote", args.doc, { promoted: res.edited });
+}
+
 async function main() {
   const [sub, ...rest] = process.argv.slice(2);
   const args = parseArgs(rest);
   if (sub === "apply") await cmdApply(args);
   else if (sub === "promote") await cmdPromote(args);
-  else throw new Error(`서브커맨드가 필요합니다: apply | promote (받음: ${sub ?? "없음"})`);
+  else if (sub === "edit") await cmdEdit(args);
+  else if (sub === "migrate") await cmdMigrate(args);
+  else throw new Error(`서브커맨드가 필요합니다: apply | promote | edit | migrate (받음: ${sub ?? "없음"})`);
 }
 
 // Run only when invoked directly (`node cli.mjs …`); stay importable so tests
