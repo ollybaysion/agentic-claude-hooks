@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// db-schema-propose CLI — deterministic helpers around the producer skill.
+// db-schema-propose-codebase CLI — deterministic helpers around the producer skill.
 // Read-only: this CLI never writes a doc (writing is db-schema-apply's job).
 //
 //   slots --doc <path>

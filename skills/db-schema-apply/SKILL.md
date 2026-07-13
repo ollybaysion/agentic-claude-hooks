@@ -6,7 +6,7 @@ description: >-
   잘 만들어진 의미 제안(proposal.json)을 db-schema 문서에 안전하게 반영하고,
   사람 검토 후 승격까지의 신뢰도 라이프사이클(scaffold → 추정) → confirmed)을
   집행한다 — dbdoc 마커 보존, confirmed 동결, dry-run→승인. 제안 생산(코드베이스
-  분석)은 생산자 몫이며, 기본 생산자는 형제 스킬 db-schema-propose.
+  분석)은 생산자 몫이며, 기본 생산자는 형제 스킬 db-schema-propose-codebase.
   /db-schema-apply 로만 호출된다 (모델 자동 발동 없음).
 ---
 
@@ -23,7 +23,7 @@ description: >-
 제안을 **만드는 것**(코드베이스 분석)은 이 스킬의 핵심 책임이 아니라
 **생산자의 몫**이다. 생산자는 여럿일 수 있다:
 
-- **기본 생산자 = [db-schema-propose](../db-schema-propose/SKILL.md)** —
+- **기본 생산자 = [db-schema-propose-codebase](../db-schema-propose-codebase/SKILL.md)** —
   코드베이스 분석 + 제안 lint(조용한 증발 방지)
 - agent-skill-foundry가 찍는 도메인 스킬들 (주 생산자, 예정)
 - 전문가 구술의 구조화, 사내 정적 분석 MCP(Neo4j) 기반 분석 (사내 이관 후)
@@ -89,7 +89,7 @@ proposal.json — cli.mjs로 들어가는 **유일한 입력**:
 
 대상 문서(`~/.claude/docs/db/<table>.md`)와 proposal.json이 준비됐는지 확인.
 제안이 아직 없으면 — 생산자가 따로 없다면 —
-[db-schema-propose](../db-schema-propose/SKILL.md)로 만든다.
+[db-schema-propose-codebase](../db-schema-propose-codebase/SKILL.md)로 만든다.
 
 ### 2. dry-run 미리보기 → 승인
 
