@@ -100,6 +100,32 @@ node ${CLAUDE_PLUGIN_ROOT}/skills/db-schema-docs/generate.mjs \
 `{{대표 쿼리}}`를 코드/도메인 지식으로 채우도록
 사용자에게 제안한다.
 
+## 대표 쿼리 포집 (관측 → 슬롯 제안, 선택)
+
+`## 대표 쿼리` manual 슬롯은 손으로 채우는 게 기본이지만, **실사용을 이미 관측하고
+있으면** 그 로그에서 후보를 뽑을 수 있다. agent-db-plugin은 실행한 모든 `run_query`를
+`DbQuery` 이벤트로 observability collector에 흘리고(#87), 다음 CLI가 그 이벤트를
+**테이블별 대표 쿼리**로 정규화·랭킹해 이 슬롯에 붙일 **제안**을 만든다(#114):
+
+```bash
+node ${CLAUDE_PLUGIN_ROOT}/core/observability/server.mjs representative-queries \
+  --window 30d            # 1h|6h|24h|7d|30d (기본 30d)
+  [--table FDC.LOT_HISTORY]  # 한 테이블만
+  [--alias fdc]           # 한 접속 별칭만
+  [--per-table 3] [--min-count 2]
+  [--all-tools]           # describe_table/list_tables 내부 카탈로그 조회까지 포함
+  [--json]                # 구조화 출력
+```
+
+- **정규화**: 리터럴·바인드·`IN (?,…)`만 다른 쿼리는 한 그룹으로 묶고(빈도 desc →
+  성공률 → 최근성 순 랭킹), 대표 SQL은 그 그룹의 **가장 최근 성공** 인스턴스를 보여준다.
+- **기본은 `run_query`만** — 카탈로그 조회는 대표 쿼리가 아니므로 제외(`--all-tools`로 포함).
+- **읽기 전용·제안 전용**: 문서를 직접 쓰지 않는다. 출력된 블록을 **사람이 검토한 뒤**
+  해당 테이블 문서의 `## 대표 쿼리` 구역(`dbdoc:manual:queries` 마커 안)에 붙인다 —
+  manual 슬롯 원문 보존 + enrich의 propose→promote 규율과 같은 계약.
+- **전제**: 의미 있는 대표 쿼리가 나오려면 실사용 트래픽이 collector로 쌓여 있어야 한다.
+  관측이 0건이면 그 사실을 안내하고 끝낸다(문서를 억지로 만들지 않는다).
+
 ## dbdoc 마커 규약 (재생성 안전)
 
 이 스킬이 만드는 문서는 `<!-- dbdoc:auto:... -->` / `<!-- dbdoc:manual:... -->`

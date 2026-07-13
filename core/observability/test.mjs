@@ -424,6 +424,67 @@ check("db: top_tables from FROM/JOIN (approx)", tGl && tGl.count === 2, JSON.str
 const tPer = (dbs.top_tables || []).find((t) => t.table === "GL_PERIODS");
 check("db: JOIN table extracted", tPer && tPer.count === 1, JSON.stringify(tPer));
 
+// ══ #114 — representative-queries CLI (observed DbQuery → 대표 쿼리 proposals) ══
+// Isolated in its own OBS_DATA_DIR so it can't perturb the shared DB / other tests.
+process.stdout.write("\n# representative queries (#114)\n");
+const RQ_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "obs-repq-"));
+const RQ_ENV = { OBS_DATA_DIR: RQ_DIR };
+// (1) empty DB → schema gets created by startBackend, and the 0-row notice path runs
+const rqEmpty = cliEnv(RQ_ENV, "representative-queries");
+check("repq: empty → 0-row notice", /관측된 DbQuery 없음/.test(rqEmpty), rqEmpty.slice(0, 80));
+// (2) seed DbQuery rows into the now-created events.db
+{
+  const rqdb = new DatabaseSync(path.join(RQ_DIR, "events.db"));
+  const insD = rqdb.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,tool_name,received_at,payload) VALUES (?,?,?,?,?,?,?,?)`);
+  const RQT = Date.now();
+  const dq = (seq, tool, sql, isOk, at) =>
+    insD.run(seq, "rq" + seq, "agent-db-plugin", "sess-repq", "DbQuery", tool, at, JSON.stringify({
+      alias: "repq-test", tool, sql, elapsedMs: 40 + seq, rowCount: isOk ? 1 : null,
+      truncated: isOk ? false : null, oraError: isOk ? null : "ORA-00942: table or view does not exist" }));
+  // group A: one shape, literal-varied, 3× success → representative = most recent ('L3')
+  dq(1, "run_query", "SELECT * FROM fdc.lot_history WHERE lot_id = 'L1'", true, RQT);
+  dq(2, "run_query", "SELECT * FROM fdc.lot_history WHERE lot_id = 'L2'", true, RQT + 1000);
+  dq(3, "run_query", "SELECT * FROM fdc.lot_history WHERE lot_id = 'L3'", true, RQT + 2000);
+  // group B: distinct shape on the same table, 1× error
+  dq(4, "run_query", "SELECT bad FROM fdc.lot_history WHERE x = 9", false, RQT + 500);
+  // group C: JOIN → attributed to BOTH tables, 2× success
+  dq(5, "run_query", "SELECT h.* FROM fdc.lot_history h JOIN fdc.sensor s ON h.id = s.hid WHERE s.kind = 'T'", true, RQT + 3000);
+  dq(6, "run_query", "SELECT h.* FROM fdc.lot_history h JOIN fdc.sensor s ON h.id = s.hid WHERE s.kind = 'U'", true, RQT + 4000);
+  // group D: success (older) vs error (newer), same shape → representative must be the SUCCESS one
+  dq(7, "run_query", "SELECT * FROM fdc.alarm WHERE id = 1", true, RQT + 100);
+  dq(8, "run_query", "SELECT * FROM fdc.alarm WHERE id = 2", false, RQT + 6000);
+  // catalog read → excluded by default, included only with --all-tools
+  dq(9, "describe_table", "SELECT column_name FROM all_tab_columns WHERE table_name = 'LOT_HISTORY'", true, RQT + 7000);
+  rqdb.close();
+}
+const J = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--json"));
+check("repq: run_query only (catalog excluded)", J.observed === 8, JSON.stringify(J.observed));
+const lot = (J.tables || []).find((t) => t.table === "FDC.LOT_HISTORY");
+check("repq: table attributed + total over all shapes", lot && lot.total === 6 && lot.distinct === 3, JSON.stringify(lot && { total: lot.total, distinct: lot.distinct }));
+const gA = lot && lot.queries.find((q) => q.count === 3);
+check("repq: literal-varied queries grouped (count 3)", !!gA, JSON.stringify(lot && lot.queries.map((q) => q.count)));
+check("repq: representative = most recent success", gA && /'L3'/.test(gA.sql) && gA.errorRate === 0, JSON.stringify(gA && gA.sql));
+check("repq: ranked count desc (A first)", lot && lot.queries[0].count === 3, JSON.stringify(lot && lot.queries.map((q) => q.count)));
+const gB = lot && lot.queries.find((q) => q.errorRate === 1);
+check("repq: errored-only group carries errorRate 1", !!gB, JSON.stringify(lot && lot.queries.map((q) => q.errorRate)));
+const sensor = (J.tables || []).find((t) => t.table === "FDC.SENSOR");
+check("repq: JOIN attributes query to 2nd table", sensor && sensor.queries[0] && sensor.queries[0].count === 2, JSON.stringify(sensor));
+const alarm = (J.tables || []).find((t) => t.table === "FDC.ALARM");
+const gD = alarm && alarm.queries[0];
+check("repq: success preferred over newer error", gD && /id = 1/.test(gD.sql) && gD.count === 2 && approx(gD.errorRate, 0.5), JSON.stringify(gD));
+check("repq: catalog table absent by default", !(J.tables || []).some((t) => t.table === "ALL_TAB_COLUMNS"), JSON.stringify((J.tables || []).map((t) => t.table)));
+const Jall = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--all-tools", "--json"));
+check("repq: --all-tools includes catalog read", Jall.observed === 9 && (Jall.tables || []).some((t) => t.table === "ALL_TAB_COLUMNS"), JSON.stringify(Jall.observed));
+const Jmc = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--min-count", "2", "--json"));
+const mcCounts = (Jmc.tables || []).flatMap((t) => t.queries.map((q) => q.count));
+check("repq: --min-count drops low-frequency shapes", mcCounts.length > 0 && mcCounts.every((c) => c >= 2), JSON.stringify(mcCounts));
+const Jtbl = JSON.parse(cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--table", "fdc.alarm", "--json"));
+check("repq: --table filters to one (case-insensitive)", (Jtbl.tables || []).length === 1 && Jtbl.tables[0].table === "FDC.ALARM", JSON.stringify((Jtbl.tables || []).map((t) => t.table)));
+const rqMd = cliEnv(RQ_ENV, "representative-queries", "--window", "7d");
+check("repq: markdown has table heading + sql fence", /### FDC\.LOT_HISTORY/.test(rqMd) && rqMd.includes("```sql") && /'L3'/.test(rqMd), rqMd.slice(0, 120));
+const rqNone = cliEnv(RQ_ENV, "representative-queries", "--window", "7d", "--alias", "__none__");
+check("repq: unknown alias → 0-row notice", /관측된 DbQuery 없음/.test(rqNone), rqNone.slice(0, 60));
+
 // ══ #73 — Turn Inspector (/stats/turns: grouping, pairing, time split, flags) ═
 process.stdout.write("\n# turn inspector (/stats/turns)\n");
 {
