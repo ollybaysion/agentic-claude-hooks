@@ -123,6 +123,20 @@ test("--derived: data-derived-from 표기 강제", () => {
   assert.ok(rules(validDoc(), { derived: true }).includes("derived-footer"));
 });
 
+test("규칙 '언급'은 무해하다 — 산문·코드 예시의 @import/url()/{{ }}", () => {
+  // 메타 문서·Vue/Jinja류 예시가 오탐나면 안 된다
+  const mention = validDoc().replace(
+    "</main>",
+    `<p>CSS에서 <code>@import</code>와 url(https://fonts.example.com/x.woff2)는 금지다.</p>
+     <pre><code>&lt;p&gt;{{ user.name }}&lt;/p&gt;</code></pre>
+     <p>플레이스홀더 표기는 <code>{{...}}</code>를 쓴다.</p></main>`);
+  assert.deepEqual(rules(mention), []);
+  // 실제 CSS 문맥에서는 여전히 걸린다: style 속성
+  const attr = validDoc().replace(
+    "</main>", '<div style="background:url(https://cdn.example.com/bg.png)"></div></main>');
+  assert.ok(rules(attr).includes("css-url"));
+});
+
 test("HTML 주석은 검사 전에 제거된다 — 양방향", () => {
   // 주석 안의 위반은 무시된다
   const bad = validDoc().replace(

@@ -27,6 +27,25 @@ function stripComments(html) {
   return html.replace(/<!--[\s\S]*?-->/g, "");
 }
 
+// CSS가 실제로 해석되는 문맥만 모은다 — <style> 블록 + style="" 속성.
+// 본문 산문/코드 예시에서 @import·url()을 "언급"하는 건 리소스를 안 가져온다.
+function cssContexts(doc) {
+  const parts = [];
+  let m;
+  const STYLE_RE = /<style\b[^>]*>([\s\S]*?)<\/style>/gi;
+  while ((m = STYLE_RE.exec(doc)) !== null) parts.push(m[1]);
+  const ATTR_STYLE_RE = /\bstyle\s*=\s*("([^"]*)"|'([^']*)')/gi;
+  while ((m = ATTR_STYLE_RE.exec(doc)) !== null) parts.push(m[2] ?? m[3] ?? "");
+  return parts.join("\n");
+}
+
+// 코드 예시(<pre>/<code>) 내용을 제거 — Vue/Jinja류 예시의 {{ }}는 잔재가 아니다.
+function stripCodeBlocks(doc) {
+  return doc
+    .replace(/<pre\b[\s\S]*?<\/pre>/gi, "")
+    .replace(/<code\b[^>]*>[\s\S]*?<\/code>/gi, "");
+}
+
 export function checkHtml(html, { derived = false } = {}) {
   const errors = [];
   const doc = stripComments(html);
@@ -58,13 +77,15 @@ export function checkHtml(html, { derived = false } = {}) {
     }
   }
 
-  // self-contained: CSS — @import는 무조건 금지, url()은 data:/#만 허용
-  if (/@import\b/i.test(doc)) {
+  // self-contained: CSS — @import는 무조건 금지, url()은 data:/#만 허용.
+  // 검사 범위는 실제 CSS 문맥(<style>/style=)만 — 산문·코드 예시의 언급은 무해.
+  const css = cssContexts(doc);
+  if (/@import\b/i.test(css)) {
     errors.push({ rule: "css-import", msg: "@import는 리소스를 가져온다 — 금지" });
   }
   const URL_RE = /\burl\(\s*("([^"]*)"|'([^']*)'|([^)'"]*))\s*\)/gi;
   let u;
-  while ((u = URL_RE.exec(doc)) !== null) {
+  while ((u = URL_RE.exec(css)) !== null) {
     const value = (u[2] ?? u[3] ?? u[4] ?? "").trim();
     if (!attrValueOk(value)) {
       errors.push({ rule: "css-url", msg: `CSS url() 외부/로컬 참조: url(${value})` });
@@ -97,8 +118,8 @@ export function checkHtml(html, { derived = false } = {}) {
     }
   }
 
-  // 템플릿 플레이스홀더 잔재
-  if (/\{\{/.test(doc)) {
+  // 템플릿 플레이스홀더 잔재 — 코드 예시(<pre>/<code>) 속 {{ }}는 제외
+  if (/\{\{/.test(stripCodeBlocks(doc))) {
     errors.push({ rule: "placeholder", msg: "{{...}} 플레이스홀더가 남아 있다" });
   }
 
