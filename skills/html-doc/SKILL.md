@@ -41,9 +41,13 @@ TOC, 인쇄, 문서 관례 — 을 이 폴더의 `template.html`이 스켈레톤
    `pre`가 스스로 스크롤한다. `body`가 가로로 흐르면 안 된다.
 5. **h2/h3엔 저작 시점에 `id`를 부여한다.** TOC와 앵커가 이 `id`를 쓰므로
    재생성해도 앵커가 안정적이다. JS로 자동 생성하지 않는다.
-6. **다이어그램은 텍스트 또는 인라인 SVG.** ASCII/box-drawing 다이어그램은
-   `pre.diagram`에. mermaid 라이브러리 임베드는 금지(수 MB) — Artifact **전용**
-   산출물에서만 뷰어 네이티브 mermaid를 써도 된다.
+6. **다이어그램은 텍스트, 패턴, 또는 인라인 SVG.** 구조·관계는
+   `pre.diagram`(ASCII/box-drawing)으로. **두 주체가 시간순으로 주고받는
+   흐름(API 왕복·이벤트·프로토콜)은 시퀀스 패턴**
+   ([design.md §패턴](design.md), 견본 [patterns/sequence.html](patterns/sequence.html))으로
+   그린다 — 좌표 계산 없는 순수 마크업이다. mermaid 라이브러리 임베드는
+   금지(수 MB) — Artifact **전용** 산출물에서만 뷰어 네이티브 mermaid를 써도
+   된다.
 7. **인라인 JS는 허용하되 네트워크 호출 금지.** `fetch`/`XHR`/`WebSocket`을
    쓰지 않는다. `check.mjs`는 정적 검사라 이건 못 잡는다 — 스스로 지킨다.
 8. **디자인은 [design.md](design.md)의 토큰·컴포넌트 인벤토리를 따른다.**

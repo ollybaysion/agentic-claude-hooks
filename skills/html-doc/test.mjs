@@ -164,6 +164,13 @@ test("HTML 주석은 검사 전에 제거된다 — 양방향", () => {
   assert.ok(rules(fake, { derived: true }).includes("derived-footer"));
 });
 
+test("patterns/sequence.html: 시퀀스 패턴 견본이 철칙을 통과한다 (골든)", () => {
+  const raw = readFileSync(join(HERE, "patterns", "sequence.html"), "utf8");
+  const { ok, errors } = checkHtml(raw);
+  assert.deepEqual(errors, [], "시퀀스 패턴 견본이 철칙을 어긴다");
+  assert.ok(ok);
+});
+
 test("template.html: 플레이스홀더만 채우면 철칙을 통과한다", () => {
   const raw = readFileSync(join(HERE, "template.html"), "utf8");
   const filled = raw.replace(/\{\{[^}]*\}\}/g, "채움");
