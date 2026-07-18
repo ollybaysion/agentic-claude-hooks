@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>스탯 타일 패턴 — 견본과 사용법</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --surface: #f6f8fa;
+  --code-bg: #f0f2f5;
+  --mark-bg: #fff8c5;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding",
+    monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #3d444d;
+    --accent: #4493f8;
+    --surface: #151b23;
+    --code-bg: #1c2128;
+    --mark-bg: #3a3000;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #9198a1;
+  --border: #3d444d;
+  --accent: #4493f8;
+  --surface: #151b23;
+  --code-bg: #1c2128;
+  --mark-bg: #3a3000;
+}
+:root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 2.5rem;
+}
+nav#toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 1.75rem 0;
+  font-size: 0.85rem;
+}
+nav#toc .toc-title {
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+nav#toc ol { list-style: none; margin: 0; padding: 0; }
+nav#toc li { margin: 0.15rem 0; }
+nav#toc li.toc-h3 { padding-left: 1rem; }
+nav#toc a { color: var(--muted); display: block; padding: 0.1rem 0.5rem; border-left: 2px solid transparent; }
+nav#toc a:hover { color: var(--fg); text-decoration: none; }
+nav#toc a.active { color: var(--accent); border-left-color: var(--accent); }
+main { min-width: 0; padding-top: 1.75rem; }
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; gap: 0; }
+  nav#toc { position: static; max-height: none; border-bottom: 1px solid var(--border); }
+}
+h1 { font-size: 1.8rem; line-height: 1.3; margin: 0.5rem 0 0.25rem; }
+h2 { font-size: 1.35rem; margin: 2.5rem 0 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+h2, h3 { scroll-margin-top: 1rem; }
+.hanchor { margin-left: 0.35rem; opacity: 0; font-size: 0.85em; }
+h2:hover .hanchor, h3:hover .hanchor { opacity: 0.7; }
+.badge {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+}
+.doc-meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 1rem; }
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; font-size: 0.85rem; }
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; font-size: 0.9rem; min-width: 100%; }
+th, td { border: 1px solid var(--border); padding: 0.4rem 0.75rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+blockquote {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+mark { background: var(--mark-bg); color: inherit; }
+hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+#theme-toggle {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+}
+#theme-toggle:hover { color: var(--fg); }
+@media print {
+  #theme-toggle, nav#toc, .hanchor { display: none; }
+  .layout { display: block; max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  pre, .table-wrap { overflow-x: visible; }
+  a { color: inherit; }
+}
+
+/* ═══════ 스탯 타일 패턴 CSS:START — 여기부터 END까지 문서 <style>에 통째로 복사 ═══════ */
+/* 판정 토큰 — 보조 판정(sub)의 상태색. 라이트/다크 쌍 유지.
+   compare·states 패턴과 공유 — 중복 복사돼도 값이 같아 무해하다 */
+:root {
+  --ok: #1a7f37;
+  --ok-soft: #dafbe1;
+  --bad: #d1242f;
+  --bad-soft: #ffebe9;
+  --hold: #9a6700;
+  --hold-soft: #fff8c5;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ok: #3fb950;
+    --ok-soft: #16281c;
+    --bad: #f85149;
+    --bad-soft: #341a1c;
+    --hold: #d29922;
+    --hold-soft: #2e2712;
+  }
+}
+:root[data-theme="dark"] {
+  --ok: #3fb950;
+  --ok-soft: #16281c;
+  --bad: #f85149;
+  --bad-soft: #341a1c;
+  --hold: #d29922;
+  --hold-soft: #2e2712;
+}
+
+/* 수치 카드 그리드 — 수치 + 라벨 + 보조 판정 한 줄. hi = 대표 지표 강조 */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin: 1rem 0; }
+.stat {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.7rem 0.95rem;
+}
+.stat .num { font-family: var(--font-mono); font-size: 1.45rem; font-weight: 700; letter-spacing: -0.02em; line-height: 1.2; }
+.stat .label { font-size: 0.78rem; color: var(--muted); margin-top: 0.1rem; }
+.stat .sub { font-size: 0.75rem; font-weight: 600; margin-top: 0.2rem; }
+.stat .sub.good { color: var(--ok); }
+.stat .sub.warn { color: var(--hold); }
+.stat .sub.crit { color: var(--bad); }
+.stat.hi { border-color: var(--accent); border-width: 1.5px; }
+/* ═══════ 스탯 타일 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+<button id="theme-toggle" type="button" aria-label="테마 전환"></button>
+<div class="layout">
+<nav id="toc" aria-label="목차">
+  <div class="toc-title">목차</div>
+  <ol id="toc-list"></ol>
+</nav>
+<main>
+<header>
+  <h1>스탯 타일 패턴 <span class="badge">견본</span></h1>
+  <p class="doc-meta">html-doc 스킬 · patterns/stats.html — 이 파일이 복사
+    원본이다 (<code>스탯 타일 패턴 CSS:START…END</code> + 데모 마크업)</p>
+</header>
+
+<section>
+  <h2 id="when">1. 언제 쓰나</h2>
+  <p>분석 리포트(모드 C)의 <b>머리에 핵심 수치 4~6개</b>를 요약할 때. 본문을
+  읽기 전에 규모와 판정이 눈에 들어오게 하는 용도다. 수치가 많거나 서로
+  비교해야 하면 표로, 추세면 차트(인라인 SVG)로 — 타일은 <b>대표값</b>만.</p>
+  <p>블록 2종: <code>stats</code>(그리드) · <code>stat</code>(<code>num/label/
+  sub</code>, <code>hi</code> 대표 강조). <b>색 규율</b>: <code>sub</code>의
+  색은 데이터 계열색이 아니라 <b>판정</b>(good/warn/crit)이다 — 수치 자체엔
+  색을 칠하지 않는다.</p>
+</section>
+
+<section>
+  <h2 id="demo">2. 데모 — fleet turns 실측 (2026-07-13)</h2>
+
+  <!-- ═══════ 스탯 타일 패턴 마크업:START — 이 블록을 복사해 내용을 교체한다 ═══════ -->
+  <div class="stats" role="group" aria-label="fleet turns 핵심 수치">
+    <div class="stat hi">
+      <div class="num">444</div>
+      <div class="label">물질화된 턴 (7d)</div>
+    </div>
+    <div class="stat">
+      <div class="num">$766</div>
+      <div class="label">gap-heavy 248턴 비용</div>
+      <div class="sub crit">최대 낭비 신호</div>
+    </div>
+    <div class="stat">
+      <div class="num">$435</div>
+      <div class="label">orphaned 107턴</div>
+      <div class="sub warn">회수 후보</div>
+    </div>
+    <div class="stat">
+      <div class="num">46</div>
+      <div class="label">mega-turn</div>
+      <div class="sub warn">상위 낭비 신호</div>
+    </div>
+    <div class="stat">
+      <div class="num">100%</div>
+      <div class="label">항등식 일치 (mat = derive)</div>
+      <div class="sub good">센트 단위 검증</div>
+    </div>
+  </div>
+  <!-- ═══════ 스탯 타일 패턴 마크업:END ═══════ -->
+</section>
+
+<section>
+  <h2 id="usage">3. 사용법 (모델용 절차)</h2>
+  <ol>
+    <li>CSS 블록을 문서 <code>&lt;style&gt;</code> 끝에, 마크업 블록을 본문에
+      복사해 교체. 타일은 4~6개 — 그 이상이면 표로.</li>
+    <li><code>hi</code>는 대표 지표 하나에만. <code>sub</code>는 판정이 있을
+      때만 붙이고 good/warn/crit 셋 중 하나 — 장식용 색 금지.</li>
+    <li>수치의 출처(측정 시점·기간)를 데모처럼 섹션 제목이나 캡션에 남긴다.</li>
+    <li>렌더 후 <code>check.mjs</code>는 평소대로.</li>
+  </ol>
+</section>
+</main>
+</div>
+<script>
+(function () {
+  "use strict";
+  var root = document.documentElement;
+  var KEY = "html-doc-theme";
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* file:// 제약 등 — 무시 */ }
+  if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  var btn = document.getElementById("theme-toggle");
+  function effective() {
+    return root.getAttribute("data-theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  }
+  function paint() { btn.textContent = effective() === "dark" ? "라이트 ☀" : "다크 ☾"; }
+  btn.addEventListener("click", function () {
+    var next = effective() === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(KEY, next); } catch (e) { /* 무시 */ }
+    paint();
+  });
+  paint();
+
+  var headings = Array.prototype.slice.call(
+    document.querySelectorAll("main h2[id], main h3[id]"));
+  var list = document.getElementById("toc-list");
+  var linkFor = {};
+  headings.forEach(function (h) {
+    var li = document.createElement("li");
+    li.className = "toc-" + h.tagName.toLowerCase();
+    var a = document.createElement("a");
+    a.href = "#" + h.id;
+    a.textContent = h.textContent;
+    li.appendChild(a);
+    list.appendChild(li);
+    linkFor[h.id] = a;
+  });
+
+  if ("IntersectionObserver" in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        Object.keys(linkFor).forEach(function (id) {
+          linkFor[id].classList.remove("active");
+        });
+        linkFor[e.target.id].classList.add("active");
+      });
+    }, { rootMargin: "0px 0px -70% 0px" });
+    headings.forEach(function (h) { obs.observe(h); });
+  }
+
+  headings.forEach(function (h) {
+    var a = document.createElement("a");
+    a.className = "hanchor";
+    a.href = "#" + h.id;
+    a.textContent = "§";
+    h.appendChild(a);
+  });
+})();
+</script>
+</body>
+</html>
