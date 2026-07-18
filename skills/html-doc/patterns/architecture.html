@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>아키텍처 패턴 — 견본과 사용법</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --border: #d1d9e0;
+  --accent: #0969da;
+  --surface: #f6f8fa;
+  --code-bg: #f0f2f5;
+  --mark-bg: #fff8c5;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, "D2Coding",
+    monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --border: #3d444d;
+    --accent: #4493f8;
+    --surface: #151b23;
+    --code-bg: #1c2128;
+    --mark-bg: #3a3000;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #9198a1;
+  --border: #3d444d;
+  --accent: #4493f8;
+  --surface: #151b23;
+  --code-bg: #1c2128;
+  --mark-bg: #3a3000;
+}
+:root[data-theme="light"] { color-scheme: light; }
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.7;
+  overflow-wrap: break-word;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.layout {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 1.5rem 4rem;
+  display: grid;
+  grid-template-columns: 240px minmax(0, 1fr);
+  gap: 2.5rem;
+}
+nav#toc {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  max-height: 100vh;
+  overflow-y: auto;
+  padding: 1.75rem 0;
+  font-size: 0.85rem;
+}
+nav#toc .toc-title {
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+nav#toc ol { list-style: none; margin: 0; padding: 0; }
+nav#toc li { margin: 0.15rem 0; }
+nav#toc li.toc-h3 { padding-left: 1rem; }
+nav#toc a { color: var(--muted); display: block; padding: 0.1rem 0.5rem; border-left: 2px solid transparent; }
+nav#toc a:hover { color: var(--fg); text-decoration: none; }
+nav#toc a.active { color: var(--accent); border-left-color: var(--accent); }
+main { min-width: 0; padding-top: 1.75rem; }
+@media (max-width: 960px) {
+  .layout { grid-template-columns: 1fr; gap: 0; }
+  nav#toc { position: static; max-height: none; border-bottom: 1px solid var(--border); }
+}
+h1 { font-size: 1.8rem; line-height: 1.3; margin: 0.5rem 0 0.25rem; }
+h2 { font-size: 1.35rem; margin: 2.5rem 0 0.75rem; padding-top: 0.75rem; border-top: 1px solid var(--border); }
+h3 { font-size: 1.1rem; margin: 1.75rem 0 0.5rem; }
+h2, h3 { scroll-margin-top: 1rem; }
+.hanchor { margin-left: 0.35rem; opacity: 0; font-size: 0.85em; }
+h2:hover .hanchor, h3:hover .hanchor { opacity: 0.7; }
+.badge {
+  display: inline-block;
+  vertical-align: middle;
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  color: var(--accent);
+}
+.doc-meta { color: var(--muted); font-size: 0.9rem; margin: 0 0 1rem; }
+code {
+  font-family: var(--font-mono);
+  font-size: 0.85em;
+  background: var(--code-bg);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+}
+pre {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+pre code { background: none; padding: 0; font-size: 0.85rem; }
+.table-wrap { overflow-x: auto; margin: 1rem 0; }
+table { border-collapse: collapse; font-size: 0.9rem; min-width: 100%; }
+th, td { border: 1px solid var(--border); padding: 0.4rem 0.75rem; text-align: left; vertical-align: top; }
+th { background: var(--surface); }
+blockquote {
+  margin: 1rem 0;
+  padding: 0.25rem 1rem;
+  border-left: 3px solid var(--border);
+  color: var(--muted);
+}
+mark { background: var(--mark-bg); color: inherit; }
+hr { border: none; border-top: 1px solid var(--border); margin: 2rem 0; }
+#theme-toggle {
+  position: fixed;
+  top: 0.75rem;
+  right: 0.75rem;
+  z-index: 10;
+  font: inherit;
+  font-size: 0.8rem;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 0.25rem 0.75rem;
+  cursor: pointer;
+}
+#theme-toggle:hover { color: var(--fg); }
+@media print {
+  #theme-toggle, nav#toc, .hanchor { display: none; }
+  .layout { display: block; max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  pre, .table-wrap { overflow-x: visible; }
+  a { color: inherit; }
+}
+
+/* ═══════ 아키텍처 패턴 CSS:START — 여기부터 END까지 문서 <style>에 통째로 복사 ═══════ */
+/* 존 의미색 — 경계(zone)의 소속을 색으로 표현. 라이트/다크 쌍 유지 필수 */
+:root {
+  --actor-a: #b3622f;
+  --actor-a-soft: #f6e8dd;
+  --actor-b: #6f56c5;
+  --actor-b-soft: #ece7f9;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --actor-a: #d98a50;
+    --actor-a-soft: #33261c;
+    --actor-b: #a08ae0;
+    --actor-b-soft: #272138;
+  }
+}
+:root[data-theme="dark"] {
+  --actor-a: #d98a50;
+  --actor-a-soft: #33261c;
+  --actor-b: #a08ae0;
+  --actor-b-soft: #272138;
+}
+
+.arch { margin: 1.25rem 0; }
+/* 경계 박스 — 네트워크·프로세스·소유권의 울타리. 중첩 가능 */
+.zone {
+  border: 1.5px dashed var(--border);
+  border-radius: 12px;
+  padding: 0.8rem 1rem 0.9rem;
+  margin: 0.6rem 0;
+}
+.zone .zone-label {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: var(--muted);
+  margin-bottom: 0.5rem;
+}
+.zone.tone-a { border-color: var(--actor-a); background: var(--actor-a-soft); }
+.zone.tone-a > .zone-label { color: var(--actor-a); }
+.zone.tone-b { border-color: var(--actor-b); background: var(--actor-b-soft); }
+.zone.tone-b > .zone-label { color: var(--actor-b); }
+/* 컴포넌트 — 이름 + 한 줄 설명. hi = 강조 */
+.node-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; }
+.node {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.5rem 0.75rem;
+}
+.node .name { font-weight: 600; font-size: 0.9rem; }
+.node .desc { font-size: 0.75rem; color: var(--muted); line-height: 1.45; }
+.node.hi { border-color: var(--accent); border-width: 1.5px; }
+/* 파이프라인 — 한 줄 안에서 단계가 왼→오른쪽으로 흐를 때 */
+.pipe { display: flex; align-items: stretch; gap: 0; }
+.pipe .node { flex: 1; }
+.pipe .step-arrow { display: flex; align-items: center; padding: 0 0.5rem; color: var(--muted); font-weight: 700; flex: none; }
+/* 층간 흐름 — 존과 존 사이 수직 화살표 + 라벨 */
+.flow { display: flex; align-items: center; justify-content: center; gap: 10px; margin: 0.15rem 0; }
+.flow .arr { color: var(--muted); font-size: 0.9rem; }
+.flow .flow-label {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 12px;
+}
+@media (max-width: 640px) {
+  .pipe { flex-direction: column; }
+  .pipe .step-arrow { justify-content: center; padding: 0.2rem 0; }
+}
+/* ═══════ 아키텍처 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+<button id="theme-toggle" type="button" aria-label="테마 전환"></button>
+<div class="layout">
+<nav id="toc" aria-label="목차">
+  <div class="toc-title">목차</div>
+  <ol id="toc-list"></ol>
+</nav>
+<main>
+<header>
+  <h1>아키텍처 패턴 <span class="badge">견본</span></h1>
+  <p class="doc-meta">html-doc 스킬 · patterns/architecture.html — 이 파일이
+    복사 원본이다 (<code>아키텍처 패턴 CSS:START…END</code> + 데모 마크업)</p>
+</header>
+
+<section>
+  <h2 id="when">1. 언제 쓰나</h2>
+  <p><b>계층·경계·파이프라인</b>으로 표현되는 시스템 구조 — 네트워크 경계
+  안의 컴포넌트, 층 사이의 데이터 흐름, 단계 처리 라인. 위→아래(존 사이)와
+  왼→오른쪽(파이프)만으로 그린다 — 좌표 계산이 없다.</p>
+  <p><b>안 되는 것</b>: 자유 배치 박스 사이를 대각선·우회 엣지가 잇는 임의
+  그래프. 그건 <code>pre.diagram</code>(ASCII)으로 후퇴하거나, 구조를
+  계층형으로 다시 정리한다 — 엣지가 얽히는 그림은 대개 설계가 덜 정리됐다는
+  신호다.</p>
+  <p>블록 4종: <code>zone</code>(경계, 중첩 가능, <code>tone-a/b</code> 소속색)
+  · <code>node</code>(컴포넌트, <code>hi</code> 강조) · <code>pipe</code>(존
+  안 가로 단계) · <code>flow</code>(존 사이 수직 화살표+라벨).</p>
+</section>
+
+<section>
+  <h2 id="demo">2. 데모 — 관측 수집 경로</h2>
+
+  <!-- ═══════ 아키텍처 패턴 마크업:START — 이 블록을 복사해 내용을 교체한다 ═══════ -->
+  <div class="arch" role="group" aria-label="관측 수집 경로 아키텍처">
+    <div class="zone tone-a">
+      <div class="zone-label">각 레포 — CC 세션 (여러 개)</div>
+      <div class="node-row">
+        <div class="node"><div class="name">claude-hooks 훅들</div>
+          <div class="desc">PostToolUse·Stop 등 이벤트 발생</div></div>
+        <div class="node"><div class="name">obs-client.mjs</div>
+          <div class="desc">공유 발신 라이브러리 · fail-open</div></div>
+        <div class="node"><div class="name">acp 넛지</div>
+          <div class="desc">NudgeFired/Outcome 발신</div></div>
+      </div>
+    </div>
+    <div class="flow"><span class="arr">▼</span>
+      <span class="flow-label">POST /events · localhost만</span></div>
+    <div class="zone tone-b">
+      <div class="zone-label">4090 서버</div>
+      <div class="pipe">
+        <div class="node"><div class="name">collector</div>
+          <div class="desc">server.mjs · 수집 API</div></div>
+        <span class="step-arrow">→</span>
+        <div class="node hi"><div class="name">events.db</div>
+          <div class="desc">SQLite v7 · turns 물질화</div></div>
+        <span class="step-arrow">→</span>
+        <div class="node"><div class="name">dashboard</div>
+          <div class="desc">:4090 · Tokens/Guards/Fleet 탭</div></div>
+      </div>
+    </div>
+    <div class="flow"><span class="arr">▼</span>
+      <span class="flow-label">브라우저 — 사람이 본다</span></div>
+  </div>
+  <!-- ═══════ 아키텍처 패턴 마크업:END ═══════ -->
+</section>
+
+<section>
+  <h2 id="usage">3. 사용법 (모델용 절차)</h2>
+  <ol>
+    <li>CSS 블록을 문서 <code>&lt;style&gt;</code> 끝에 복사. 존 색은 주제에
+      맞게 바꿔도 되나 <b>라이트/다크 쌍</b> 유지.</li>
+    <li>마크업 블록을 복사해 교체. 존 = 경계 하나, 그 안에
+      <code>node-row</code>(나열) 또는 <code>pipe</code>(순서 있는 단계).
+      존 사이 데이터 이동은 <code>flow</code>로.</li>
+    <li>다이어그램 내부에 h2/h3 금지(<code>.name</code>·<code>.zone-label</code>
+      사용). 색이 소속을 뜻하면 본문에 한 줄 범례를 쓴다.</li>
+    <li>렌더 후 <code>check.mjs</code>는 평소대로.</li>
+  </ol>
+</section>
+</main>
+</div>
+<script>
+(function () {
+  "use strict";
+  var root = document.documentElement;
+  var KEY = "html-doc-theme";
+  var saved = null;
+  try { saved = localStorage.getItem(KEY); } catch (e) { /* file:// 제약 등 — 무시 */ }
+  if (saved === "light" || saved === "dark") root.setAttribute("data-theme", saved);
+  var btn = document.getElementById("theme-toggle");
+  function effective() {
+    return root.getAttribute("data-theme") ||
+      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  }
+  function paint() { btn.textContent = effective() === "dark" ? "라이트 ☀" : "다크 ☾"; }
+  btn.addEventListener("click", function () {
+    var next = effective() === "dark" ? "light" : "dark";
+    root.setAttribute("data-theme", next);
+    try { localStorage.setItem(KEY, next); } catch (e) { /* 무시 */ }
+    paint();
+  });
+  paint();
+
+  var headings = Array.prototype.slice.call(
+    document.querySelectorAll("main h2[id], main h3[id]"));
+  var list = document.getElementById("toc-list");
+  var linkFor = {};
+  headings.forEach(function (h) {
+    var li = document.createElement("li");
+    li.className = "toc-" + h.tagName.toLowerCase();
+    var a = document.createElement("a");
+    a.href = "#" + h.id;
+    a.textContent = h.textContent;
+    li.appendChild(a);
+    list.appendChild(li);
+    linkFor[h.id] = a;
+  });
+
+  if ("IntersectionObserver" in window) {
+    var obs = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting) return;
+        Object.keys(linkFor).forEach(function (id) {
+          linkFor[id].classList.remove("active");
+        });
+        linkFor[e.target.id].classList.add("active");
+      });
+    }, { rootMargin: "0px 0px -70% 0px" });
+    headings.forEach(function (h) { obs.observe(h); });
+  }
+
+  headings.forEach(function (h) {
+    var a = document.createElement("a");
+    a.className = "hanchor";
+    a.href = "#" + h.id;
+    a.textContent = "§";
+    h.appendChild(a);
+  });
+})();
+</script>
+</body>
+</html>

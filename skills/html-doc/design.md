@@ -26,6 +26,20 @@
 폰트도 토큰이다: 산문 `var(--font-sans)`, 코드·다이어그램 `var(--font-mono)`
 (둘 다 시스템 스택 + 한글 폴백 — 웹폰트 금지 철칙과 한 몸).
 
+### 의미 토큰 — 패턴 CSS 블록과 함께 들어온다
+
+template.html 기본엔 없고, 해당 패턴을 복사하면 CSS 블록에 포함돼 들어온다.
+여러 패턴이 한 문서에 공존하면 정의가 중복되지만 **값이 같아 무해**하다.
+
+| 토큰 | 의미 | 쓰는 패턴 |
+| --- | --- | --- |
+| `--actor-a/-b` (+`-soft`) | 두 주체/소속의 의미색 | sequence, architecture |
+| `--ok` (+`-soft`) | 채택·안정·검증됨 | compare, states, stats |
+| `--bad` (+`-soft`) | 기각·이탈·경고(심각) | compare, states, stats |
+| `--hold` (+`-soft`) | 보류·과도기·주의 | compare, states, stats |
+
+전부 라이트/다크 쌍으로 정의돼 있다 — 주제에 맞게 바꿔도 쌍은 유지한다.
+
 ## 규율
 
 - **색·배경·테두리는 토큰만.** `var(--...)` 외의 색 지정 금지. 강조가
@@ -144,6 +158,42 @@
   **라이트/다크 쌍은 유지**. 다이어그램 내부에 h2/h3 금지(`.card-title`
   사용 — heading id·TOC 규율과 충돌). 색이 의미를 가지면 본문에 범례를 먼저
   선언. 원문 데이터는 요지로 재작성하되 `rawbox`에 보존.
+
+### 아키텍처 — 경계·컴포넌트·흐름 ([patterns/architecture.html](patterns/architecture.html))
+
+- **언제**: 계층·경계·파이프라인 구조 — 네트워크 경계 안 컴포넌트, 층간
+  데이터 흐름, 단계 처리 라인. **임의 그래프(얽힌 대각 엣지)는 불가** —
+  그건 `pre.diagram`으로 후퇴.
+- **블록**: `zone`(경계, 중첩·`tone-a/b` 소속색) · `node`(컴포넌트,
+  `hi` 강조) · `pipe`(존 안 가로 단계) · `flow`(존 사이 수직 화살표+라벨).
+
+### 비교/결정 — 대안 카드 + 판정 + 결정 기록 ([patterns/compare.html](patterns/compare.html))
+
+- **언제**: 설계 문서의 대안 검토 — 옵션 2~4개 + 채택/기각/보류 + 날짜 박힌
+  결정 기록. 기준이 여러 축이면 기준 표 병기.
+- **블록**: `compare`(카드 그리드) · `verdict`(`v-ok/v-bad/v-hold`) ·
+  `pl`(+/− 목록) · `decision`(콜아웃 — **날짜·근거 필수**).
+
+### 상태 전이 — 상태 필 + 전이 표 ([patterns/states.html](patterns/states.html))
+
+- **언제**: 상태 몇 개와 전이 규칙으로 정의되는 대상(신뢰 티어·라이프사이클).
+  **스트립 = 주 경로 요약, 전이 표 = 진실원** — 분기·역행은 표에만. 얽힌
+  상태기계는 패턴 밖.
+- **블록**: `states`(필 스트립, `initial` 점선·성격색 `s-ok/s-hold/s-bad`) ·
+  `tr`(전이 라벨) + 전이 표(from/to/트리거/가드).
+
+### 타임라인 — 시간축 이벤트 ([patterns/timeline.html](patterns/timeline.html))
+
+- **언제**: 프로젝트 경과·인시던트 재구성 등 서사적 이벤트 나열. 수십 개면
+  표가 낫다.
+- **블록**: `timeline`(세로선) · `tl-item`(`when/what/detail`, `major` 강조 —
+  전환점에만).
+
+### 스탯 타일 — 핵심 수치 요약 ([patterns/stats.html](patterns/stats.html))
+
+- **언제**: 리포트(모드 C) 머리에 대표 수치 4~6개. 그 이상이면 표로.
+- **블록**: `stats`(그리드) · `stat`(`num/label/sub`, `hi` 하나만). `sub` 색은
+  데이터 계열이 아니라 **판정**(good/warn/crit) — 수치엔 색을 칠하지 않는다.
 
 ## 확장 규칙
 

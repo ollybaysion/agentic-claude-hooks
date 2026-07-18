@@ -7,7 +7,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { checkHtml } from "./check.mjs";
@@ -164,11 +164,13 @@ test("HTML 주석은 검사 전에 제거된다 — 양방향", () => {
   assert.ok(rules(fake, { derived: true }).includes("derived-footer"));
 });
 
-test("patterns/sequence.html: 시퀀스 패턴 견본이 철칙을 통과한다 (골든)", () => {
-  const raw = readFileSync(join(HERE, "patterns", "sequence.html"), "utf8");
-  const { ok, errors } = checkHtml(raw);
-  assert.deepEqual(errors, [], "시퀀스 패턴 견본이 철칙을 어긴다");
-  assert.ok(ok);
+test("patterns/*.html: 모든 패턴 견본이 철칙을 통과한다 (골든)", () => {
+  const files = readdirSync(join(HERE, "patterns")).filter((f) => f.endsWith(".html"));
+  assert.ok(files.length >= 6, "패턴 견본이 사라졌다");
+  for (const f of files) {
+    const { errors } = checkHtml(readFileSync(join(HERE, "patterns", f), "utf8"));
+    assert.deepEqual(errors, [], `${f}가 철칙을 어긴다`);
+  }
 });
 
 test("template.html: 플레이스홀더만 채우면 철칙을 통과한다", () => {

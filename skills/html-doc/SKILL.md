@@ -41,13 +41,22 @@ TOC, 인쇄, 문서 관례 — 을 이 폴더의 `template.html`이 스켈레톤
    `pre`가 스스로 스크롤한다. `body`가 가로로 흐르면 안 된다.
 5. **h2/h3엔 저작 시점에 `id`를 부여한다.** TOC와 앵커가 이 `id`를 쓰므로
    재생성해도 앵커가 안정적이다. JS로 자동 생성하지 않는다.
-6. **다이어그램은 텍스트, 패턴, 또는 인라인 SVG.** 구조·관계는
-   `pre.diagram`(ASCII/box-drawing)으로. **두 주체가 시간순으로 주고받는
-   흐름(API 왕복·이벤트·프로토콜)은 시퀀스 패턴**
-   ([design.md §패턴](design.md), 견본 [patterns/sequence.html](patterns/sequence.html))으로
-   그린다 — 좌표 계산 없는 순수 마크업이다. mermaid 라이브러리 임베드는
-   금지(수 MB) — Artifact **전용** 산출물에서만 뷰어 네이티브 mermaid를 써도
-   된다.
+6. **시각 블록은 패턴 결정표로 고른다.** 전부 좌표 계산 없는 순수 마크업 —
+   견본은 `patterns/`에 있고 상세는 [design.md §패턴](design.md).
+
+   | 표현할 것 | 패턴 |
+   | --- | --- |
+   | 두 주체의 시간순 왕복 (API·이벤트·프로토콜) | [sequence](patterns/sequence.html) |
+   | 계층·경계·파이프라인 구조 | [architecture](patterns/architecture.html) |
+   | 대안 비교 + 채택/기각 결정 | [compare](patterns/compare.html) |
+   | 상태와 전이 규칙 | [states](patterns/states.html) |
+   | 시간축 이벤트 서사 | [timeline](patterns/timeline.html) |
+   | 리포트 머리 핵심 수치 4~6개 | [stats](patterns/stats.html) |
+   | 그 외 구조·관계 (얽힌 그래프 포함) | `pre.diagram` (ASCII) |
+   | 확신 없음 / 데이터가 본체 | 표 (`.table-wrap`) |
+
+   mermaid 라이브러리 임베드는 금지(수 MB) — Artifact **전용** 산출물에서만
+   뷰어 네이티브 mermaid를 써도 된다.
 7. **인라인 JS는 허용하되 네트워크 호출 금지.** `fetch`/`XHR`/`WebSocket`을
    쓰지 않는다. `check.mjs`는 정적 검사라 이건 못 잡는다 — 스스로 지킨다.
 8. **디자인은 [design.md](design.md)의 토큰·컴포넌트 인벤토리를 따른다.**
