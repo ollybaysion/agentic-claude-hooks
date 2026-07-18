@@ -72,7 +72,9 @@ TOC, 인쇄, 문서 관례 — 을 이 폴더의 `template.html`이 스켈레톤
 - 매핑: heading(§ 번호 그대로, `id` 부여) / 코드펜스 → `pre><code` / 언어 없는
   펜스에 box-drawing 문자(┌─│▶ 등)가 있으면 → `pre.diagram` / 표 →
   `.table-wrap>table` / 인용 블록 → `blockquote`. md 개정 로그 인용문은
-  `details.revlog`로 접는다.
+  `details.revlog`로 접는다. md의 `---`(hr)가 바로 다음 h2와 붙으면 괘선이
+  이중으로 보인다 — 템플릿 CSS가 `hr + section > h2:first-child`로 잡아주지만,
+  h2 직전의 hr은 애초에 생략해도 된다(h2가 자체 상단 괘선을 그린다).
 - **출력 경로 = 소스 옆 same-basename**: `docs/foo-design.md` →
   `docs/foo-design.html`.
 - **파생물 표기 (check가 `--derived`로 강제):** 문서 말미에
