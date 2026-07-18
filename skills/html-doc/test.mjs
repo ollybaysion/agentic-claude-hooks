@@ -137,6 +137,22 @@ test("규칙 '언급'은 무해하다 — 산문·코드 예시의 @import/url()
   assert.ok(rules(attr).includes("css-url"));
 });
 
+test("inline-color: 인라인 style의 색 리터럴은 거부, 토큰·구조 값은 허용", () => {
+  const hex = validDoc().replace(
+    "</main>", '<p style="color:#333">강조</p></main>');
+  assert.ok(rules(hex).includes("inline-color"));
+  const rgb = validDoc().replace(
+    "</main>", '<td style="background: rgb(255, 0, 0)">셀</td></main>');
+  assert.ok(rules(rgb).includes("inline-color"));
+  // 토큰 참조·구조 값(폭 등)은 일관성을 깨지 않는다
+  const ok = validDoc().replace(
+    "</main>",
+    '<p style="background: var(--surface)">면</p><div style="width:40%"></div></main>');
+  assert.deepEqual(rules(ok), []);
+  // <style> 블록의 hex는 토큰 정의처 — 검사 대상 아님 (validDoc 자체가 증명)
+  assert.deepEqual(rules(validDoc()), []);
+});
+
 test("HTML 주석은 검사 전에 제거된다 — 양방향", () => {
   // 주석 안의 위반은 무시된다
   const bad = validDoc().replace(

@@ -4,7 +4,8 @@
 //
 // 검사 항목: self-contained(리소스 로드 0), 문서 골격(DOCTYPE/lang/title),
 // 테마(prefers-color-scheme + data-theme 양방향 오버라이드), 인쇄 CSS,
-// h2/h3 id, {{...}} 플레이스홀더 잔재, (--derived) 파생물 표기.
+// h2/h3 id, {{...}} 플레이스홀더 잔재, 인라인 style 색 리터럴(디자인 토큰
+// 강제 — design.md), (--derived) 파생물 표기.
 // 정적 검사의 한계: 인라인 JS의 런타임 네트워크 호출(fetch/XHR)은 못 잡는다.
 //
 // <a href="https://...">는 허용한다 — 내비게이션 링크는 리소스 로드가 아니다.
@@ -89,6 +90,20 @@ export function checkHtml(html, { derived = false } = {}) {
     const value = (u[2] ?? u[3] ?? u[4] ?? "").trim();
     if (!attrValueOk(value)) {
       errors.push({ rule: "css-url", msg: `CSS url() 외부/로컬 참조: url(${value})` });
+    }
+  }
+
+  // 디자인 토큰: 인라인 style의 색 리터럴은 다크 테마를 조용히 깬다 —
+  // var(--...) 토큰만 허용 (design.md). <style> 블록은 토큰 정의처라 제외.
+  const STYLE_ATTR_RE = /\bstyle\s*=\s*("([^"]*)"|'([^']*)')/gi;
+  let sa;
+  while ((sa = STYLE_ATTR_RE.exec(doc)) !== null) {
+    const value = sa[2] ?? sa[3] ?? "";
+    if (/#[0-9a-f]{3,8}\b|\b(?:rgba?|hsla?)\(/i.test(value)) {
+      errors.push({
+        rule: "inline-color",
+        msg: `인라인 style의 색 리터럴(다크 테마 깨짐) — var(--...) 토큰을 쓴다: style="${value.slice(0, 60)}"`,
+      });
     }
   }
 
