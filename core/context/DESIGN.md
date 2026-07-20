@@ -214,6 +214,7 @@ core/context/
 │   ├── budget.mjs           # 순수 함수: 우선순위·예산 반영해 자르기
 │   ├── ledger.mjs           # os.tmpdir() 상태(keyword-docs dedup 등). §10
 │   ├── stats.mjs            # 주입 기록(오탐 프루닝 layer 1) — ~/.claude/context-stats/
+│   ├── hub-cache.mjs        # keyword-docs B모드: TTL 인덱스 갱신 + ETag 문서 fetch, fail-open
 │   └── providers/
 │       ├── git.mjs          # SessionStart: 브랜치·SHA·dirty·최근 커밋
 │       ├── time.mjs         # UserPromptSubmit: 현재 시각
@@ -449,6 +450,19 @@ export default {
   헤더로 주입되고, 엔진 기능(매칭·dedup·precision·stats) 전부 동일 적용.
   **인덱스는 매 턴 다시 읽으므로 문서 추가 = 인덱스 한 줄 append, 즉시 적용.**
   새 카테고리 추가 = 팩토리 호출 파일 하나 + registry 한 줄.
+- **Hub / B모드** (`params.hub`, 옵트인 — agent-knowledge-governance 설계 §8.3):
+  `{ url, type, timeoutMs?, indexTtlMs? }`가 유저 레이어(직접 호출은
+  `sources[0]`)를 원격 akg 서버로 백업한다. 인덱스 갱신은 TTL(기본 5분)
+  게이팅 + `timeoutMs`(기본 400ms) 상한 — 느리거나 죽은 서버는 이번 턴이 디스크에
+  있던 인덱스로 매칭하고 끝, 절대 지연시키지 않는다. 매치된 문서만 그때 신선본을
+  fetch(같은 타임아웃, ETag로 304 재사용, 실패 시 기존 캐시 폴백, 캐시도 없으면
+  그 문서만 조용히 스킵 — 포인터 정밀도 매치도 fetch는 한다, 후속 Read가 항상
+  성공하도록). 인증 토큰은 `hub.token` → `AKG_TOKEN` → `~/.claude/akg/token`
+  (akg CLI `akg sync`와 동일 파일 — A/B모드가 같은 서버·같은 토큰). 미러 디렉토리도
+  A모드 `akg sync`와 공유(같은 `index.json`/`docs/*.md` 레이아웃); hub 부기(ETag·
+  최근 fetch 시각)는 인덱스 옆 `.hub-cache.json`에 따로 둬 A모드의 `meta.json`과
+  섞이지 않는다. 매칭·dedup·precision·stats는 전부 그대로 — hub는 매치된 문서의
+  본문 출처만 바꾼다. 구현: `core/context/lib/hub-cache.mjs`.
 - **주입 stats — 오탐 프루닝 layer 1** (이슈 #32): 실제 주입마다
   `{ts, session, 발화 키워드, path, mode: full|link, index(해석된 절대 경로), layer(project|user|bundle)}` 한 줄을 `~/.claude/context-stats/<hash(cwd)>.jsonl`에
   append(`lib/stats.mjs`). 오탐 1회 = ~500토큰인데 주입이 조용해서 유저가 못 보므로,

@@ -148,6 +148,45 @@ point of shipping docs with the plugin); opt out per id with
 `{ "enabled": false }`, or entirely with the project kill switch. Without
 `CLAUDE_PLUGIN_ROOT` (non-plugin execution) the bundle layer is skipped.
 
+#### Hub (B모드, opt-in) — freshness from a remote akg server
+
+`params.hub` backs the **user layer's** index (or `sources[0]` on a direct call
+with no `layers`) with a remote [akg](https://github.com/ollybaysion/agent-knowledge-governance)
+server, so injection can reflect the server's latest doc instead of the last
+`akg sync`:
+
+```json
+{
+  "id": "db-schema",
+  "params": {
+    "index": "~/.claude/akg/db-schema/index.json",
+    "hub": { "url": "https://akg.internal", "type": "db-schema", "timeoutMs": 400, "indexTtlMs": 300000 }
+  }
+}
+```
+
+- **Index refresh** is TTL-gated (`indexTtlMs`, default 5m) and bounded by
+  `timeoutMs` (default 400ms) — a slow/down server just means this turn
+  matches against whatever `index.json` was already on disk; it never stalls
+  the turn past the cap.
+- **Once a doc matches** (full or pointer `precision` — a pointer match fetches
+  too, so a later model-initiated `Read` finds the file even on a first-ever,
+  empty mirror), that one doc is fetched fresh: same `timeoutMs` cap,
+  ETag-aware (an unchanged doc costs a 304, ~0 bytes), fail-open to whatever
+  copy is already cached. A doc with neither a fresh fetch nor a local copy is
+  skipped silently — same as a missing file today.
+- **Auth**: `hub.token`, else `AKG_TOKEN`, else `~/.claude/akg/token` — the
+  same token file the akg CLI's `akg sync` (A모드) uses, since both talk to
+  the same server.
+- A hub-backed instance shares its mirror directory with `akg sync` (same
+  `index.json` / `docs/*.md` layout) and can be pointed at the exact same path
+  A모드 already syncs into — the two modes are interchangeable by config alone.
+  Hub bookkeeping (ETags, last-fetch times) lives in a sidecar
+  `.hub-cache.json` next to the index and never touches A모드's own
+  `meta.json`.
+- Everything else (matching, dedup, `maxDocs`/`maxCharsEach`, stats) is
+  unchanged — `hub` only decides where a matched doc's BODY comes from.
+
 ### Injection stats (false-positive pruning, layer 1)
 
 Every actual injection appends one JSON line to

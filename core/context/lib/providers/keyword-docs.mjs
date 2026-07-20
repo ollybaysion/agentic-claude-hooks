@@ -50,6 +50,25 @@
 // to ~/.claude/context-stats/ (see lib/stats.mjs). `index` is the resolved
 // absolute index path and `layer` its source, so per-instance AND per-layer
 // analysis stays possible. Recording only, best-effort.
+//
+// Hub / B모드 (params.hub, opt-in — agent-knowledge-governance design §8.3):
+// { url, type, timeoutMs?, indexTtlMs? } backs exactly ONE index source — the
+// user layer (or sources[0] for direct/test calls where `layers` is absent,
+// same convention as the rest of this file) — with a remote akg server, so
+// injection reflects the server's latest doc instead of the last `akg sync`:
+//   1. Index refresh is TTL-gated (default 5m) and bounded by `timeoutMs`
+//      (default 400ms) — a slow/down server just means this turn matches
+//      against whatever index.json was already on disk, never a stall.
+//   2. Once a doc MATCHES (full or pointer precision — a pointer still fetches,
+//      so the pointed-at file exists for the model's own follow-up Read), that
+//      one doc is fetched fresh: same timeoutMs cap, ETag-aware (a 304 costs
+//      ~0 bytes), fail-open to whatever copy is already cached. A doc with
+//      neither a fresh fetch nor a local copy is skipped silently.
+// A hub-backed source shares its mirror directory with A모드's `akg sync`
+// (same index.json / docs/*.md layout) and its auth token file
+// (~/.claude/akg/token or AKG_TOKEN — see lib/hub-cache.mjs). All hub state
+// lives in a sidecar `.hub-cache.json` next to the index, never touching
+// A모드's own meta.json.
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -57,6 +76,7 @@ import { basename, isAbsolute, join, relative } from "node:path";
 import { loadLedger, saveLedger } from "../ledger.mjs";
 import { recordInjection } from "../stats.mjs";
 import { docBaseFor, expandTilde, readIndex } from "../../../../lib/doc-index.mjs";
+import { fetchDocFresh, loadCacheState, refreshIndexIfStale, saveCacheState } from "../hub-cache.mjs";
 
 const TOKEN = /[a-z0-9_]+/g;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -118,6 +138,33 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
         });
       }
 
+      // Hub (B모드): attach the remote config to exactly one source (see header
+      // comment), then give it a bounded, best-effort chance to refresh its
+      // index.json before this turn reads it. Never throws — a hub-cache bug
+      // must fall through to the plain local read, same as a down server does.
+      const hub = p.hub && typeof p.hub === "object" && typeof p.hub.url === "string" && typeof p.hub.type === "string" ? p.hub : null;
+      let hubSource = null;
+      let hubState = null;
+      if (hub) {
+        hubSource = layers !== undefined ? sources.find((s) => s.layer === "user") : sources[0];
+        if (hubSource) {
+          hubSource.hub = hub;
+          try {
+            hubState = loadCacheState(hubSource.path);
+            await refreshIndexIfStale({
+              indexPath: hubSource.path,
+              hub,
+              cacheState: hubState,
+              now: Date.now(),
+              fetchImpl: hub.fetchImpl,
+            });
+            saveCacheState(hubSource.path, hubState);
+          } catch {
+            hubState = hubState ?? { index: null, docs: {} };
+          }
+        }
+      }
+
       // Flatten all layers' entries in precedence order, resolving each doc
       // path against its own index's folder.
       const entries = [];
@@ -132,6 +179,7 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
             abs: isAbsolute(entry.path) ? entry.path : join(base, entry.path),
             layer: src.layer,
             index: src.path,
+            hub: src.hub ?? null,
           });
         }
       }
@@ -147,7 +195,7 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
       const candidates = [];
       const seenPath = new Set();
       const seenKw = new Set();
-      for (const { entry, abs, layer, index } of entries) {
+      for (const { entry, abs, layer, index, hub: srcHub } of entries) {
         if (seenPath.has(abs)) continue;
         const keywords = Array.isArray(entry.keywords) ? entry.keywords : [];
         const matched = keywords
@@ -159,7 +207,7 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
         const precision = Number.isFinite(Number(entry.precision)) ? Number(entry.precision) : 1;
         const rel = relative(cwd, abs);
         const display = rel.startsWith("..") || isAbsolute(rel) ? abs : rel;
-        candidates.push({ abs, display, matched, precision, layer, index });
+        candidates.push({ abs, display, matched, precision, layer, index, hub: srcHub, relPath: entry.path });
       }
       if (candidates.length === 0) return null; // common case: no ledger I/O at all
 
@@ -178,9 +226,22 @@ export function makeKeywordDocsProvider({ id, defaultPriority = 50, defaults = {
       const maxDocs = p.maxDocs ?? 2;
       const maxCharsEach = p.maxCharsEach ?? 1200;
       const blocks = [];
-      for (const { abs, display, matched, precision, layer, index } of candidates) {
+      for (const { abs, display, matched, precision, layer, index, hub: docHub, relPath } of candidates) {
         if (blocks.length >= maxDocs) break;
         if (dedup && sess.paths[abs] && now - sess.paths[abs] < ttlMs) continue; // still fresh in context
+
+        // Hub-backed candidate: try to freshen `abs` from the server before
+        // reading it below (bounded, ETag-aware, fail-open — see hub-cache.mjs).
+        // A pointer-precision match fetches too, so the model's own follow-up
+        // Read finds the file even on a first-ever, previously-empty mirror.
+        if (docHub) {
+          try {
+            await fetchDocFresh({ abs, relPath, hub: docHub, cacheState: hubState, fetchImpl: docHub.fetchImpl });
+            saveCacheState(hubSource.path, hubState);
+          } catch {
+            /* a fetch bug must never block this candidate — fall through to whatever is on disk */
+          }
+        }
 
         // Low precision -> pointer only, the model Reads the doc if it matters.
         if (precision < 1) {
