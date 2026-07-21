@@ -9,6 +9,9 @@
 //   lintProposal(doc, p)    — check a finished proposal.json against the
 //                             contract shape AND the target doc BEFORE it is
 //                             handed to db-schema-apply (the write gateway)
+//   toAkgSlots(proposal)    — translate the same proposal into akg's slot
+//                             address form, for the other exit: `akg propose`
+//                             instead of a local file (issue #125)
 //
 // Lint philosophy mirrors forge's spec validation: unknown keys are rejected,
 // not ignored. apply-side merging skips what it doesn't recognize, so a typo
@@ -120,4 +123,84 @@ export function lintProposal(content, proposal) {
   }
 
   return { ok: errors.length === 0, errors, warnings };
+}
+
+// ---------------------------------------------------------------------------
+// akg exit (issue #125)
+//
+// The same proposal can leave through two doors. db-schema-apply writes it into
+// a local md file; `akg propose` submits it to the hub's review queue. Only the
+// address form differs — both sides carry the same tiers (scaffold/inferred/
+// confirmed) and both refuse a filled slot without evidence, so this is a
+// rename, not a reinterpretation.
+//
+//   purpose          -> "purpose"
+//   columns.STATUS   -> "columnDescs.STATUS"
+//   queries          -> UNMAPPABLE, see below
+//
+// `queries` has no address. Here it is one prose region; in akg it is
+// `{sql, note}[]`, addressed `queries[0].note`, and the note hangs off a
+// specific sql this proposal does not carry. Rather than invent an sql to
+// anchor to, it is reported as unmapped — the same "no silent evaporation"
+// rule that makes lint reject unknown keys.
+
+const AKG_UNMAPPABLE = {
+  queries:
+    "akg 는 queries 를 {sql, note}[] 로 모델링합니다 — note 를 매달 sql 이 제안에 없어 주소를 만들 수 없습니다. 대표 쿼리는 대시보드에서 직접 넣으세요",
+};
+
+// Why evidence is checked HERE and not left to the server: POST /api/proposals
+// stores the proposal without inspecting slot values (submit-time validation is
+// a known gap — scenarios R5). The rejection lands at ADOPT instead, where
+// routes/proposals.mjs returns 400 invalid_slot_value on the FIRST text-less or
+// evidence-less slot and abandons the whole adopt. So one sloppy entry does not
+// degrade gracefully — it strands the entire proposal in the queue, discovered
+// by a reviewer who cannot fix it. Withhold it at the producer instead.
+const NO_EVIDENCE =
+  "근거가 없습니다 — akg 는 채택(adopt) 시 이런 슬롯을 invalid_slot_value(400)로 거부하고, 그 제안 전체가 거기서 멈춥니다";
+
+/**
+ * Translate a proposal into akg `POST /api/proposals` slots.
+ *
+ * Lint this proposal FIRST — this function assumes the contract shape and only
+ * guards what akg's schema would reject at the wire (an entry with no
+ * evidence: tiered-value requires evidence minItems 1 unless tier is scaffold).
+ *
+ * @param {object} proposal
+ * @param {{tier?: string}} [opts] tier recorded on every translated slot.
+ *   Default "inferred", and a producer may never pass "confirmed" — promotion
+ *   is human-only, the same rule db-schema-apply enforces locally. Note the
+ *   server does not take this on trust: adopt pins tier to "inferred" itself
+ *   regardless of what the proposal says. The field records producer intent
+ *   and agrees with what the server will write; it does not decide it.
+ * @returns {{slots: Record<string, {text: string, tier: string, evidence: string[]}>,
+ *            unmapped: Array<{key: string, reason: string}>}}
+ */
+export function toAkgSlots(proposal, { tier = "inferred" } = {}) {
+  if (tier === "confirmed")
+    throw new Error("toAkgSlots: confirmed 는 생산자가 부여할 수 없습니다 — 승격은 사람 전용입니다");
+  if (!proposal || typeof proposal !== "object" || Array.isArray(proposal))
+    throw new Error("toAkgSlots: proposal 이 객체가 아닙니다");
+
+  const slots = {};
+  const unmapped = [];
+
+  const put = (address, key, entry) => {
+    const evidence = Array.isArray(entry?.evidence) ? entry.evidence.filter((e) => typeof e === "string" && e.trim()) : [];
+    if (!entry?.text || !String(entry.text).trim() || !evidence.length) {
+      unmapped.push({ key, reason: NO_EVIDENCE });
+      return;
+    }
+    slots[address] = { text: entry.text, tier, evidence };
+  };
+
+  for (const [key, reason] of Object.entries(AKG_UNMAPPABLE)) {
+    if (key in proposal) unmapped.push({ key, reason });
+  }
+  if ("purpose" in proposal) put("purpose", "purpose", proposal.purpose);
+  for (const [name, entry] of Object.entries(proposal.columns ?? {})) {
+    put(`columnDescs.${name.toUpperCase()}`, `columns.${name}`, entry);
+  }
+
+  return { slots, unmapped };
 }

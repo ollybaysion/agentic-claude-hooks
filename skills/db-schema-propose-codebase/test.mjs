@@ -12,7 +12,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { renderDoc } from "../db-schema-docs/render.mjs";
 import { applyProposal, promote } from "../db-schema-apply/apply.mjs";
-import { listSlots, lintProposal } from "./propose.mjs";
+import { listSlots, lintProposal, toAkgSlots } from "./propose.mjs";
 
 function freshDoc() {
   return renderDoc({
@@ -97,6 +97,65 @@ test("lint: type violations and missing evidence are caught", () => {
   assert.match(res.errors.join("\n"), /purpose\.text 는 비어 있지 않은 문자열/);
   assert.match(res.errors.join("\n"), /columns\.GUBUN\.evidence 는 배열/);
   assert.match(res.warnings.join("\n"), /purpose: evidence 없음/);
+});
+
+// --- akg exit (issue #125) -------------------------------------------------
+// The hazard here is the mirror of lint's: anything that cannot cross into
+// akg's address space must be REPORTED, not dropped. akg would reject a
+// filled slot carrying no evidence at the wire (400), so that check has to
+// happen here where it can be shown, not there where it is an opaque failure.
+
+test("toAkgSlots: addresses are renamed, tier is stamped inferred", () => {
+  const { slots, unmapped } = toAkgSlots(goodProposal);
+  assert.deepEqual(unmapped, []);
+  assert.deepEqual(Object.keys(slots).sort(), ["columnDescs.STATUS", "purpose"]);
+  assert.deepEqual(slots["columnDescs.STATUS"], {
+    text: "주문 상태('N'=신규)",
+    tier: "inferred",
+    evidence: ["OrderStatus.java:12"],
+  });
+  assert.equal(slots.purpose.tier, "inferred");
+});
+
+test("toAkgSlots: column names are upper-cased into the address", () => {
+  const { slots } = toAkgSlots({
+    columns: { status: { text: "주문 상태", evidence: ["a.java:1"] } },
+  });
+  assert.deepEqual(Object.keys(slots), ["columnDescs.STATUS"]);
+});
+
+test("toAkgSlots: queries has no akg address and is reported, not dropped", () => {
+  const { slots, unmapped } = toAkgSlots({
+    queries: { text: "SELECT ...", evidence: ["a.java:1"] },
+    purpose: { text: "주문 헤더", evidence: ["b.java:2"] },
+  });
+  assert.deepEqual(Object.keys(slots), ["purpose"]);
+  assert.equal(unmapped.length, 1);
+  assert.equal(unmapped[0].key, "queries");
+  assert.match(unmapped[0].reason, /sql/);
+});
+
+test("toAkgSlots: an entry adopt would 400 on is withheld and reported", () => {
+  const { slots, unmapped } = toAkgSlots({
+    purpose: { text: "근거 없음" },
+    columns: {
+      GUBUN: { text: "빈 근거", evidence: [] },
+      STATUS: { text: "  ", evidence: ["a.java:1"] },
+    },
+  });
+  assert.deepEqual(slots, {});
+  assert.deepEqual(unmapped.map((u) => u.key).sort(), [
+    "columns.GUBUN",
+    "columns.STATUS",
+    "purpose",
+  ]);
+  // The whole point: adopt aborts the entire proposal on the first such slot.
+  assert.match(unmapped[0].reason, /invalid_slot_value/);
+});
+
+test("toAkgSlots: a producer cannot stamp confirmed (promotion is human-only)", () => {
+  assert.throws(() => toAkgSlots(goodProposal, { tier: "confirmed" }), /승격은 사람 전용/);
+  assert.throws(() => toAkgSlots([]), /객체가 아닙니다/);
 });
 
 test("lint: markerless doc and non-object proposal fail loudly", () => {
