@@ -12,6 +12,13 @@ description: >-
 
 # db-schema-apply
 
+> **⚠ 이전 예정 (akg로 이관)** — 이 스킬의 검토·승격 책임은
+> [agent-knowledge-governance(akg)](https://github.com/ollybaysion/agent-knowledge-governance)
+> 서버·대시보드로 이전됩니다. akg 소비로 전환한(B모드 hub-fetch 또는 A모드 미러 sync)
+> 프로젝트는 승격을 akg의 `PUT /api/docs/:type/:id/promote`(approver 권한, If-Match)로
+> 하세요. **akg 미도입 프로젝트에서는 이 스킬이 계속 정본입니다** — 지금은 삭제·비활성이
+> 아니라 방향 안내이며, 제거 시점은 akg 마이그레이션 진행 상황을 보고 정합니다 (#124).
+
 ## 책임 경계 (이 스킬이 무엇인가)
 
 **핵심 책임 = 반영과 승격.** 이미 만들어진 의미 제안(proposal.json)을 받아:
