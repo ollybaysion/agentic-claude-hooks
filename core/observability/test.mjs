@@ -976,117 +976,23 @@ process.stdout.write("\n# enrich apply/promote log (/stats/schema-docs)\n");
   }
 }
 
-// ══ #112 — dashboard promote (POST /actions/schema-docs/promote, stage 2) ══════
-// The write half: a human clicks 승격 → the collector delegates to the
-// db-schema-apply CLI (`promote --all --write`), which rewrites the doc and emits
-// SchemaDocPromote. Assert the gate (allowlist / method / body), the file rewrite,
-// idempotency, and that the emit lands in the activity log.
-process.stdout.write("\n# dashboard promote (POST /actions/schema-docs/promote)\n");
+// ══ #123/#124 — the local write path is GONE ═══════════════════════════════════
+// Review/adopt/promote moved to the akg dashboard, and the db-schema-apply CLI
+// the old endpoints spawned was deleted with the skill. The endpoints must be
+// dead (404), not half-alive — a stale dashboard build POSTing here should get
+// an unambiguous "this does not exist", never a silent no-op.
+process.stdout.write("\n# removed local write endpoints (POST /actions/schema-docs/*)\n");
 {
-  // fixture: one indexed doc with 2 inferred slots — a manual purpose region and
-  // the 5th (설명) cell of a column row, the exact shape apply.mjs promote rewrites.
-  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-promote-"));
-  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
-  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
-    JSON.stringify([{ keywords: ["sensor"], path: ".claude/docs/db/sensor.md" }]));
-  const docPath = path.join(H, ".claude", "docs", "db", "sensor.md");
-  fs.writeFileSync(docPath,
-    "# TESTUSER.SENSOR\n\n" +
-    "<!-- dbdoc:manual:purpose -->\n추정) 센서 원장 [근거: repo/schema.ts:24]\n<!-- dbdoc:end:purpose -->\n\n" +
-    "<!-- dbdoc:auto:columns -->\n| 컬럼 | 타입 | 널 | 기본값 | 설명 |\n| --- | --- | --- | --- | --- |\n" +
-    "| SNSR_ID | VARCHAR2(20) | N | - | 추정) 센서 ID [근거: repo/schema.ts:27] |\n<!-- dbdoc:end:columns -->\n");
-
-  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45782", OBS_DOCS_HOME: H }, stdio: "ignore" });
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45782" }, stdio: "ignore" });
   try {
     await waitHealth(45782);
-    const before = (fs.readFileSync(docPath, "utf8").match(/추정\)/g) || []).length;
-    check("promote: fixture has 2 inferred before", before === 2, String(before));
-
-    const g = await get(45782, "/actions/schema-docs/promote").catch(() => null);
-    check("promote: GET is rejected (POST-only)", g && g.error, JSON.stringify(g));
-
-    const outside = await postJson(45782, "/actions/schema-docs/promote", { path: path.join(H, "secret.md") });
-    check("promote: path outside doc allowlist → 403/404", outside.status === 403 || outside.status === 404, JSON.stringify(outside.status));
-
-    const nopath = await postJson(45782, "/actions/schema-docs/promote", {});
-    check("promote: missing path → 400", nopath.status === 400, JSON.stringify(nopath.status));
-
-    // no target → 400 (safety: caller must say WHAT to 채택)
-    const notarget = await postJson(45782, "/actions/schema-docs/promote", { path: docPath });
-    check("promote: no target (all|columns|slots) → 400", notarget.status === 400, JSON.stringify(notarget.status));
-
-    // 개별 채택: just the SNSR_ID column → the purpose slot stays inferred
-    const col = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, columns: ["SNSR_ID"] });
-    check("promote: per-column 채택 (SNSR_ID) → 1 promoted, purpose still pending",
-      col.status === 200 && col.body.promoted_count === 1 && col.body.remaining_inferred === 1, JSON.stringify(col.body));
-
-    // 개별 채택: the purpose slot → nothing left
-    const slot = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, slots: ["purpose"] });
-    check("promote: per-slot 채택 (purpose) → 1 promoted, remaining 0",
-      slot.status === 200 && slot.body.promoted_count === 1 && slot.body.remaining_inferred === 0, JSON.stringify(slot.body));
-
-    const after = fs.readFileSync(docPath, "utf8");
-    check("promote: file rewritten, 추정) stripped (evidence kept)", !/추정\)/.test(after) && /센서 원장 \[근거:/.test(after), String((after.match(/추정\)/g) || []).length));
-
-    // 모두 채택 when nothing is left → 0 promoted (idempotent), still 200
-    const again = await postJson(45782, "/actions/schema-docs/promote", { path: docPath, all: true });
-    check("promote: 모두 채택 when nothing left → 0 promoted", again.status === 200 && again.body.promoted_count === 0, JSON.stringify(again.body));
-
-    // the CLI emitted SchemaDocPromote → appears in history (poll for the async commit)
-    let sawPromote = false;
-    for (let i = 0; i < 20 && !sawPromote; i++) {
-      const sd = await get(45782, "/stats/schema-docs?window=90d").catch(() => ({}));
-      if ((sd.history || []).some((h) => h.type === "promote" && /sensor\.md$/.test(h.doc || ""))) sawPromote = true;
-      else await new Promise((r) => setTimeout(r, 100));
-    }
-    check("promote: emitted SchemaDocPromote lands in history", sawPromote, "polled 2s");
+    const pr = await postJson(45782, "/actions/schema-docs/promote", { path: "x", all: true });
+    check("promote endpoint removed → 404", pr.status === 404, JSON.stringify(pr.status));
+    const ed = await postJson(45782, "/actions/schema-docs/edit", { path: "x", slot: "purpose", text: "y" });
+    check("edit endpoint removed → 404", ed.status === 404, JSON.stringify(ed.status));
   } finally {
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
-    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
-  }
-}
-
-// ══ #115 — dashboard edit (POST /actions/schema-docs/edit, 수정) ═══════════════
-// 수정: write a HUMAN value (→ confirmed) to one slot/column via the CLI `edit`.
-process.stdout.write("\n# dashboard edit (POST /actions/schema-docs/edit)\n");
-{
-  const H = fs.mkdtempSync(path.join(os.tmpdir(), "obs-edit-"));
-  fs.mkdirSync(path.join(H, ".claude", "docs", "db"), { recursive: true });
-  fs.writeFileSync(path.join(H, ".claude", "context-docs.db-schema.json"),
-    JSON.stringify([{ keywords: ["sensor"], path: ".claude/docs/db/sensor.md" }]));
-  const docPath = path.join(H, ".claude", "docs", "db", "sensor.md");
-  fs.writeFileSync(docPath,
-    "# TESTUSER.SENSOR\n\n" +
-    "<!-- dbdoc:manual:purpose -->\n미확인) 센서 원장 [근거: repo/schema.ts:24]\n<!-- dbdoc:end:purpose -->\n\n" +
-    "<!-- dbdoc:auto:columns -->\n| 컬럼 | 타입 | 널 | 기본값 | 설명 |\n| --- | --- | --- | --- | --- |\n" +
-    "| SNSR_ID | VARCHAR2(20) | N | - | 미확인) 센서 ID [근거: repo/schema.ts:27] |\n<!-- dbdoc:end:columns -->\n");
-
-  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45783", OBS_DOCS_HOME: H }, stdio: "ignore" });
-  try {
-    await waitHealth(45783);
-    const notext = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, slot: "purpose" });
-    check("edit: missing text → 400", notext.status === 400, JSON.stringify(notext.status));
-    const notgt = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, text: "x" });
-    check("edit: missing target → 400", notgt.status === 400, JSON.stringify(notgt.status));
-    const outside = await postJson(45783, "/actions/schema-docs/edit", { path: path.join(H, "secret.md"), slot: "purpose", text: "x" });
-    check("edit: outside allowlist → 403/404", outside.status === 403 || outside.status === 404, JSON.stringify(outside.status));
-
-    const e1 = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, slot: "purpose", text: "사람이 확정한 용도", evidence: ["a:1"] });
-    check("edit: 200 + purpose written confirmed, remaining 1",
-      e1.status === 200 && e1.body.ok && e1.body.edited_count === 1 && e1.body.remaining_inferred === 1, JSON.stringify(e1.body));
-    const after1 = fs.readFileSync(docPath, "utf8");
-    check("edit: purpose text written confirmed (no inferred prefix)",
-      /사람이 확정한 용도 \[근거: a:1\]/.test(after1) && !/(?:미확인|추정)\) 센서 원장/.test(after1), "ok");
-
-    const e2 = await postJson(45783, "/actions/schema-docs/edit", { path: docPath, column: "SNSR_ID", text: "손으로 고친 센서 ID" });
-    check("edit: 200 + column written, remaining 0",
-      e2.status === 200 && e2.body.edited_count === 1 && e2.body.remaining_inferred === 0, JSON.stringify(e2.body));
-    check("edit: column text on disk", /\| SNSR_ID \|.*\| 손으로 고친 센서 ID \|/.test(fs.readFileSync(docPath, "utf8")), "ok");
-  } finally {
-    srv.kill("SIGTERM");
-    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
-    try { fs.rmSync(H, { recursive: true, force: true }); } catch {}
   }
 }
 

@@ -35,7 +35,7 @@ import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.23.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변)
+const VERSION = "0.24.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: local write path removed (#123/#124/#125 — db-schema-docs/apply skills deleted with the plugin release, /actions/schema-docs/{promote,edit} endpoints gone, keyword-docs tab reduced to a read-only viewer of what the indexes inject; 생성=akg-collector, 검토·채택·승격=akg 대시보드; /stats/schema-docs stays as the historical activity log)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -1697,8 +1697,9 @@ function dbExtractTables(sql) {
 }
 
 // ── representative-queries: observed DbQuery → per-table 대표 쿼리 proposals (#114) ──
-// Turns the DbQuery audit log into per-table representative queries that seed the
-// db-schema-docs `## 대표 쿼리` manual slot. READ-ONLY and PROPOSAL-ONLY: the CLI
+// Turns the DbQuery audit log into per-table representative queries that seed a
+// db-schema document's `## 대표 쿼리` slot (format owner: akg). READ-ONLY and
+// PROPOSAL-ONLY: the CLI
 // prints a block a human pastes — it never writes a doc (manual-slot 원문 보존 +
 // enrich propose→promote discipline). Reuses dbExtractTables for table attribution.
 
@@ -1888,13 +1889,13 @@ function handleStatsDb(req, res, u) {
   } catch (e) { logSafe("stats db", e); json(res, 500, { error: "query failed" }); }
 }
 
-// ── GET /stats/schema-docs (#90 — enrich apply/promote activity log) ─────────
-// The apply/promote HISTORY behind the keyword-docs review flow: SchemaDocApply /
-// SchemaDocPromote events, empty until enrich-cli --write runs. It records WHAT
-// changed WHEN, not current state — the pending "queue" itself is just the
-// keyword-docs corpus table's 추정) column, a live file scan the viewer already
-// does via /docs (summed client-side), so this endpoint is events-only and never
-// reads files. Read-only and loopback-gated like every other /stats endpoint.
+// ── GET /stats/schema-docs (#90 — apply/promote activity HISTORY) ────────────
+// SchemaDocApply / SchemaDocPromote events left behind by the RETIRED local
+// write pipeline (db-schema-apply CLI + dashboard buttons, removed in
+// #123/#124 — review/adopt/promote live on the akg dashboard now). Kept as a
+// read-only historical log: it records WHAT changed WHEN while the local path
+// existed; no new events accrue. Events-only, never reads files, loopback-
+// gated like every other /stats endpoint.
 function handleStatsSchemaDocs(req, res, u) {
   if (!statsGate(req, res)) return;
   const window_ms = windowOf(u, "30d");
@@ -1950,7 +1951,7 @@ function docsHomeDir() {
   return process.env.OBS_DOCS_HOME || os.homedir();
 }
 
-// dbdoc tier markers (db-schema-docs / apply #115). Best-effort: scaffold {{…}}
+// dbdoc tier markers (the retired db-schema-docs/apply format, #115). Best-effort: scaffold {{…}}
 // (표시: 미작성) and inferred "자동)" (or the legacy "추정)") are positively
 // marked; a confirmed (채택됨) slot drops its prefix so it isn't separately
 // counted. Marker-less docs → dbdoc:false (plain render).
@@ -2018,112 +2019,11 @@ function handleDocsContent(req, res, u) {
   json(res, 200, { path: real, bytes: Buffer.byteLength(content), content });
 }
 
-// ── POST /actions/schema-docs/promote (#112 — dashboard promote, stage 2) ────
-// The WRITE half of the keyword-docs review flow: flip a doc's reviewed 추정)
-// slots to confirmed. Human-triggered (the dashboard button); the agent never
-// calls this on its own inference. Loopback+authed like /stats and POST-only.
-// The target MUST resolve inside the same realpath allowlist /docs/content
-// serves — we never write outside the keyword-docs corpus. Delegates to the
-// db-schema-apply CLI (`promote --all --write`) so the promote logic, the
-// SchemaDocPromote emit (→ activity log) and the exit codes stay single-sourced;
-// promote only strips 추정) on already-inferred slots, so it can't fabricate a
-// confirmation. Read-then-write is the CLI's; here we only gate + delegate.
-const PROMOTE_CLI = fileURLToPath(new URL("../../skills/db-schema-apply/cli.mjs", import.meta.url));
-
-function handlePromoteAction(req, res) {
-  if (!statsGate(req, res)) return;
-  readBody(req, 8 * 1024).then((raw) => {
-    let body;
-    try { body = JSON.parse(raw.toString("utf8") || "{}"); }
-    catch { return json(res, 400, { error: "malformed json" }); }
-    const rawPath = typeof body.path === "string" ? body.path : "";
-    if (!rawPath || rawPath.includes("\0")) return json(res, 400, { error: "path required" });
-    // allowlist — identical to /docs/content: only a doc the indexes point at
-    let real;
-    try { real = fs.realpathSync(path.resolve(expandTilde(rawPath))); }
-    catch { return json(res, 404, { error: "not found" }); }
-    const { set, root } = docsAllowReal();
-    if (!set.has(real) && !(root && docUnder(real, root)))
-      return json(res, 403, { error: "path not allowed" });
-    // target: { all:true } (모두 채택) or per-item { columns:[…], slots:[…] }
-    // (개별 채택). Names are passed as literal argv (spawn, no shell) and promote
-    // only touches matching inferred slots, so an unknown name is a safe no-op.
-    const strArr = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === "string" && s).slice(0, 200) : []);
-    const cols = strArr(body.columns), slots = strArr(body.slots);
-    const cliArgs = [PROMOTE_CLI, "promote", "--doc", real, "--write"];
-    if (body.all === true) cliArgs.push("--all");
-    else if (cols.length || slots.length) {
-      for (const c of cols) cliArgs.push("--column", c);
-      for (const s of slots) cliArgs.push("--slot", s);
-    } else return json(res, 400, { error: "target required (all | columns | slots)" });
-    // delegate to the CLI (single source of truth for promote + emit)
-    let settled = false;
-    const child = spawn(process.execPath, cliArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    child.stderr.on("data", (d) => { err += d; });
-    child.stdout.on("data", () => {}); // drain (--write prints nothing here)
-    child.on("error", (e) => {
-      if (settled) return; settled = true;
-      logSafe("promote spawn", e); json(res, 500, { error: "promote failed", detail: e.message });
-    });
-    child.on("close", (code) => {
-      if (settled) return; settled = true;
-      if (code !== 0) return json(res, 500, { error: "promote failed", code, detail: err.trim().slice(0, 500) });
-      // CLI logs `promoted=N (a, b)` to stderr; recount remaining 추정) from disk
-      const m = /promoted=(\d+)\s*\(([^)]*)\)/.exec(err);
-      const promoted = m && m[2] !== "-" ? m[2].split(",").map((s) => s.trim()).filter(Boolean) : [];
-      let remaining = 0;
-      try { remaining = docTiers(fs.readFileSync(real, "utf8")).inferred; } catch { /* re-read best-effort */ }
-      json(res, 200, { ok: true, promoted, promoted_count: m ? Number(m[1]) : promoted.length, remaining_inferred: remaining });
-    });
-  }).catch((e) => json(res, e && e.status ? e.status : 400, { error: "bad body", detail: e && e.message }));
-}
-
-// ── POST /actions/schema-docs/edit (#115 — 수정: edit a slot, → confirmed) ────
-// Same gate + allowlist as promote. Writes a HUMAN-authored value (confirmed, no
-// prefix) to one column/slot via the CLI `edit` subcommand; text/evidence are
-// literal argv (spawn, no shell). Any tier can be edited — a human write wins.
-function handleEditAction(req, res) {
-  if (!statsGate(req, res)) return;
-  readBody(req, 16 * 1024).then((raw) => {
-    let body;
-    try { body = JSON.parse(raw.toString("utf8") || "{}"); }
-    catch { return json(res, 400, { error: "malformed json" }); }
-    const rawPath = typeof body.path === "string" ? body.path : "";
-    if (!rawPath || rawPath.includes("\0")) return json(res, 400, { error: "path required" });
-    const text = typeof body.text === "string" ? body.text : null;
-    if (text == null) return json(res, 400, { error: "text required" });
-    if (text.length > 4000) return json(res, 400, { error: "text too long" });
-    const col = typeof body.column === "string" ? body.column : "";
-    const slot = typeof body.slot === "string" ? body.slot : "";
-    if (!col && !slot) return json(res, 400, { error: "target required (column | slot)" });
-    const evidence = Array.isArray(body.evidence) ? body.evidence.filter((s) => typeof s === "string" && s).slice(0, 20) : [];
-    let real;
-    try { real = fs.realpathSync(path.resolve(expandTilde(rawPath))); }
-    catch { return json(res, 404, { error: "not found" }); }
-    const { set, root } = docsAllowReal();
-    if (!set.has(real) && !(root && docUnder(real, root)))
-      return json(res, 403, { error: "path not allowed" });
-    const cliArgs = [PROMOTE_CLI, "edit", "--doc", real, "--write", "--text", text];
-    if (col) cliArgs.push("--column", col); else cliArgs.push("--slot", slot);
-    if (evidence.length) cliArgs.push("--evidence", evidence.join("; "));
-    let settled = false;
-    const child = spawn(process.execPath, cliArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    child.stderr.on("data", (d) => { err += d; });
-    child.stdout.on("data", () => {});
-    child.on("error", (e) => { if (settled) return; settled = true; logSafe("edit spawn", e); json(res, 500, { error: "edit failed", detail: e.message }); });
-    child.on("close", (code) => {
-      if (settled) return; settled = true;
-      if (code !== 0) return json(res, 500, { error: "edit failed", code, detail: err.trim().slice(0, 500) });
-      const m = /edited=(\d+)\s*\(([^)]*)\)/.exec(err);
-      const edited = m && m[2] !== "-" ? m[2].split(",").map((s) => s.trim()).filter(Boolean) : [];
-      let remaining = 0;
-      try { remaining = docTiers(fs.readFileSync(real, "utf8")).inferred; } catch { /* re-read best-effort */ }
-      json(res, 200, { ok: true, edited, edited_count: m ? Number(m[1]) : edited.length, remaining_inferred: remaining });
-    });
-  }).catch((e) => json(res, e && e.status ? e.status : 400, { error: "bad body", detail: e && e.message }));
-}
+// ── (removed) POST /actions/schema-docs/{promote,edit} (#112/#115) ───────────
+// The dashboard's local write path is gone (#123/#124/#125): review, adopt and
+// promote happen on the akg dashboard, and the db-schema-apply CLI these
+// endpoints delegated to was deleted with the skill. The keyword-docs tab
+// stays as a READ-ONLY viewer of what the local indexes inject.
 
 // ── GET /stats/turns (#73 — Turn Inspector, stage 1) ────────────────────────
 // One session's events grouped into turns (UserPromptSubmit → last Stop before
@@ -3168,7 +3068,7 @@ a.evlink:hover{color:#79c0ff}
   </table>
 </section>
 <section id="view-docs">
-  <div class="migr"><b>이전 예정</b> — 이 코퍼스(db-schema·msg-format·domain-skill)의 열람·검토·승격은 <b>agent-knowledge-governance(akg)</b> 대시보드로 옮겨가는 중입니다. akg 서버를 도입한 조직은 그쪽에서 하세요 — 이 로컬 뷰는 akg 미도입 시의 정본입니다. <span class="dim">(#123 · akg B모드 = context.json <code>hub</code> opt-in)</span></div>
+  <div class="migr"><b>열람 전용</b> — 이 코퍼스(db-schema·msg-format·domain-skill)의 검토·채택·승격은 <b>agent-knowledge-governance(akg)</b> 대시보드에서 합니다. 이 화면은 로컬 인덱스가 실제로 주입하는 문서를 들여다보는 창입니다. <span class="dim">(#123/#124 — 문서 생성=akg-collector, 소비=akg sync/B모드)</span></div>
   <div class="cards" id="docs-cards"></div>
   <div class="toolbar">keyword-docs 코퍼스 (user 층)<span data-help="docs"></span>
     <span class="dim">파일이 진실원 · 매 요청 새로 읽음 · 행을 누르면 전체 문서 · dbdoc 마커 있으면 티어 표시</span>
@@ -3178,10 +3078,10 @@ a.evlink:hover{color:#79c0ff}
     <tbody id="docs-rows"></tbody>
   </table>
   <div id="doc-view"></div>
-  <div class="toolbar">apply / promote 이력
+  <div class="toolbar">apply / promote 이력 (과거 기록)
     <select id="docs-hist-window"><option>7d</option><option selected>30d</option><option>90d</option></select>
     <span data-help="dochist"></span>
-    <span class="dim">enrich-cli --write 활동 로그 (SchemaDocApply/Promote) · 승격은 사람이 CLI로</span>
+    <span class="dim">구 로컬 파이프라인의 활동 로그 (SchemaDocApply/Promote) · 현재 검토·승격은 akg 대시보드</span>
   </div>
   <table>
     <thead><tr><th>time</th><th>type</th><th>doc</th><th>app</th><th class="num">slots</th></tr></thead>
@@ -3229,7 +3129,6 @@ const DASHBOARD_JS = `(function(){
   function cell(text,cls){ return el("td",cls,text==null?"":text); }
   function preview(p,n){ try{var s=JSON.stringify(p); return s.length>n?s.slice(0,n)+"…":s;}catch(e){return "";} }
   function getJson(p){ return fetch(p).then(function(r){ if(!r.ok)throw new Error(p+" -> "+r.status); return r.json(); }); }
-  function postJson(p,body){ return fetch(p,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body||{})}).then(function(r){ return r.json().then(function(j){ if(!r.ok)throw new Error((j&&j.error)||("HTTP "+r.status)); return j; }); }); }
   var SVGNS="http://www.w3.org/2000/svg";
   function svgEl(t,attrs){ var e=document.createElementNS(SVGNS,t); for(var k in attrs)e.setAttribute(k,attrs[k]); return e; }
   function hbar(v,max,w,h){ var s=svgEl("svg",{width:w,height:h}); s.appendChild(svgEl("rect",{x:0,y:1,height:h-2,rx:1,"class":"bar",width:max>0?Math.max(1,Math.round(v/max*w)):0})); return s; }
@@ -3247,8 +3146,8 @@ const DASHBOARD_JS = `(function(){
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     db:"agent-db-plugin이 실행한 조회의 감사 로그 (DbQuery 이벤트)\\n• by alias / tool — 접속 별칭·MCP 도구별 쿼리 수 (describe_table·list_tables의 내부 카탈로그 조회도 포함)\\n• slowest — elapsedMs 상위 · ⚠ = 에러로 끝난 쿼리\\n• errors — ORA 코드별 집계 (ORA-00942 반복 = 에이전트가 테이블명 헛짚음 → 스키마 문서 공백 신호)\\n• top tables — sql의 FROM/JOIN에서 추출 (근사) · sql은 원문 그대로 기록 (마스킹 없음, 로컬/리허설 한정)",
-    docs:"context 훅의 keyword-docs가 주입하는 문서 (user 층) — 문서 열람 + 검토(채택)를 한 화면에\\n• 대상 = keyword-docs·msg-format·db-schema·domain-docs 인스턴스의 ~/.claude 인덱스 (project/bundle 층은 스코프 밖)\\n• 행을 누르면 전체 문서 렌더 (파일이 진실원, 매번 새로 읽음)\\n• 미작성 = 아직 설명이 안 적힌 칸(회색) · 미확인 = 코드에서 추론해 채운 설명(주황), 사람 확인·채택 대기 · 채택됨 = 사람이 확인한 확정 설명(초록)\\n• 코퍼스 표의 '미작성'/'미확인' 열 = 각 문서의 해당 칸 수 · 미확인>0 문서는 강조 · 상단 '미확인' 카드 = 전 문서 미확인 칸 총합(파일 스캔이 진실원, 즉시 반영)\\n• 문서를 열면 항목마다 [채택] 버튼(개별) + [모두 채택](전체) — 채택 = 미확인를 확정으로(사람 액션)\\n• 경로는 인덱스가 가리키는 파일 + ~/.claude/docs/ 아래만 열람 (그 밖은 거부)",
-    dochist:"apply/채택 활동 로그 (db-schema-apply #89/#115 + 도메인 스킬)\\n• CLI/대시보드에서 실행하면 emit — apply = 미확인 칸 채움, 채택(promote) = 미확인→확정\\n• 상태가 아니라 변경 이력 — 현재 채택 대기는 위 코퍼스 표의 '미확인' 열(파일 스캔)이 진실원, 이력은 누가 언제 뭘 바꿨나\\n• 채택은 사람 액션(대시보드 [채택]/[모두 채택] 버튼 또는 CLI)",
+    docs:"context 훅의 keyword-docs가 주입하는 문서 (user 층) — 열람 전용 뷰어\\n• 대상 = keyword-docs·msg-format·db-schema·domain-docs 인스턴스의 ~/.claude 인덱스 (project/bundle 층은 스코프 밖)\\n• 행을 누르면 전체 문서 렌더 (파일이 진실원, 매번 새로 읽음)\\n• 미작성 = 아직 설명이 안 적힌 칸(회색) · 미확인 = 코드에서 추론해 채운 설명(주황) · 채택됨 = 사람이 확인한 확정 설명(초록)\\n• 검토·채택·승격은 akg 대시보드에서 — 이 화면엔 쓰기 버튼이 없다 (#123/#124)\\n• 경로는 인덱스가 가리키는 파일 + ~/.claude/docs/ 아래만 열람 (그 밖은 거부)",
+    dochist:"apply/채택 활동 이력 (과거 로컬 파이프라인의 기록)\\n• 구 db-schema-apply CLI·대시보드 버튼이 남긴 SchemaDocApply/Promote 이벤트 — 로컬 쓰기 경로는 #123/#124로 제거돼 새 이벤트는 더 안 쌓인다\\n• 상태가 아니라 변경 이력 — 현재 검토·채택·승격은 akg 대시보드가 정본",
     insight:"한 세션이 아니라 전 세션을 가로질러, 프롬프트 하나에 대한 응답(=턴)이 도구를 얼마나·얼마나 효율적으로 썼는지 보는 화면. 특정 작업 유형에서 도구 호출이 새는 곳을 찾는 용도다\\n• settled turns — 응답이 끝난(확정된) 턴만 셈 · 아직 진행 중인 마지막 턴은 뺀다\\n• avg calls/turn·dup-call% — 사람이 보낸 턴 기준 (내부 자동 턴·프롬프트 이전 잔여 턴은 제외)\\n• total/subagent cost — 그 기간 턴 비용 합 · subagent = 그 턴이 띄운 서브에이전트 지출\\n• unattributed — 어느 턴에도 안 붙은 잔여 비용 (진행 중 턴 비용 등을 흡수, 합을 정직하게 유지)\\n• ✂ cost-incomplete — 압축(compaction)이 낀 턴은 그 지출이 usage에 안 잡혀 비용이 하한값",
     "ft-flags":"턴에서 자동으로 잡아낸 비효율 패턴. 한 턴이 여러 flag를 가질 수 있어 flag별 비용을 다 더하면 총비용을 넘는다(중복 계상) · 비용은 '그 패턴을 보인 턴들의 비용'이지 아낄 수 있는 금액이 아님\\n• dup-call — 같은 도구를 같은 입력으로 반복 호출\\n• re-read — 한 파일을 겹치는 범위로 여러 번 읽음\\n• retry-loop — 같은 호출이 에러로 반복됨\\n• search-storm — 첫 Read/Edit 전에 Grep/Glob 검색만 연달아(5+ 배치)\\n• long-tail — 한 호출이 그 턴 도구 시간의 절반 이상을 잡아먹음\\n• gap-heavy — 도구 호출 사이 설명 안 되는 빈 시간이 많음\\n• orphaned — Pre만 있고 Post가 없는 호출(가드 deny·중단·크래시)\\n• mega-turn — 한 턴이 지나치게 길거나 호출이 너무 많음",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
@@ -3884,7 +3783,9 @@ const DASHBOARD_JS = `(function(){
     }
     return root;
   }
-  // ── review helpers (#115): 미확인/미작성/채택됨 tiers, 근거 chips, SQL 줄바꿈 ──
+  // ── review-state renderers (#115, read-only since #123/#124): 미확인/미작성/
+  // 채택됨 badges, 근거 chips, SQL 줄바꿈. Write actions (채택/수정/승격) moved
+  // to the akg dashboard — this tab only SHOWS the state of what gets injected. ──
   var AUTO_RE=/^(?:미확인|추정)\\) /;                       // inferred prefix (new + legacy)
   function isAuto(s){ return AUTO_RE.test(String(s).trim()); }
   function isTodo(s){ return String(s).indexOf("{{")>=0; }
@@ -3904,43 +3805,31 @@ const DASHBOARD_JS = `(function(){
       if(pre)box.appendChild(document.createTextNode(pre+" "));
       box.appendChild(el("pre","sql",sql));
     } else box.appendChild(document.createTextNode(text)); }
-  function proseSlot(id,body,p,display){
-    var slot=el("div","slot"), b=el("div","slot-body"), act=el("div","slot-act"), raw=String(body).trim();
-    var cur="", ev=[], todo=isTodo(raw);
-    if(isAuto(raw)){ b.appendChild(badge("auto")); var pe=splitEv(stripAuto(raw)); cur=pe.text; ev=pe.ev; slotText(b,cur); evChips(b,ev);
-      var take=el("button","take","채택"); take.addEventListener("click",function(){ takeItem(p,display,{slots:[id]},take); }); act.appendChild(take); }
-    else if(todo){ b.appendChild(badge("todo")); b.appendChild(el("span","dim",stripTodo(raw)||"(아직 안 적힘)")); }
-    else { b.appendChild(badge("ok")); var pe2=splitEv(raw); cur=pe2.text; ev=pe2.ev; slotText(b,cur); evChips(b,ev); }
-    var edit=el("button","take ghost",todo?"작성":"수정");
-    (function(c,e){ edit.addEventListener("click",function(){ editSlotUI(p,display,b,act,c,e,{slot:id}); }); })(cur,ev);
-    act.appendChild(edit);
-    slot.appendChild(b); slot.appendChild(act);
+  function proseSlot(id,body){
+    var slot=el("div","slot"), b=el("div","slot-body"), raw=String(body).trim();
+    if(isAuto(raw)){ b.appendChild(badge("auto")); var pe=splitEv(stripAuto(raw)); slotText(b,pe.text); evChips(b,pe.ev); }
+    else if(isTodo(raw)){ b.appendChild(badge("todo")); b.appendChild(el("span","dim",stripTodo(raw)||"(아직 안 적힘)")); }
+    else { b.appendChild(badge("ok")); var pe2=splitEv(raw); slotText(b,pe2.text); evChips(b,pe2.ev); }
+    slot.appendChild(b);
     return slot; }
-  function columnsTable(body,p,display){
+  function columnsTable(body){
     var lines=String(body).split(/\\r?\\n/), rows=[], hdr=null, sepDone=false;
     lines.forEach(function(l){ if(!isRow(l))return; if(!hdr){hdr=docCells(l);return;} if(!sepDone&&isSep(l)){sepDone=true;return;} rows.push(docCells(l)); });
     if(!hdr)return el("div","dim","(빈 컬럼)");
     var tbl=el("table","doc-tbl"), thead=el("thead",null), htr=el("tr",null);
     hdr.forEach(function(c){ htr.appendChild(el("th",null,c)); });
-    htr.appendChild(el("th","act","채택")); thead.appendChild(htr); tbl.appendChild(thead);
+    thead.appendChild(htr); tbl.appendChild(thead);
     var tb=el("tbody",null);
-    rows.forEach(function(cells){ var tr=el("tr",null), last=cells.length-1, descTd=null;
+    rows.forEach(function(cells){ var tr=el("tr",null), last=cells.length-1;
       cells.forEach(function(v,ci){ var td=el("td",null);
-        if(ci===last){ descTd=td; if(isAuto(v)){ td.appendChild(badge("auto")); var pe=splitEv(stripAuto(v)); td.appendChild(document.createTextNode(pe.text)); evChips(td,pe.ev); }
+        if(ci===last){ if(isAuto(v)){ td.appendChild(badge("auto")); var pe=splitEv(stripAuto(v)); td.appendChild(document.createTextNode(pe.text)); evChips(td,pe.ev); }
           else if(isTodo(v)){ td.appendChild(badge("todo")); td.appendChild(el("span","dim",stripTodo(v))); }
           else { td.appendChild(badge("ok")); var pc=splitEv(v); td.appendChild(document.createTextNode(pc.text)); evChips(td,pc.ev); } }
         else td.textContent=v;
         tr.appendChild(td); });
-      var act=el("td","act"), desc=cells[last], name=cells[0], todo=isTodo(desc), cur="", ev=[];
-      if(isAuto(desc)){ var pe2=splitEv(stripAuto(desc)); cur=pe2.text; ev=pe2.ev;
-        var bt=el("button","take","채택"); (function(nm){ bt.addEventListener("click",function(){ takeItem(p,display,{columns:[nm]},bt); }); })(name); act.appendChild(bt); }
-      else if(!todo){ var pc2=splitEv(desc); cur=pc2.text; ev=pc2.ev; }
-      var edit=el("button","take ghost",todo?"작성":"수정");
-      (function(nm,c,e,bt,at){ edit.addEventListener("click",function(){ editSlotUI(p,display,bt,at,c,e,{column:nm}); }); })(name,cur,ev,descTd,act);
-      act.appendChild(edit);
-      tr.appendChild(act); tb.appendChild(tr); });
+      tb.appendChild(tr); });
     tbl.appendChild(tb); return tbl; }
-  function renderReviewDoc(text,p,display){
+  function renderReviewDoc(text){
     var root=el("div","doc"), lines=String(text).split(/\\r?\\n/), i=0;
     while(i<lines.length){ var ln=lines[i];
       var open=ln.match(/^\\s*<!--\\s*dbdoc:(?:auto|manual):([a-z0-9_]+)\\s*-->\\s*$/i);
@@ -3948,9 +3837,9 @@ const DASHBOARD_JS = `(function(){
         var endRe=new RegExp("^\\\\s*<!--\\\\s*dbdoc:end:"+id+"\\\\s*-->");
         while(i<lines.length&&!endRe.test(lines[i])){ buf.push(lines[i]); i++; }
         i++; var body=buf.join("\\n");
-        if(id==="columns") root.appendChild(columnsTable(body,p,display));
+        if(id==="columns") root.appendChild(columnsTable(body));
         else if(id==="keys"){ var ul=el("ul",null); body.split(/\\r?\\n/).forEach(function(l){ var mm=l.match(/^\\s*[-*]\\s+(.*)/); if(mm)ul.appendChild(el("li",null,mm[1])); }); root.appendChild(ul); }
-        else root.appendChild(proseSlot(id,body,p,display));
+        else root.appendChild(proseSlot(id,body));
         continue; }
       if(/^\\s*<!--/.test(ln)){ i++; continue; }
       var h=ln.match(/^(#{1,6})\\s+(.*)/);
@@ -3969,39 +3858,13 @@ const DASHBOARD_JS = `(function(){
       var auto=(text.match(/(?:미확인|추정)\\)/g)||[]).length, todo=(text.match(/\\{\\{[^}]*\\}\\}/g)||[]).length;
       if(isDb){ var bar=el("div","promote-bar");
         var sum=el("span","count"); sum.appendChild(el("span","dim","미작성 "+todo+" · "));
-        sum.appendChild(el("span","tin","미확인 "+auto)); sum.appendChild(el("span","dim"," (채택 대기)")); bar.appendChild(sum);
-        if(auto>0){ var btn=el("button","promote","모두 채택 ("+auto+")");
-          btn.addEventListener("click",function(){ takeAll(p,display,auto,btn); }); bar.appendChild(btn);
-          bar.appendChild(el("span","dim","코드가 자동으로 채운 설명입니다 — 확인 후 채택하세요")); }
-        else bar.appendChild(el("span","dim","채택 대기 없음"));
-        view.appendChild(bar); view.appendChild(renderReviewDoc(text,p,display));
+        sum.appendChild(el("span","tin","미확인 "+auto)); bar.appendChild(sum);
+        bar.appendChild(el("span","dim","검토·채택·승격은 akg 대시보드에서 — 이 화면은 열람 전용"));
+        view.appendChild(bar); view.appendChild(renderReviewDoc(text));
       } else view.appendChild(renderDoc(text));
       view.scrollIntoView({block:"nearest"});
     }).catch(function(){ view.textContent=""; view.appendChild(el("div","err","문서를 불러올 수 없습니다 (삭제됐거나 접근 불가)")); });
   }
-  function takeAll(p,display,n,btn){
-    if(!window.confirm("이 문서의 미확인 "+n+"개를 모두 채택(확정)합니다. 계속할까요?")) return;
-    btn.disabled=true; btn.textContent="채택 중…";
-    postJson("/actions/schema-docs/promote",{path:p,all:true}).then(function(){ openDoc(p,display); loadDocs(); })
-      .catch(function(){ btn.disabled=false; btn.textContent="채택 실패 — 재시도"; }); }
-  function takeItem(p,display,target,btn){
-    btn.disabled=true; btn.textContent="…";
-    var body={path:p}; if(target.columns)body.columns=target.columns; if(target.slots)body.slots=target.slots;
-    postJson("/actions/schema-docs/promote",body).then(function(){ openDoc(p,display); loadDocs(); })
-      .catch(function(){ btn.disabled=false; btn.textContent="실패"; }); }
-  // #115 수정: swap the item body for a textarea; save writes a human value
-  // (→ confirmed) via /edit, cancel re-renders. target = {slot:id}|{column:name}.
-  function editSlotUI(p,display,bodyEl,actEl,curText,ev,target){
-    bodyEl.textContent=""; actEl.textContent="";
-    var ta=el("textarea","edit-ta"); ta.value=curText||""; bodyEl.appendChild(ta);
-    var save=el("button","take","저장");
-    save.addEventListener("click",function(){ save.disabled=true; save.textContent="…";
-      var body={path:p,text:ta.value,evidence:ev||[]}; if(target.column)body.column=target.column; if(target.slot)body.slot=target.slot;
-      postJson("/actions/schema-docs/edit",body).then(function(){ openDoc(p,display); loadDocs(); })
-        .catch(function(){ save.disabled=false; save.textContent="저장 실패"; }); });
-    var cancel=el("button","take ghost","취소"); cancel.addEventListener("click",function(){ openDoc(p,display); });
-    actEl.appendChild(save); actEl.appendChild(cancel);
-    if(ta.focus)ta.focus(); }
   // ── keyword-docs tab (#92 viewer + #90/#112/#115 review). The corpus table IS
   // the review queue: the '미확인' column counts code-derived slots awaiting
   // human 채택 (a live file scan via /docs), docs with 미확인>0 are highlighted,
@@ -4105,14 +3968,6 @@ function onRequest(req, res) {
     if (pathname === "/docs" || pathname === "/docs/content") {
       if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
       return pathname === "/docs" ? handleDocsList(req, res) : handleDocsContent(req, res, u);
-    }
-    if (pathname === "/actions/schema-docs/promote") {
-      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
-      return handlePromoteAction(req, res);
-    }
-    if (pathname === "/actions/schema-docs/edit") {
-      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
-      return handleEditAction(req, res);
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
@@ -4488,7 +4343,7 @@ async function cliMaterializeTurns() {
   process.exit(0);
 }
 
-// #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs.
+// #114: observed DbQuery → per-table 대표 쿼리 proposals (db-schema 문서 슬롯 시드).
 // Read-only, proposal-only (prints; never writes a doc). Representatives come from
 // SUCCESSFUL executions only; --include-errors opts failures back in. Flags:
 // --window 30d, --alias X, --table T, --per-table N, --min-count N, --all-tools,
@@ -4554,5 +4409,5 @@ else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/tes
 else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
 else if (cmd === "title-sessions") await cliTitleSessions(); // #66: batch LLM session titles; --all re-titles, --limit N caps
 else if (cmd === "materialize-turns") await cliMaterializeTurns(); // #82: backfill/refresh the fleet turns table; --rebuild forces re-derive of non-frozen sessions
-else if (cmd === "representative-queries") await cliRepresentativeQueries(); // #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs
+else if (cmd === "representative-queries") await cliRepresentativeQueries(); // #114: observed DbQuery → per-table 대표 쿼리 proposals (db-schema 문서 슬롯 시드)
 else await startServer();

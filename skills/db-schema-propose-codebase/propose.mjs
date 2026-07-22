@@ -4,53 +4,28 @@
 // checking) is agent judgment work defined in SKILL.md. This module is the
 // deterministic rim around that judgment:
 //
-//   listSlots(doc)          — inventory which slots are fillable vs frozen,
-//                             so the agent works from a list, not a guess
-//   lintProposal(doc, p)    — check a finished proposal.json against the
-//                             contract shape AND the target doc BEFORE it is
-//                             handed to db-schema-apply (the write gateway)
-//   toAkgSlots(proposal)    — translate the same proposal into akg's slot
-//                             address form, for the other exit: `akg propose`
-//                             instead of a local file (issue #125)
+//   lintProposal(p)      — check a finished proposal.json against the contract
+//                          shape BEFORE it is translated for the akg exit
+//   toAkgSlots(proposal) — translate the proposal into akg's slot address
+//                          form, the file shape `akg propose` reads (#125)
+//
+// The single exit is akg (user decision 2026-07-23: doc creation belongs to
+// akg-collector, review/promote to the akg dashboard — the local md pipeline
+// of db-schema-docs/apply is gone). Doc-side cross-checks (does this column
+// exist, is that slot frozen) therefore moved server-side: akg validates
+// slot addresses against the target document at submit time (akg #21).
 //
 // Lint philosophy mirrors forge's spec validation: unknown keys are rejected,
-// not ignored. apply-side merging skips what it doesn't recognize, so a typo
-// ("column" for "columns") or a column that doesn't exist in the doc would
-// otherwise vanish silently — the producer must fail loudly here instead.
+// not ignored — a typo ("column" for "columns") must fail loudly at the
+// producer, not evaporate downstream.
 
-import { extractRegion, extractColumnDescriptions, hasMarkers } from "../db-schema-docs/render.mjs";
-import { slotState, PROSE_SLOTS } from "../db-schema-apply/apply.mjs";
+// Prose slots a db-schema doc carries besides per-column descriptions.
+// (Formerly imported from db-schema-apply; the format's owner is akg now —
+// schemas/db-schema/v1 — and these are the two prose regions it models.)
+export const PROSE_SLOTS = ["purpose", "queries"];
 
 const TOP_KEYS = [...PROSE_SLOTS, "columns"];
 const ENTRY_KEYS = ["text", "evidence"];
-
-// States apply will fill (inferred only via the default refresh behavior).
-const FILLABLE = new Set(["empty", "scaffold", "inferred"]);
-
-/**
- * Inventory the meaning slots of a generated doc.
- * @returns {{slots: Array<{slot:string, state:string, fillable:boolean}>,
- *            counts: Record<string, number>}}
- * @throws on a markerless doc (not a db-schema-docs product).
- */
-export function listSlots(content) {
-  if (!hasMarkers(content))
-    throw new Error("dbdoc 마커가 없는 문서입니다 — db-schema-docs 산출물에만 제안할 수 있습니다");
-  const slots = [];
-  for (const id of PROSE_SLOTS) {
-    const body = extractRegion(content, id);
-    if (body == null) continue;
-    const state = slotState(body);
-    slots.push({ slot: id, state, fillable: FILLABLE.has(state) });
-  }
-  for (const [name, desc] of extractColumnDescriptions(content)) {
-    const state = slotState(desc);
-    slots.push({ slot: `column:${name}`, state, fillable: FILLABLE.has(state) });
-  }
-  const counts = {};
-  for (const s of slots) counts[s.state] = (counts[s.state] ?? 0) + 1;
-  return { slots, counts };
-}
 
 function checkEntry(entry, ctx, errors, warnings) {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
@@ -77,12 +52,13 @@ function checkEntry(entry, ctx, errors, warnings) {
 }
 
 /**
- * Lint a proposal against the contract shape and the target doc.
- * errors  — contract violations / entries apply would silently drop
- * warnings — entries apply will visibly skip (confirmed freeze) or hygiene
+ * Lint a proposal against the contract shape.
+ * errors  — contract violations (unknown keys, wrong types) that would
+ *           otherwise strand or corrupt the proposal downstream
+ * warnings — hygiene (evidence missing/empty — akg refuses these at adopt)
  * @returns {{ok: boolean, errors: string[], warnings: string[]}}
  */
-export function lintProposal(content, proposal) {
+export function lintProposal(proposal) {
   const errors = [];
   const warnings = [];
 
@@ -94,17 +70,9 @@ export function lintProposal(content, proposal) {
   }
   if (Object.keys(proposal).length === 0) warnings.push("빈 제안입니다 — 넘길 내용이 없습니다");
 
-  const marked = hasMarkers(content);
-  if (!marked) errors.push("대상 문서에 dbdoc 마커가 없습니다 — apply 가 conflict 로 거부합니다");
-  const docCols = marked ? extractColumnDescriptions(content) : new Map();
-
   for (const id of PROSE_SLOTS) {
     if (!(id in proposal)) continue;
     checkEntry(proposal[id], id, errors, warnings);
-    if (!marked) continue;
-    const body = extractRegion(content, id);
-    if (body == null) errors.push(`${id}: 문서에 해당 구역이 없습니다 — apply 가 조용히 버립니다`);
-    else if (slotState(body) === "confirmed") warnings.push(`${id}: confirmed 동결 — apply 가 건너뜁니다(skipped)`);
   }
 
   if (proposal.columns !== undefined) {
@@ -113,11 +81,6 @@ export function lintProposal(content, proposal) {
     } else {
       for (const [name, entry] of Object.entries(proposal.columns)) {
         checkEntry(entry, `columns.${name}`, errors, warnings);
-        if (!marked) continue;
-        if (!docCols.has(name.toUpperCase()))
-          errors.push(`columns.${name}: 문서에 없는 컬럼입니다 — apply 가 조용히 버립니다`);
-        else if (slotState(docCols.get(name.toUpperCase())) === "confirmed")
-          warnings.push(`columns.${name}: confirmed 동결 — apply 가 건너뜁니다(skipped)`);
       }
     }
   }
@@ -128,11 +91,10 @@ export function lintProposal(content, proposal) {
 // ---------------------------------------------------------------------------
 // akg exit (issue #125)
 //
-// The same proposal can leave through two doors. db-schema-apply writes it into
-// a local md file; `akg propose` submits it to the hub's review queue. Only the
-// address form differs — both sides carry the same tiers (scaffold/inferred/
-// confirmed) and both refuse a filled slot without evidence, so this is a
-// rename, not a reinterpretation.
+// Only the address form differs between the proposal contract and akg's slots
+// — both sides carry the same tiers (scaffold/inferred/confirmed) and both
+// refuse a filled slot without evidence, so this is a rename, not a
+// reinterpretation.
 //
 //   purpose          -> "purpose"
 //   columns.STATUS   -> "columnDescs.STATUS"
@@ -149,15 +111,12 @@ const AKG_UNMAPPABLE = {
     "akg 는 queries 를 {sql, note}[] 로 모델링합니다 — note 를 매달 sql 이 제안에 없어 주소를 만들 수 없습니다. 대표 쿼리는 대시보드에서 직접 넣으세요",
 };
 
-// Why evidence is checked HERE and not left to the server: POST /api/proposals
-// stores the proposal without inspecting slot values (submit-time validation is
-// a known gap — scenarios R5). The rejection lands at ADOPT instead, where
-// routes/proposals.mjs returns 400 invalid_slot_value on the FIRST text-less or
-// evidence-less slot and abandons the whole adopt. So one sloppy entry does not
-// degrade gracefully — it strands the entire proposal in the queue, discovered
-// by a reviewer who cannot fix it. Withhold it at the producer instead.
+// Why evidence is checked HERE even though akg now validates at submit time
+// (akg #21): a producer that ships a knowingly-rejectable slot forces a round
+// trip through the server to learn what this function already knows. Withhold
+// it at the producer and report it instead.
 const NO_EVIDENCE =
-  "근거가 없습니다 — akg 는 채택(adopt) 시 이런 슬롯을 invalid_slot_value(400)로 거부하고, 그 제안 전체가 거기서 멈춥니다";
+  "근거가 없습니다 — akg 는 이런 슬롯을 제출/채택 검증에서 invalid_slot_value 로 거부합니다";
 
 /**
  * Translate a proposal into akg `POST /api/proposals` slots.
@@ -169,10 +128,10 @@ const NO_EVIDENCE =
  * @param {object} proposal
  * @param {{tier?: string}} [opts] tier recorded on every translated slot.
  *   Default "inferred", and a producer may never pass "confirmed" — promotion
- *   is human-only, the same rule db-schema-apply enforces locally. Note the
- *   server does not take this on trust: adopt pins tier to "inferred" itself
- *   regardless of what the proposal says. The field records producer intent
- *   and agrees with what the server will write; it does not decide it.
+ *   is human-only. Note the server does not take this on trust: adopt pins
+ *   tier to "inferred" itself regardless of what the proposal says. The field
+ *   records producer intent and agrees with what the server will write; it
+ *   does not decide it.
  * @returns {{slots: Record<string, {text: string, tier: string, evidence: string[]}>,
  *            unmapped: Array<{key: string, reason: string}>}}
  */
