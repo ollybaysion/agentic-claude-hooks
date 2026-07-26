@@ -1128,6 +1128,10 @@ process.stdout.write("\n# custom pages (config.customPages → GET /<name>)\n");
     const health = await getRaw(45784, "/health");
     check("custom page: cannot shadow a builtin route (/health stays builtin)",
       health.status === 200 && !health.text.includes("__PAGE_MARKER__"), health.text.slice(0, 40));
+    const home = await getRaw(45784, "/");
+    check("custom page: nav link injected into dashboard shell (marker replaced)",
+      /href="\/projects" class="cext"/.test(home.text) && !home.text.includes("<!--custom-nav-->"),
+      home.text.includes("<!--custom-nav-->") ? "marker not replaced" : "no cext link");
   } finally {
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
