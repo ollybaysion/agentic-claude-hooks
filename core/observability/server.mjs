@@ -35,7 +35,7 @@ import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.23.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변)
+const VERSION = "0.24.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -4070,6 +4070,36 @@ function handleAppJs(req, res) {
   res.end(DASHBOARD_JS);
 }
 
+// Serve a config-mounted local HTML file (see loadCustomPages). Read fresh on
+// every request so a regenerated file shows up immediately — no restart needed
+// to see new content. Static-document CSP: inline styles + data: images are
+// allowed, scripts are blocked. The path comes from operator config, not the
+// request (the URL only selects a preconfigured entry), so there is no path
+// traversal surface here.
+function handleCustomPage(req, res, name) {
+  let html;
+  try {
+    html = fs.readFileSync(expandTilde(CUSTOM_PAGES[name]), "utf8");
+  } catch {
+    const safe = name.replace(/[^a-z0-9_-]/gi, "");
+    res.writeHead(404, { "Content-Type": "text/html; charset=utf-8", "X-Content-Type-Options": "nosniff" });
+    res.end(
+      `<!doctype html><meta charset="utf-8"><body style="font-family:system-ui,sans-serif;padding:2rem;max-width:40rem">` +
+        `<h1>페이지를 읽을 수 없음</h1><p>커스텀 페이지 <code>${safe}</code>의 파일이 없거나 읽히지 않습니다. ` +
+        `config.json의 <code>customPages.${safe}</code> 경로와 파일 존재를 확인하세요.</p>`,
+    );
+    return;
+  }
+  res.writeHead(200, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-store",
+  });
+  res.end(html);
+}
+
 // ── router ──────────────────────────────────────────────────────────────────
 function onRequest(req, res) {
   try {
@@ -4125,6 +4155,15 @@ function onRequest(req, res) {
     if (pathname === "/app.js") {
       if (req.method === "GET") return handleAppJs(req, res);
       return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+    }
+    // config-mounted custom pages (loadCustomPages) — matched after every
+    // built-in route above so a page name can never shadow a real endpoint.
+    {
+      const pageName = pathname.replace(/^\//, "");
+      if (Object.prototype.hasOwnProperty.call(CUSTOM_PAGES, pageName)) {
+        if (req.method === "GET") return handleCustomPage(req, res, pageName);
+        return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
+      }
     }
     return json(res, 404, { error: "not found" });
   } catch (e) {
@@ -4192,6 +4231,27 @@ function loadThresholds() {
   } catch {}
 }
 
+// config.json {customPages:{name:path}} mounts a local HTML file at GET /<name>
+// (e.g. a personal project dashboard). The plugin ships only the MECHANISM —
+// the page content and its data stay in the operator's local file, so nothing
+// personal is baked into the published server. Names are restricted to
+// [a-z0-9_-] and matched only after every built-in route (see router), so a
+// custom page can never shadow a real endpoint. Read once at boot; restart to
+// pick up config changes. Fail-open: bad file/shape → no pages mounted.
+let CUSTOM_PAGES = {};
+function loadCustomPages() {
+  try {
+    const c = JSON.parse(fs.readFileSync(configFile(DATA_DIR), "utf8"));
+    if (!c.customPages || typeof c.customPages !== "object") return;
+    const next = {};
+    for (const k of Object.keys(c.customPages)) {
+      const v = c.customPages[k];
+      if (typeof v === "string" && v && /^[a-z0-9_-]+$/i.test(k)) next[k] = v;
+    }
+    CUSTOM_PAGES = next;
+  } catch {}
+}
+
 function writePidfile() {
   const data = { pid: process.pid, host: HOST, port: PORT, startedAt: STARTED_AT, version: VERSION };
   try { fs.writeFileSync(pidFile(DATA_DIR), JSON.stringify(data), { mode: 0o600 }); }
@@ -4251,6 +4311,7 @@ async function startServer() {
   loadToken();
   loadPricing();
   loadThresholds();
+  loadCustomPages();
   EXPECT = TOKEN ? sha256(TOKEN) : null;
 
   await startBackend(); // open SQLite, migrate, seed SEQ (degrades to null on failure)

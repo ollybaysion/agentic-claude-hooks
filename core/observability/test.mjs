@@ -1090,6 +1090,51 @@ process.stdout.write("\n# dashboard edit (POST /actions/schema-docs/edit)\n");
   }
 }
 
+// ── custom pages (#129: config.customPages mounts a local HTML file) ─────────
+process.stdout.write("\n# custom pages (config.customPages → GET /<name>)\n");
+{
+  const getRaw = (port, p, method = "GET") =>
+    new Promise((resolve, reject) => {
+      const r = http.request({ host: "127.0.0.1", port, path: p, method, headers: { Host: "127.0.0.1" } }, (res) => {
+        const c = []; res.on("data", (x) => c.push(x));
+        res.on("end", () => resolve({ status: res.statusCode, headers: res.headers, text: Buffer.concat(c).toString() }));
+      });
+      r.on("error", reject); r.end();
+    });
+  const pageDir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-page-"));
+  const pageFile = path.join(pageDir, "dash.html");
+  fs.writeFileSync(pageFile, "<!doctype html><title>PG</title><body>__PAGE_MARKER__</body>");
+  // `health` is configured on purpose to prove a custom page CANNOT shadow a
+  // builtin route (the builtin is matched first — see router).
+  fs.writeFileSync(path.join(DATA_DIR, "config.json"),
+    JSON.stringify({ customPages: { projects: pageFile, broken: path.join(pageDir, "nope.html"), health: pageFile } }));
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_PORT: "45784" }, stdio: "ignore" });
+  try {
+    if (!(await waitHealth(45784))) throw new Error("server did not come up");
+    const okp = await getRaw(45784, "/projects");
+    check("custom page: GET /projects → 200 + file body served",
+      okp.status === 200 && okp.text.includes("__PAGE_MARKER__"), JSON.stringify({ s: okp.status }));
+    const csp = okp.headers["content-security-policy"] || "";
+    check("custom page: static-doc CSP (inline style allowed, scripts blocked)",
+      /style-src 'unsafe-inline'/.test(csp) && !/script-src/.test(csp), csp);
+    const missing = await getRaw(45784, "/broken");
+    check("custom page: configured but file missing → friendly 404 html",
+      missing.status === 404 && missing.text.includes("페이지를 읽을 수 없음"), JSON.stringify({ s: missing.status }));
+    const unreg = await getRaw(45784, "/nope");
+    check("custom page: unregistered name → 404 not-found json",
+      unreg.status === 404 && /not found/.test(unreg.text), unreg.text.slice(0, 40));
+    const post = await getRaw(45784, "/projects", "POST");
+    check("custom page: non-GET → 405", post.status === 405, JSON.stringify({ s: post.status }));
+    const health = await getRaw(45784, "/health");
+    check("custom page: cannot shadow a builtin route (/health stays builtin)",
+      health.status === 200 && !health.text.includes("__PAGE_MARKER__"), health.text.slice(0, 40));
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+    try { fs.rmSync(pageDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
 // ── done ─────────────────────────────────────────────────────────────────────
 try { fs.rmSync(DATA_DIR, { recursive: true, force: true }); } catch {}
 process.stdout.write(`\n${failures ? "FAILED " + failures : "ALL PASS"}\n`);
