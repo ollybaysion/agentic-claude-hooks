@@ -9,6 +9,7 @@
 - **Write/Edit 판정 기준 = 대상 파일**: Write/Edit/MultiEdit은 세션 cwd가 아니라 **`file_path`가 속한 저장소**의 브랜치로 판정한다(#71). cwd가 main 체크아웃이어도 저장소 밖·다른 워크트리 파일은 통과하고, 반대로 cwd가 어디든 main 체크아웃 안 파일은 차단. 상대경로는 세션 cwd 기준으로 해석, 아직 없는 디렉토리는 존재하는 조상으로 판정
 - **Bash 판정 기준 = 실행 저장소**: 브랜치 의존 규칙(commit/merge/bare push)은 세션 cwd 기준이되, **`git -C <dir>`가 있으면 그 디렉토리로 재앵커**한다(#78) — `git -C <main 체크아웃> commit`은 어디서 치든 차단, `git -C <feature 워크트리> commit`은 cwd가 main이어도 통과. 복수 `-C`는 git 시맨틱대로 순차 결합, 상대경로는 세션 cwd 기준. 미확장 변수(`-C "$WT"`)·비존재 경로는 판정 불가 → **fail-open**(cwd 폴백으로 오탐 내지 않음)
 - **범위**: main 보호 + force-push + `--no-verify` + PR 머지 차단. `reset --hard`·`clean`·`checkout .`은 **bash-guard** 소관
+- **파일 구성**: `decide.mjs` = 하네스 중립 정책 본체(`decideGit({kind,command,filePath,cwd})` → `{action,rule,reason}|null`, `kind`는 `"bash"`/`"edit"`), `git-guard.mjs` = Claude Code 어댑터(훅 I/O). opencode 어댑터(`adapters/opencode/`)도 같은 `decide.mjs`를 호출한다 — **정책은 한 곳에만**
 
 ## 차단 규칙
 

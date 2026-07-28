@@ -70,7 +70,14 @@ re-derived over a truncated stream; `unattributed = session total − Σ settled
 keeps the cost identity exact. Stages 2-3 add `/stats/fleet-turns` (aggregate) and
 the **insight** dashboard tab (fleet-wide turn stats). See `docs/agent-dashboard-fleet-turns-design.md`.
 
-`/stats/*` params: `window=1h|6h|24h|7d|30d` (whitelist; defaults 24h, sessions 7d),
+**#74 multi-runtime:** events carry an optional `runtime` column (schema v8) —
+NULL for Claude Code, `"opencode"` for events sent by `adapters/opencode/`.
+`/stats/sessions` rolls it up per session (`MAX(runtime)`, so one tagged event is
+enough) and the Sessions tab badges anything that isn't the default harness. No
+backfill: an absent value simply reads as `claude-code`.
+
+`/stats/*` params: `window=1h|6h|24h|7d|30d|90d|all` (whitelist; defaults 24h, sessions 7d;
+`all` = no time limit),
 `source_app` (sessions/tools), `limit` (sessions, ≤200). Aggregates avoid the
 `payload` column except four documented, bounded cases — `/stats/guards` and
 `/stats/nudges` (rare custom rows), `/stats/sessions`' `first_prompt` (one row

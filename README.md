@@ -18,6 +18,17 @@ under `skills/`.
 | [`obs-lazy-start`](core/obs-lazy-start/README.md) | SessionStart | ✅ active | Spawn the collector (detached) if it isn't already running |
 | [`observability`](core/observability/README.md) | _(server)_ | ✅ active | Collector server: receives, stores (SQLite), redacts & streams hook events to a dashboard |
 
+## Adapters
+
+The guards' rules live in runtime-neutral cores (`core/bash-guard/decide.mjs`,
+`core/git-guard/decide.mjs`) that know nothing about a harness. Each adapter is
+thin I/O around them, so a rule fixed once is fixed everywhere.
+
+| Adapter | Target | Status | Purpose |
+| --- | --- | --- | --- |
+| _(built in)_ | Claude Code | ✅ active | `core/*/…​.mjs` — stdin event → `permissionDecision` JSON |
+| [`opencode`](adapters/opencode/README.md) | [opencode](https://opencode.ai) | ✅ active | One plugin: bash-guard + git-guard via `tool.execute.before` throw, repeat-retry suppression, and session/tool observation into the same collector (tagged `runtime: "opencode"`). Install: [`docs/opencode.md`](docs/opencode.md) |
+
 ## Skills
 
 User-invoked procedural skills (not hooks). Live under `skills/<name>/SKILL.md`
@@ -42,7 +53,10 @@ claude-hooks/
 ├── hooks/
 │   └── hooks.json         # central wiring: every hook, grouped by event
 ├── core/<module>/         # one self-contained module per hook
+│   └── decide.mjs         # (guards) runtime-neutral rules, shared by every adapter
+├── adapters/<target>/     # one folder per non-Claude-Code harness (opencode)
 ├── skills/<name>/         # one self-contained skill (SKILL.md) per workflow
+├── docs/                  # design docs + install manuals (docs/opencode.md)
 ├── lib/hook-io.mjs        # shared stdin/decision helpers
 ├── lib/shell-lex.mjs      # shared quote-aware argv lexer (git-guard, bash-guard)
 └── README.md

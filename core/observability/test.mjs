@@ -798,7 +798,7 @@ cli("ingest-usage");
   const curs = db2.prepare("SELECT COUNT(*) c FROM transcript_cursor WHERE session_id = ?").get(SESSION);
   const ver = db2.prepare("SELECT * FROM pragma_user_version").get();
   db2.close();
-  check("sub: v3 DB migrated to schema v7 (cursor PK rebuild + usage.agent_id/inserted_at)", ver && Object.values(ver)[0] === 7, JSON.stringify(ver));
+  check("sub: v3 DB migrated to schema v8 (cursor PK rebuild + usage.agent_id/inserted_at + events.runtime)", ver && Object.values(ver)[0] === 8, JSON.stringify(ver));
   check("sub: agent file ingested — sidechain=1 + agent_id from filename",
     subRows.length === 2 && subRows.every((r) => r.sidechain === 1 && r.agent_id === "agsub1"), JSON.stringify(subRows));
   check("sub: per-(session,path) cursors — main + 1 agent file = 2", curs && curs.c === 2, JSON.stringify(curs));
@@ -825,7 +825,7 @@ cli("materialize-turns"); // backfill from the seeded events
   const openRows = rows("sess-open").length;
   const virt = rows("sess-zero").find((r) => r.turn_seq === 0);
   db2.close();
-  check("mat: v7 turns/turn_cursor live", ver && Object.values(ver)[0] === 7, JSON.stringify(ver));
+  check("mat: v8 turns/turn_cursor live", ver && Object.values(ver)[0] === 8, JSON.stringify(ver));
   check("mat: sess-turn — all 6 settled turns materialized (idle session)", stRows.length === 6, JSON.stringify(stRows.map((r) => r.turn_seq)));
   check("mat: row mirrors buildTurns (T1 tool_ms 40400 + long-tail flag+mask)",
     t1 && t1.tool_ms === 40400 && JSON.parse(t1.flags).includes("long-tail") && (t1.flags_mask & 16) !== 0,
@@ -1136,6 +1136,56 @@ process.stdout.write("\n# custom pages (config.customPages → GET /<name>)\n");
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
     try { fs.rmSync(pageDir, { recursive: true, force: true }); } catch {}
+  }
+}
+
+// ══ #74 — runtime tagging (opencode adapter) + the `all` window ══════════════
+// The opencode plugin POSTs the same envelopes as the CC hooks plus one field:
+// `runtime`. It must land in its own column (promoted, not payload) and roll up
+// per session, so the dashboard can tell an opencode session from a CC one.
+// DURABLE=1 makes the ingest store-before-ack, so the POST→read is deterministic.
+process.stdout.write("\n# runtime tagging + all-time window (#74)\n");
+{
+  const port = 45790;
+  const srv = spawn("node", [...NODE_ARGS, SERVER],
+    { env: { ...baseEnv, OBS_PORT: String(port), OBS_DURABLE: "1" }, stdio: "ignore" });
+  try {
+    if (!(await waitHealth(port))) throw new Error("server did not come up");
+    const oc = (type, extra) => postJson(port, "/events", {
+      source_app: "ocproj", session_id: "ses_oc", hook_event_type: type,
+      runtime: "opencode", timestamp: Date.now(), payload: { runtime: "opencode" }, ...extra,
+    });
+    await oc("SessionStart");
+    await oc("UserPromptSubmit", { payload: { prompt: "오픈코드에서 온 프롬프트" } });
+    await oc("PreToolUse", { tool_name: "bash", tool_use_id: "oc-call-1" });
+    await postJson(port, "/events", { // an untagged (Claude Code) session for contrast
+      source_app: "ccproj", session_id: "ses_cc", hook_event_type: "UserPromptSubmit",
+      timestamp: Date.now(), payload: { prompt: "클로드 코드에서 온 프롬프트" },
+    });
+
+    const s = await get(port, "/stats/sessions?window=7d&limit=100");
+    const ocRow = (s.sessions || []).find((r) => r.session_id === "ses_oc");
+    const ccRow = (s.sessions || []).find((r) => r.session_id === "ses_cc");
+    check("runtime: opencode session tagged", ocRow && ocRow.runtime === "opencode", JSON.stringify(ocRow && ocRow.runtime));
+    check("runtime: untagged session reads claude-code", ccRow && ccRow.runtime === "claude-code", JSON.stringify(ccRow && ccRow.runtime));
+    check("runtime: opencode turns counted like CC (UserPromptSubmit)", ocRow && ocRow.turns === 1, JSON.stringify(ocRow && ocRow.turns));
+    check("runtime: opencode first_prompt derived", ocRow && ocRow.first_prompt === "오픈코드에서 온 프롬프트", JSON.stringify(ocRow && ocRow.first_prompt));
+
+    const ev = await get(port, "/events?session_id=ses_oc&limit=10");
+    check("runtime: promoted to a column on the event row",
+      (ev.events || []).every((e) => e.runtime === "opencode"), JSON.stringify((ev.events || []).map((e) => e.runtime)));
+
+    // window=all reaches rows older than every fixed window (the seeded fixtures
+    // above are backdated); an unknown window still falls back to the default.
+    const all = await get(port, "/stats/sessions?window=all&limit=200");
+    const w7 = await get(port, "/stats/sessions?window=7d&limit=200");
+    check("window=all: no time limit (≥ the 7d result)", all.count >= w7.count, `${all.count} vs ${w7.count}`);
+    check("window=all: window_ms is the all-time sentinel", all.window_ms === 8_640_000_000_000_000, String(all.window_ms));
+    const bogus = await get(port, "/stats/sessions?window=nonsense&limit=10");
+    check("window whitelist: unknown value falls back to the default (7d)", bogus.window_ms === 604_800_000, String(bogus.window_ms));
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
   }
 }
 
