@@ -27,7 +27,7 @@ thin I/O around them, so a rule fixed once is fixed everywhere.
 | Adapter | Target | Status | Purpose |
 | --- | --- | --- | --- |
 | _(built in)_ | Claude Code | ✅ active | `core/*/…​.mjs` — stdin event → `permissionDecision` JSON |
-| [`opencode`](adapters/opencode/README.md) | [opencode](https://opencode.ai) | ✅ active | One plugin: bash-guard + git-guard via `tool.execute.before` throw, repeat-retry suppression, and session/tool observation into the same collector (tagged `runtime: "opencode"`). Install: [`docs/opencode.md`](docs/opencode.md) |
+| [`opencode`](adapters/opencode/README.md) | [opencode](https://opencode.ai) | ✅ active | One plugin: bash-guard + git-guard via `tool.execute.before` throw, repeat-retry suppression, and session/tool observation into the same collector (tagged `runtime: "opencode"`). Plus `backfill.mjs` — imports pre-install history (sessions, tool calls, per-step tokens) from `opencode.db` with its original timestamps. Install: [`docs/opencode.md`](docs/opencode.md) |
 
 ## Skills
 
