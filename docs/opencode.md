@@ -57,10 +57,28 @@ claude-hooks의 가드(bash-guard·git-guard)와 관측(observability collector)
 
 ## 2. 설치
 
+opencode가 **실제로 도는 그 머신**에서 한다. 요구사항은 두 가지뿐이다 — 이 저장소
+체크아웃 하나, 그리고 `node`(collector 기동용. 가드 자체는 opencode의 Bun에서 돈다).
+npm install은 없다(런타임 의존성 0).
+
+### 2.0 준비 — 체크아웃 하나
+
+스텁이 체크아웃 경로를 가리키므로 **경로가 변하지 않는 clone**이 필요하다.
+
+```bash
+git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/repo/claude-hooks
+# PR #132 머지 전이라면:
+git -C ~/repo/claude-hooks switch feat/opencode-adapter
+```
+
+> ⚠️ `~/.claude/plugins/…` **마켓플레이스 캐시 경로를 가리키게 하지 마라** — 플러그인
+> 업데이트마다 경로가 바뀌어 스텁이 끊긴다. 체크아웃을 옮겼다면 설치기를 다시 실행한다.
+
 ### 2.1 전역 설치 (권장)
 
 ```bash
-node /path/to/claude-hooks/adapters/opencode/install.mjs
+node ~/repo/claude-hooks/adapters/opencode/install.mjs
+# node가 없으면 bun으로도 된다: bun ~/repo/claude-hooks/adapters/opencode/install.mjs
 ```
 
 `~/.config/opencode/plugin/claude-hooks.js` 와 `~/.config/opencode/plugins/claude-hooks.js`
@@ -113,6 +131,14 @@ node adapters/opencode/install.mjs --uninstall                       # 설치한
    방금 그 opencode 세션이 세션 ID 옆 **`OC` 배지**와 함께 보여야 한다.
    (collector가 안 떠 있었다면 어댑터가 알아서 띄운다. 수동으로는
    `node core/observability/server.mjs &`.)
+
+   > **대시보드는 하나다 — 단, 머신당 하나.** Claude Code 세션과 opencode 세션은
+   > 같은 collector·같은 DB·같은 sessions 탭에 들어가고 `runtime` 배지로만 구분된다
+   > (탭·포트·DB를 따로 만들지 않았다). 다만 collector는 `127.0.0.1`에만 바인딩하고
+   > 요청의 Host도 loopback만 받으므로 **박스가 다르면 각자 자기 대시보드**가 된다.
+   > 한 곳에 모으려면 opencode 박스에서 SSH 터널을 열어 그 포트로 보내면 된다:
+   > `ssh -N -L 4090:127.0.0.1:4090 <대시보드-박스>` + `CLAUDE_HOOKS_OC_AUTOSTART=off`
+   > (터널이 이미 4090을 점유하므로 로컬 collector는 안 뜬다).
 
 4. **차단 기록**: 같은 대시보드 **guards** 탭에 방금 거부가 `bash-guard /
    dangerous-rm`으로 집계된다.
