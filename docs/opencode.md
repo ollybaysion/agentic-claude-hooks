@@ -227,12 +227,70 @@ opencode를 띄우기 전에 export 한다.
 
 ---
 
-## 7. 아직 안 되는 것 (남은 작업)
+## 7. 과거 세션 백필 (#119)
 
-- **토큰·비용**: opencode의 per-step 토큰은 `~/.local/share/opencode/opencode.db`에
-  있다. 대시보드 Tokens 탭은 CC 트랜스크립트만 읽으므로 opencode 세션은 비어 보인다.
-  → 이슈 #119(기존 세션 백필) 재개가 필요하다.
-- **과거 세션 백필**: 이 어댑터는 **설치 이후**의 세션만 기록한다.
+플러그인은 **설치 이후** 세션만 기록한다. 그 전의 opencode 히스토리(세션·프롬프트·툴
+호출·per-step 토큰)는 `~/.local/share/opencode/opencode.db`에 다 있으므로 한 번 옮겨오면
+된다.
+
+```bash
+node adapters/opencode/backfill.mjs --inspect   # 이 DB에 실제로 뭐가 있는지 먼저 본다
+node adapters/opencode/backfill.mjs             # dry run(기본): 세션/이벤트/토큰 집계만 출력
+node adapters/opencode/backfill.mjs --write     # 실제 적재 (수집기를 먼저 stop!)
+```
+
+옵션: `--db <path>` · `--data-dir <수집기 상태 디렉터리>` · `--since <일수>` ·
+`--session <id>` · `--app <라벨>` · `--force`(이미 적재한 세션 다시).
+
+### 왜 HTTP가 아니라 DB에 직접 쓰나
+
+수집기는 ingest 시점에 `received_at = Date.now()`를 찍는다(서버 시계가 순서의
+진실원). 그래서 과거 이벤트를 `POST /events`로 보내면 **전부 "오늘"로 기록**되어
+히스토리가 아니라 오늘 하루짜리 거대한 가짜 세션이 된다. 원래 타임스탬프를 살리는
+방법은 수집기 DB에 직접 쓰는 것뿐이고, 이는 수집기 자신의 `ingest-usage` CLI가
+쓰는 경로와 같다.
+
+### `--write` 전에 알아야 할 3가지
+
+1. **수집기를 먼저 멈춰라** — `node core/observability/server.mjs stop`.
+   수집기는 `seq`를 부팅 시 메모리에 올려두고 증가시킨다. 뒤에서 행을 밀어넣으면
+   같은 seq를 재사용하다가 `INSERT OR IGNORE`로 **라이브 이벤트가 조용히 버려진다.**
+   (스크립트가 포트가 열려 있으면 아예 거부한다.)
+2. **보존 창을 늘려라** — 백필 행은 정의상 전부 오래된 행이라, 기본
+   `OBS_MAX_AGE_DAYS=7` 정책이 다음 retention 패스에서 아카이브로 밀어낸다.
+   수집기를 `OBS_MAX_AGE_DAYS=3650`으로 기동해야 남는다.
+3. **재실행 안전** — 툴 이벤트는 수집기의 `UNIQUE(tool_use_id, hook_event_type)`로,
+   나머지는 커서 파일(`<데이터디렉터리>/opencode-backfill.json`)로 중복을 막는다.
+   `--force`는 해당 세션의 **이전 백필분만** 지우고 다시 넣는다(라이브 플러그인이
+   기록한 행은 payload의 `backfill` 표시로 구분해 건드리지 않는다).
+
+적재 후: 수집기 재기동 → sessions 탭 기간 **전체** → `OC` 배지 달린 과거 세션.
+턴 집계까지 채우려면 `node core/observability/server.mjs materialize-turns`.
+
+### 매핑 (opencode → 대시보드)
+
+| opencode | 대시보드 이벤트 |
+| --- | --- |
+| `session` 행 | `SessionStart` (+ 1시간 이상 조용하면 `SessionEnd`) |
+| `message` role=user | `UserPromptSubmit` (턴 수) — 본문은 `text` 파트 |
+| `part` type=tool | `PreToolUse` + `PostToolUse` (callID = tool_use_id, 실패는 error) |
+| `message` 완료 | `Stop` (턴 경계) |
+| `part` type=step-finish | `usage` 행 (input/output/cache read·write, 모델) → Tokens 탭 |
+
+opencode DB의 컬럼 이름은 공개 계약이 아니라서 **스키마를 추론해서 읽는다**(있는 컬럼을
+찾아 쓰고, 없으면 JSON `data`에서 캔다). 매핑이 어긋나 결과가 비면 `--inspect` 출력이
+실제 테이블·컬럼·`part.type` 히스토그램을 보여주니 그걸로 고치면 된다.
+
+> `cost`는 provider가 0으로 주는 경우가 많다. 대시보드는 토큰 수 × 자체 단가표로
+> 비용을 계산하므로, 모델 이름이 단가표 프리픽스와 안 맞으면 `unpriced`로 잡힌다.
+
+---
+
+## 8. 아직 안 되는 것
+
+- **라이브 토큰**: 백필은 과거 토큰을 채우지만, 설치 이후 세션의 토큰은 아직
+  수집하지 않는다(플러그인이 opencode DB를 폴링하지 않는다). 필요하면 백필을 주기적으로
+  다시 돌리는 게 현재 수단이다.
 - **컨텍스트 주입 / lint 교정 루프**: opencode에 UserPromptSubmit 동급 훅이 없고,
   `tool.execute.after` 피드백이 CC의 exit-2 교정 루프와 등가인지 미검증.
 - **`permission.ask` 훅**: 보조 방어선으로 구현해 뒀지만 실제 opencode에서

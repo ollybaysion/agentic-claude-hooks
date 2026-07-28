@@ -5,7 +5,9 @@ claude-hooks의 가드와 관측을 [opencode](https://opencode.ai)에서 쓰기
 
 ```bash
 node adapters/opencode/install.mjs        # 전역 설치 → opencode 재시작
+node adapters/opencode/backfill.mjs       # 과거 opencode 세션 가져오기 (dry run)
 node adapters/opencode/test.mjs           # 어댑터 회귀 테스트
+node adapters/opencode/backfill.test.mjs  # 백필 회귀 테스트
 ```
 
 ## 이 폴더의 것
@@ -14,7 +16,9 @@ node adapters/opencode/test.mjs           # 어댑터 회귀 테스트
 | --- | --- |
 | `plugin.js` | opencode 플러그인 본체. 훅 I/O만 담당 — 규칙은 갖고 있지 않다 |
 | `install.mjs` | opencode 플러그인 디렉터리에 스텁(재export 한 줄)을 심는다 |
+| `backfill.mjs` | opencode.db의 **과거** 세션·툴호출·토큰을 수집기로 옮긴다 (#119) |
 | `test.mjs` | 차단/통과/fail-open/재시도 억제 회귀 테스트 (opencode 없이 돈다) |
+| `backfill.test.mjs` | 합성 opencode.db fixture로 백필 전 구간 검증 |
 
 ## 구조 — 왜 어댑터인가
 
