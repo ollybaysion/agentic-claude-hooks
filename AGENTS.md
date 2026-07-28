@@ -7,7 +7,7 @@ independent hooks; adding one must not change any existing module.
 
 1. **Create a self-contained module** at `core/<name>/`:
 
-   ```
+   ```text
    core/<name>/
    ├── <name>.mjs        # hook logic (Node ESM)
    ├── config/...        # optional: bundled config, applied explicitly
@@ -62,6 +62,23 @@ independent hooks; adding one must not change any existing module.
   `Stop` or CI).
 - **Fail open on missing external tools** so a partial install never breaks a
   session; document the tool as a requirement in your README.
+
+## Guards: rules go in `decide.mjs`, not in the hook
+
+`bash-guard` and `git-guard` run on Claude Code **and** on opencode
+(`adapters/opencode/`). Their rules therefore live in a runtime-neutral
+`core/<name>/decide.mjs` — no stdin, no exit codes, no harness types — and every
+adapter is thin I/O around it:
+
+```js
+// core/<name>/decide.mjs
+export function decideX(...) { /* → { action: "deny"|"ask", rule, reason } | null */ }
+```
+
+When you touch a guard: change `decide.mjs` (both harnesses get it), keep the
+`<name>.mjs` hook as the CC translation layer, and run `node core/<name>/test.mjs`
+plus `node adapters/opencode/test.mjs`. A rule written directly into a hook file
+is a rule opencode will not enforce.
 
 ## Test locally before wiring
 

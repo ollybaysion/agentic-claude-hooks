@@ -35,7 +35,7 @@ import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.24.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP) · 0.24.1: custom page nav links (#129 후속 — 대시보드 nav에 config customPages 링크 자동 주입: 서빙 시점 <!--custom-nav--> 마커 치환, 해시탭 아닌 별도 페이지 링크(우측 정렬·↗))
+const VERSION = "0.25.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP) · 0.24.1: custom page nav links (#129 후속 — 대시보드 nav에 config customPages 링크 자동 주입: 서빙 시점 <!--custom-nav--> 마커 치환, 해시탭 아닌 별도 페이지 링크(우측 정렬·↗)) · 0.25.0: opencode 세션 관측 (#74 — events.runtime 컬럼 스키마 v8: 어느 하네스가 만든 이벤트인지 승격 컬럼으로 기록(CC=NULL, opencode 어댑터만 "opencode"), /stats/sessions가 MAX(runtime)으로 세션당 런타임을 돌려주고 sessions 탭이 CC 아닌 세션에만 배지 표시; 기간 화이트리스트에 90d·all 추가 + sessions 셀렉터에 30d·전체)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -153,7 +153,11 @@ const KNOWN_EVENTS = new Set([
 // Custom observation types (GuardDecision, NudgeFired, NudgeOutcome, DbQuery) are
 // intentionally NOT listed above: they store with unknown_event=1 like any other
 // non-CC type and are read back by their own /stats/* handlers.
-const PROMOTED = ["tool_name", "tool_use_id", "error", "agent_id", "agent_type", "source", "reason"];
+// `runtime` (#74) is the harness that produced the event — absent/NULL for
+// Claude Code (the default and the overwhelming majority), "opencode" for the
+// opencode adapter. A promoted COLUMN, not a payload field: every session
+// rollup needs it, and payload parsing is the one thing the aggregates avoid.
+const PROMOTED = ["tool_name", "tool_use_id", "error", "agent_id", "agent_type", "source", "reason", "runtime"];
 
 function normalize(env, received_at) {
   if (!env || typeof env !== "object" || Array.isArray(env))
@@ -358,6 +362,7 @@ const SCHEMA_COLUMNS = [
   "seq", "id", "source_app", "session_id", "hook_event_type",
   "tool_name", "tool_use_id", "agent_id", "agent_type",
   "source", "reason", "error", "unknown_event", "client_ts", "received_at", "payload",
+  "runtime", // last: ALTER TABLE appends it on an existing DB, INSERT is by name anyway
 ];
 
 async function openBackend(dbPath) {
@@ -391,14 +396,15 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 7;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage) · v7 = + turns/turn_cursor + usage.inserted_at (#82 fleet turn materialization)
+  impl.exec("PRAGMA user_version = 8;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage) · v7 = + turns/turn_cursor + usage.inserted_at (#82 fleet turn materialization) · v8 = + events.runtime (#74 opencode adapter)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
     tool_name TEXT, tool_use_id TEXT, agent_id TEXT, agent_type TEXT,
     source TEXT, reason TEXT, error TEXT,
     unknown_event INTEGER NOT NULL DEFAULT 0,
-    client_ts INTEGER, received_at INTEGER NOT NULL, payload TEXT NOT NULL)`);
+    client_ts INTEGER, received_at INTEGER NOT NULL, payload TEXT NOT NULL,
+    runtime TEXT)`);
   impl.exec("CREATE INDEX IF NOT EXISTS idx_session   ON events(session_id, seq)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_type_time ON events(hook_event_type, received_at)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_app_time  ON events(source_app, received_at)");
@@ -476,6 +482,15 @@ function initSchema(impl) {
     try { impl.exec("ALTER TABLE usage ADD COLUMN inserted_at INTEGER"); }
     catch (e) { logSafe("migrate v7 usage", e); } // already present → ignore
   }
+  // v7→v8 (#74): which harness produced the event. NULL on every existing row
+  // and on every Claude Code row — only the opencode adapter sets it — so the
+  // column reads as "claude-code unless stated otherwise" and no backfill is
+  // needed. A column (not a payload field) because the session rollup groups on
+  // it, and the aggregates deliberately never parse payload.
+  if (exists && prevVersion < 8) {
+    try { impl.exec("ALTER TABLE events ADD COLUMN runtime TEXT"); }
+    catch (e) { logSafe("migrate v8 events", e); } // already present → ignore
+  }
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage(ts)");
   impl.exec("CREATE INDEX IF NOT EXISTS idx_usage_session ON usage(session_id, ts)");
   impl.exec(`CREATE TABLE IF NOT EXISTS transcript_cursor (
@@ -537,6 +552,7 @@ function toRow(r) {
     r.source ?? null, r.reason ?? null, r.error ?? null,
     r.unknown_event ?? 0, r.client_ts ?? null, r.received_at,
     JSON.stringify(r.payload ?? null),
+    r.runtime ?? null,
   ];
 }
 
@@ -899,7 +915,16 @@ function handleEventById(req, res, idStr) {
 // cases: /stats/guards and /stats/nudges (rare custom rows), /stats/sessions'
 // first_prompt (one row per session), and /stats/turns (one session per
 // request). The hot path (POST /events) is untouched by this whole section.
-const WINDOW_MS = { "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000, "7d": 604_800_000, "30d": 2_592_000_000 };
+// `all` is "no time limit", expressed as a window so every handler keeps its
+// one-line `since = now - window_ms` shape. 8.64e12 s is the max JS Date range:
+// the resulting `since` is far below any real timestamp (and still a safe
+// integer, so node:sqlite binds it as INTEGER), which makes the WHERE clause a
+// no-op instead of a special case in a dozen queries.
+const WINDOW_MS = {
+  "1h": 3_600_000, "6h": 21_600_000, "24h": 86_400_000,
+  "7d": 604_800_000, "30d": 2_592_000_000, "90d": 7_776_000_000,
+  all: 8_640_000_000_000_000,
+};
 
 function statsGate(req, res) {
   if (!hostOk(req)) { json(res, 421, { error: "bad host" }); return false; }
@@ -907,7 +932,8 @@ function statsGate(req, res) {
   return true;
 }
 
-// window=1h|6h|24h|7d — whitelist only (no free-form parsing), else the default.
+// window=1h|6h|24h|7d|30d|90d|all — whitelist only (no free-form parsing), else
+// the default.
 function windowOf(u, def) {
   return WINDOW_MS[u.searchParams.get("window")] ?? WINDOW_MS[def];
 }
@@ -974,6 +1000,7 @@ function handleStatsSessions(req, res, u) {
          SUM(hook_event_type = 'PreCompact')                      precompacts,
          SUM(hook_event_type = 'SubagentStop')                    subagents,
          MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end,
+         MAX(runtime)                                             runtime,
          (SELECT st.title FROM session_titles st WHERE st.session_id = events.session_id) title,
          (SELECT json_extract(e2.payload, '$.prompt') FROM events e2
             WHERE e2.session_id = events.session_id AND e2.hook_event_type = 'UserPromptSubmit'
@@ -991,6 +1018,9 @@ function handleStatsSessions(req, res, u) {
         precompacts: Number(r.precompacts), subagents: Number(r.subagents),
         ended,
         active: !ended && Number(r.last_at) >= now - ACTIVE_MS,
+        // NULL for Claude Code (no runtime stamped) — MAX() ignores NULLs, so a
+        // session that emitted even one opencode-tagged event reads "opencode".
+        runtime: r.runtime ? String(r.runtime) : "claude-code",
         title: r.title ? String(r.title) : null,
         first_prompt: r.first_prompt ? String(r.first_prompt).replace(/\s+/g, " ").trim().slice(0, 120) : null,
       };
@@ -2985,6 +3015,7 @@ td.tprom{color:#3fb950}
 .stitle.prov{color:#8b949e;font-style:italic}
 .stitle.dim{color:#6b7686}
 .ssub{font-size:11px;color:#6b7686;margin-top:1px}
+.rtag{display:inline-block;margin-left:6px;padding:0 5px;border-radius:3px;background:#1f2937;color:#9fd0ff;font-size:10px;letter-spacing:.04em;text-transform:uppercase}
 .tprompt{white-space:pre-wrap;overflow-wrap:anywhere;color:#c8d0dc;background:#0d1119;border:1px solid #1c2230;border-radius:5px;padding:8px 11px;margin:2px 0 10px;max-height:260px;overflow:auto;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
 #fleet .tt{display:inline-block;vertical-align:bottom;max-width:34ch;overflow:hidden;text-overflow:ellipsis;color:#d6deea}
 .toolbar{display:flex;gap:10px;align-items:center;padding:8px 16px;color:#6b7686;font-size:12px}
@@ -3037,7 +3068,7 @@ a.evlink:hover{color:#79c0ff}
 <section id="view-sessions">
   <div class="cards" id="ov-cards"></div>
   <div class="toolbar">기간
-    <select id="sess-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option></select>
+    <select id="sess-window"><option>1h</option><option>6h</option><option>24h</option><option selected>7d</option><option>30d</option><option value="all">전체</option></select>
     <span data-help="sessions"></span>
     <span class="dim">행을 누르면 턴별 타임라인</span>
   </div>
@@ -3376,6 +3407,9 @@ const DASHBOARD_JS = `(function(){
         var main=el("div","stitle"+(s.title?"":(s.first_prompt?" prov":" dim")),lbl||s.session_id.slice(0,8));
         if(lbl)main.title=lbl; sc.appendChild(main);
         var sub=el("div","ssub"); sub.appendChild(el("span",null,s.session_id.slice(0,8)));
+        // runtime tag: only non-Claude-Code sessions are marked (#74) — the
+        // default harness stays unlabelled so the column doesn't turn into noise
+        if(s.runtime&&s.runtime!=="claude-code")sub.appendChild(el("span","rtag",s.runtime==="opencode"?"oc":s.runtime));
         if(tk&&tk.mega)sub.appendChild(el("span","err"," ●mega"));
         sc.appendChild(sub); tr.appendChild(sc);
         tr.appendChild(cell(fmtDT(s.started_at)));
