@@ -17,7 +17,9 @@ description: >-
 설계 문서나 분석 산출물을 **self-contained 단일 HTML 파일**로 만드는 절차.
 매번 즉흥적으로 만들 때 흔들리는 것들 — 자기완결성(오프라인·CSP), 라이트/다크,
 TOC, 인쇄, 문서 관례 — 을 이 폴더의 `template.html`(editorial 디자인 v2)이
-스켈레톤으로 고정하고, `check.mjs`가 렌더 후 기계로 검증한다.
+스켈레톤으로 고정하고, `check.mjs`가 렌더 후 기계로 검증한다. 완성 상태의
+실물은 [examples/showcase.html](examples/showcase.html)에서 확인한다 —
+코어 블록 전부와 패턴 조립 하나를 담은 동봉 견본(골든 테스트 대상)이다.
 
 세 가지 모드가 있다. 요청을 보고 판단한다:
 

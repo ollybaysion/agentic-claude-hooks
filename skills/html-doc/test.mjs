@@ -205,6 +205,12 @@ test("patterns/*.html: 모든 패턴 견본이 철칙을 통과한다 (골든)",
   }
 });
 
+test("examples/showcase.html: 완성 견본이 철칙을 통과한다 (골든)", () => {
+  const { errors } = checkHtml(
+    readFileSync(join(HERE, "examples", "showcase.html"), "utf8"));
+  assert.deepEqual(errors, [], "showcase.html이 철칙을 어긴다");
+});
+
 test("template.html: 플레이스홀더만 채우면 철칙을 통과한다", () => {
   const raw = readFileSync(join(HERE, "template.html"), "utf8");
   const filled = raw.replace(/\{\{[^}]*\}\}/g, "채움");

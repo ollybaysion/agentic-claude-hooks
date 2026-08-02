@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>html-doc v2 쇼케이스 — 완성 문서 견본</title>
+<style>
+:root {
+  --bg:        #EEF0F1;
+  --surface:   #F9FAFA;
+  --sunken:    #E5E9EA;
+  --ink:       #14181B;
+  --ink-2:     #47535B;
+  --ink-3:     #6E7C85;
+  --line:      #D2D8DB;
+  --line-soft: #E2E6E8;
+  --accent:    #A8451A;
+  --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue:      #3F6180;
+  --blue-bg:   rgba(63, 97, 128, 0.10);
+
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Malgun Gothic", "Noto Sans KR", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+  --serif: Georgia, "Times New Roman", "Apple SD Gothic Neo", serif;
+
+  --measure: 34rem;
+  --rail: 13.5rem;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg:        #0F1417;
+    --surface:   #161D21;
+    --sunken:    #12181B;
+    --ink:       #E4E9EB;
+    --ink-2:     #A3B0B7;
+    --ink-3:     #77858D;
+    --line:      #273138;
+    --line-soft: #1E272C;
+    --accent:    #E38C55;
+    --accent-bg: rgba(227, 140, 85, 0.13);
+    --blue:      #83A9C6;
+    --blue-bg:   rgba(131, 169, 198, 0.13);
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg:        #0F1417;
+  --surface:   #161D21;
+  --sunken:    #12181B;
+  --ink:       #E4E9EB;
+  --ink-2:     #A3B0B7;
+  --ink-3:     #77858D;
+  --line:      #273138;
+  --line-soft: #1E272C;
+  --accent:    #E38C55;
+  --accent-bg: rgba(227, 140, 85, 0.13);
+  --blue:      #83A9C6;
+  --blue-bg:   rgba(131, 169, 198, 0.13);
+}
+
+:root[data-theme="light"] {
+  --bg:        #EEF0F1;
+  --surface:   #F9FAFA;
+  --sunken:    #E5E9EA;
+  --ink:       #14181B;
+  --ink-2:     #47535B;
+  --ink-3:     #6E7C85;
+  --line:      #D2D8DB;
+  --line-soft: #E2E6E8;
+  --accent:    #A8451A;
+  --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue:      #3F6180;
+  --blue-bg:   rgba(63, 97, 128, 0.10);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.72;
+  -webkit-font-smoothing: antialiased;
+  word-break: keep-all;
+}
+
+.page { max-width: 66rem; margin: 0 auto; padding: 0 1.5rem 6rem; }
+
+.masthead { padding: 4.5rem 0 2.25rem; border-bottom: 1px solid var(--ink); }
+
+.eyebrow {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin: 0 0 1.75rem;
+}
+.eyebrow .mark { color: var(--accent); }
+
+h1 {
+  font-size: clamp(2.1rem, 6vw, 3.4rem);
+  line-height: 1.1;
+  letter-spacing: -0.028em;
+  font-weight: 700;
+  margin: 0;
+  text-wrap: balance;
+}
+h1 .en {
+  display: block;
+  font-family: var(--mono);
+  font-size: clamp(0.8rem, 2vw, 1rem);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--ink-3);
+  margin-top: 1rem;
+}
+
+.standfirst {
+  max-width: var(--measure);
+  margin: 1.75rem 0 0;
+  font-size: 1.0625rem;
+  color: var(--ink-2);
+}
+
+.credits {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 2rem;
+  margin-top: 2.25rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+}
+.credits a { color: var(--accent); }
+
+details.revlog {
+  margin-top: 1.5rem;
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 0.5rem 1rem;
+  font-size: 0.875rem;
+  max-width: 44rem;
+}
+details.revlog summary {
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+details.revlog ul { margin: 0.5rem 0 0.25rem; padding-left: 1.1rem; }
+
+.shell { display: grid; grid-template-columns: 1fr; gap: 0; }
+.rail { display: none; }
+
+@media (min-width: 62rem) {
+  .shell { grid-template-columns: var(--rail) minmax(0, 1fr); gap: 3.5rem; align-items: start; }
+  .rail {
+    display: block;
+    position: sticky;
+    top: 2.5rem;
+    padding-top: 3.5rem;
+    font-family: var(--mono);
+    font-size: 0.75rem;
+    line-height: 1.5;
+    max-height: calc(100vh - 5rem);
+    overflow-y: auto;
+  }
+}
+
+.rail ol { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0.6rem; }
+.rail a {
+  display: grid;
+  grid-template-columns: 2rem 1fr;
+  gap: 0.35rem;
+  color: var(--ink-2);
+  text-decoration: none;
+  border-left: 2px solid transparent;
+  padding-left: 0.6rem;
+}
+.rail a:hover,
+.rail a:focus-visible { color: var(--ink); border-left-color: var(--accent); }
+.rail .num { color: var(--ink-3); }
+
+section { padding-top: 3.5rem; scroll-margin-top: 2rem; }
+
+.sec-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.85rem;
+  border-top: 1px solid var(--line);
+  padding-top: 1rem;
+  margin-bottom: 1.75rem;
+}
+.sec-head .num {
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  letter-spacing: 0.1em;
+  color: var(--accent);
+  padding-top: 0.2rem;
+}
+
+h2 { font-size: 1.5rem; letter-spacing: -0.02em; font-weight: 650; margin: 0; text-wrap: balance; }
+h3 { font-size: 1.0625rem; font-weight: 650; letter-spacing: -0.01em; margin: 2rem 0 0.6rem; }
+
+p { max-width: var(--measure); margin: 0 0 1.1rem; }
+p:last-child { margin-bottom: 0; }
+.lede { font-size: 1.0625rem; color: var(--ink-2); }
+strong { font-weight: 650; color: var(--ink); }
+
+.k, code {
+  font-family: var(--mono);
+  font-size: 0.86em;
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 3px;
+  padding: 0.08em 0.36em;
+  white-space: nowrap;
+}
+pre code { background: none; border: none; padding: 0; white-space: inherit; }
+
+a { color: var(--accent); text-underline-offset: 3px; }
+
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+
+ul.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.05rem; }
+ul.plain li { margin-bottom: 0.4rem; }
+ul.plain li::marker { color: var(--ink-3); }
+
+ol.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.2rem; }
+ol.plain li { margin-bottom: 0.55rem; }
+ol.plain li::marker { color: var(--ink-3); font-family: var(--mono); font-size: 0.85em; }
+
+pre.code, pre.diagram {
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  font-family: var(--mono);
+  font-size: 0.8125rem;
+  line-height: 1.65;
+  margin: 1.15rem 0;
+  color: var(--ink-2);
+}
+pre.diagram { line-height: 1.35; }
+
+.decision {
+  border-left: 2px solid var(--accent);
+  background: var(--accent-bg);
+  border-radius: 0 4px 4px 0;
+  padding: 0.9rem 1.15rem;
+  margin: 1.25rem 0;
+  max-width: 44rem;
+  font-size: 0.9375rem;
+}
+.decision .d-label {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 0.3rem;
+}
+
+blockquote {
+  margin: 2rem 0;
+  padding: 0 0 0 1.4rem;
+  border-left: 2px solid var(--accent);
+  max-width: 38rem;
+}
+blockquote p {
+  font-family: var(--serif);
+  font-size: 1.3125rem;
+  line-height: 1.5;
+  font-style: italic;
+  color: var(--ink);
+  max-width: none;
+  margin: 0;
+  text-wrap: balance;
+}
+blockquote cite {
+  display: block;
+  font-family: var(--mono);
+  font-style: normal;
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-top: 0.9rem;
+}
+
+.steps {
+  max-width: 44rem;
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.steps li {
+  display: grid;
+  grid-template-columns: 2.2rem 1fr;
+  gap: 1rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line-soft);
+  counter-increment: step;
+}
+.steps li:first-child { border-top: 1px solid var(--line-soft); }
+.steps li::before {
+  content: counter(step, decimal-leading-zero);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--accent);
+  padding-top: 0.32rem;
+}
+.steps b { display: block; font-weight: 650; }
+.steps span { font-size: 0.9375rem; color: var(--ink-2); }
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  max-width: var(--measure);
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+}
+.rules li { display: grid; grid-template-columns: 2rem 1fr; gap: 0.75rem; font-size: 0.9375rem; }
+.rules .mark { font-family: var(--mono); color: var(--accent); font-size: 0.8125rem; padding-top: 0.12rem; }
+.rules b { display: block; }
+.rules .state {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--blue);
+  margin-left: 0.5rem;
+}
+
+.picker {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 1.25rem 0;
+  font-size: 0.9375rem;
+  min-width: 34rem;
+}
+.picker th {
+  text-align: left;
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  font-weight: 400;
+  border-bottom: 1px solid var(--line);
+  padding: 0 1rem 0.6rem 0;
+}
+.picker td {
+  border-bottom: 1px solid var(--line-soft);
+  padding: 0.75rem 1rem 0.75rem 0;
+  vertical-align: top;
+  color: var(--ink-2);
+}
+.picker td:first-child { color: var(--ink); font-weight: 650; }
+.table-scroll { overflow-x: auto; }
+
+footer {
+  margin-top: 4.5rem;
+  padding-top: 1.25rem;
+  border-top: 1px solid var(--ink);
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  color: var(--ink-3);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 2rem;
+}
+footer a { color: var(--accent); }
+
+@media print {
+  .rail { display: none; }
+  .shell { display: block; }
+  .page { max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  pre.code, pre.diagram, .table-scroll { overflow-x: visible; }
+  a { color: inherit; }
+}
+
+/* ═══════ 플로우 패턴 CSS:START (patterns/flow.html에서 복사 — 패턴 조립 시범) ═══════ */
+.diagram {
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1.25rem 1.25rem;
+  margin: 1.25rem 0;
+  overflow-x: auto;
+}
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: max-content;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.node {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.42rem 0.7rem;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.node.io { background: transparent; border-style: dashed; color: var(--ink-3); }
+.node.lead { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+.node.gate { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+.arrow { color: var(--accent); flex: none; }
+.arrow.back { color: var(--blue); }
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-left: 1px solid var(--line);
+  padding-left: 0.55rem;
+}
+.diagram .caption {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+  margin: 0.9rem 0 0;
+  max-width: none;
+}
+/* ═══════ 플로우 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow"><span class="mark">◆</span> html-doc 스킬 · 완성 견본 · v2</p>
+    <h1>
+      쇼케이스 — 문서 하나가 이렇게 생겼다
+      <span class="en">a complete html-doc v2 document, assembled</span>
+    </h1>
+    <p class="standfirst">
+      템플릿을 채우면 나오는 <strong>완성 상태의 실물</strong>이다. 마스트헤드·정적
+      rail·섹션 골격 위에 코어 블록 전부와 패턴 조립 하나(flow)를 시범으로
+      담았다 — 새 문서를 만들 때 이 파일을 열어 최종 형태를 확인한다.
+    </p>
+    <div class="credits">
+      <span>작성 · 2026-08-02</span>
+      <span>절차 · SKILL.md</span>
+      <span>어휘 · design.md</span>
+    </div>
+    <details class="revlog">
+      <summary>개정 로그</summary>
+      <ul>
+        <li><b>v2.0</b> (2026-08-02) — 디자인 시스템 v2와 함께 최초 동봉.</li>
+      </ul>
+    </details>
+  </header>
+
+  <div class="shell">
+
+    <nav class="rail" aria-label="목차">
+      <ol>
+        <li><a href="#s1"><span class="num">01</span> 문서 골격</a></li>
+        <li><a href="#s2"><span class="num">02</span> 코어 블록</a></li>
+        <li><a href="#s3"><span class="num">03</span> 목록 두 가지</a></li>
+        <li><a href="#s4"><span class="num">04</span> 패턴 조립</a></li>
+      </ol>
+    </nav>
+
+    <main>
+
+      <section id="s1">
+        <div class="sec-head"><span class="num">01</span><h2>문서 골격</h2></div>
+        <p class="lede">
+          masthead(eyebrow → h1+영문 부제 → standfirst → credits → 개정 로그) 아래에
+          정적 rail과 본문 컬럼이 온다. 이 문단이 <span class="k">.lede</span> —
+          섹션 도입 요지다.
+        </p>
+        <p>본문 산문은 <span class="k">--measure</span>(34rem) 폭을 지킨다. 식별자와
+          경로는 <span class="k">core/check.mjs</span>처럼 칩으로, 외부 참조는
+          <a href="https://github.com/ollybaysion/agentic-claude-hooks">일반 링크</a>로
+          쓴다 — 내비게이션은 self-contained 규칙에 안 걸린다. rail의 링크와
+          <span class="k">section id</span>는 손으로 맞추며, check가
+          <span class="k">rail-anchor</span>로 검증한다.</p>
+        <ul class="plain">
+          <li>이 문서엔 JS가 한 줄도 없다 — 테마 전환도 CSS 캐스케이드만으로 동작한다.</li>
+          <li>인쇄하면 rail이 사라지고 본문이 전체 폭을 쓴다 (@media print).</li>
+        </ul>
+      </section>
+
+      <section id="s2">
+        <div class="sec-head"><span class="num">02</span><h2>코어 블록</h2></div>
+
+        <h3>표 — table-scroll + picker</h3>
+        <div class="table-scroll">
+          <table class="picker">
+            <thead><tr><th>블록</th><th>언제</th><th>비고</th></tr></thead>
+            <tbody>
+              <tr><td>picker</td><td>데이터가 본체일 때</td><td>모노 대문자 헤더 · 첫 열 강조</td></tr>
+              <tr><td>decision</td><td>결정 기록</td><td>날짜·근거 필수</td></tr>
+              <tr><td>blockquote</td><td>인용 전용</td><td>serif 이탤릭 + cite</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <h3>코드 블록</h3>
+        <pre class="code">$ node skills/html-doc/check.mjs out.html
+OK: out.html — html-doc 철칙 통과</pre>
+
+        <h3>결정 콜아웃</h3>
+        <div class="decision">
+          <div class="d-label">결정 · 2026-08-02</div>
+          결정 기록은 blockquote가 아니라 이 블록을 쓴다. "무엇"만이 아니라
+          "왜"까지 — 근거 없는 결정 기록은 기록이 아니다.
+        </div>
+
+        <h3>인용</h3>
+        <blockquote>
+          <p>구조는 자유, 색은 부자유 — 레이아웃 조정은 일관성을 깨지 않지만
+             색은 깬다.</p>
+          <cite>design.md · 규율</cite>
+        </blockquote>
+      </section>
+
+      <section id="s3">
+        <div class="sec-head"><span class="num">03</span><h2>목록 두 가지 — 순서의 유무</h2></div>
+
+        <h3>steps — 실제 순서가 있을 때만</h3>
+        <ol class="steps">
+          <li><div><b>template.html 복사</b><span>출력 경로로 복사하고 CONTENT 마커 안을 교체한다.</span></div></li>
+          <li><div><b>내용 채우기</b><span>rail 링크·section id를 맞추고 인벤토리 스니펫을 조립한다.</span></div></li>
+          <li><div><b>check.mjs 검증</b><span>exit 0이 될 때까지 — 통과 전엔 완성이 아니다.</span></div></li>
+        </ol>
+
+        <h3>rules — 순서 없는 규칙 묶음 (마크 = 실제 식별자)</h3>
+        <ul class="rules">
+          <li><span class="mark">◆</span><div>
+            <b>토큰만 쓴다 <span class="state">check 강제</span></b>
+            <span>인라인 style의 색 리터럴은 <span class="k">inline-color</span>가 반려한다.</span></div></li>
+          <li><span class="mark">◆</span><div>
+            <b>모노 라벨은 정보일 때만</b>
+            <span>장식용 넘버링·라벨은 넣지 않는다 — 번호는 순서가, 라벨은 분류가 실재할 때.</span></div></li>
+        </ul>
+      </section>
+
+      <section id="s4">
+        <div class="sec-head"><span class="num">04</span><h2>패턴 조립 — flow를 예로</h2></div>
+        <p>patterns/의 견본에서 <span class="k">CSS:START…END</span> 블록을
+          <span class="k">&lt;style&gt;</span> 끝에, 마크업 블록을 본문에 복사하면
+          이렇게 붙는다:</p>
+
+        <div class="diagram" role="group" aria-label="문서 제작 파이프라인">
+          <div class="flow">
+            <span class="node io">template.html</span>
+            <span class="arrow">→</span>
+            <span class="node">내용 조립</span>
+            <span class="arrow">→</span>
+            <span class="node gate">check.mjs</span>
+            <span class="arrow">→</span>
+            <span class="node lead">완성 문서</span>
+            <span class="arrow">→</span>
+            <span class="branch">
+              <span class="node io">로컬 파일 (기본)</span>
+              <span class="node io">Artifact (옵션)</span>
+            </span>
+          </div>
+          <p class="caption">check를 통과하지 못한 문서는 산출물이 아니다</p>
+        </div>
+
+        <p>versus·triptych·sequence도 같은 방식으로 조립한다 — 어떤 패턴을 쓸지는
+          SKILL.md 철칙 6의 결정표가 정한다.</p>
+      </section>
+
+      <footer>
+        <span>html-doc v2 쇼케이스</span>
+        <span>이 파일 자체가 check.mjs 골든 테스트 대상이다</span>
+      </footer>
+
+    </main>
+  </div>
+</div>
+
+</body>
+</html>
