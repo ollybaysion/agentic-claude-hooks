@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>플로우 패턴 — 견본과 사용법</title>
+<style>
+:root {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Malgun Gothic", "Noto Sans KR", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+  --measure: 34rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+    --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+    --line: #273138; --line-soft: #1E272C;
+    --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+    --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+  --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+  --line: #273138; --line-soft: #1E272C;
+  --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+  --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+}
+:root[data-theme="light"] {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--sans); font-size: 16px; line-height: 1.72;
+  -webkit-font-smoothing: antialiased; word-break: keep-all;
+}
+.page { max-width: 66rem; margin: 0 auto; padding: 0 1.5rem 5rem; }
+.masthead { padding: 3.5rem 0 2rem; border-bottom: 1px solid var(--ink); }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 1.5rem;
+}
+.eyebrow .mark { color: var(--accent); }
+h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.15; letter-spacing: -0.025em; margin: 0; text-wrap: balance; }
+.standfirst { max-width: var(--measure); margin: 1.25rem 0 0; font-size: 1.0625rem; color: var(--ink-2); }
+section { padding-top: 3rem; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 0.85rem;
+  border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 1.5rem;
+}
+.sec-head .num { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.1em; color: var(--accent); }
+h2 { font-size: 1.4rem; letter-spacing: -0.02em; font-weight: 650; margin: 0; }
+p { max-width: var(--measure); margin: 0 0 1.1rem; }
+strong { font-weight: 650; color: var(--ink); }
+.k, code {
+  font-family: var(--mono); font-size: 0.86em; background: var(--sunken);
+  border: 1px solid var(--line-soft); border-radius: 3px;
+  padding: 0.08em 0.36em; white-space: nowrap;
+}
+pre code { background: none; border: none; padding: 0; white-space: inherit; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+ol.plain, ul.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.2rem; }
+ol.plain li, ul.plain li { margin-bottom: 0.5rem; }
+pre.code, pre.diagram {
+  background: var(--sunken); border: 1px solid var(--line-soft); border-radius: 4px;
+  padding: 1rem 1.15rem; overflow-x: auto; font-family: var(--mono);
+  font-size: 0.8125rem; line-height: 1.65; margin: 1.15rem 0; color: var(--ink-2);
+}
+pre.diagram { line-height: 1.35; }
+@media print {
+  .page { max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  pre.code, pre.diagram { overflow-x: visible; }
+  a { color: inherit; }
+}
+
+/* ═══════ 플로우 패턴 CSS:START — 여기부터 END까지 문서 <style>에 통째로 복사 ═══════ */
+.diagram {
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1.25rem 1.25rem;
+  margin: 1.25rem 0;
+  overflow-x: auto;
+}
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: max-content;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+/* 노드 3종: 기본(내부 컴포넌트) · io(외부 입출력, 점선) ·
+   lead(주인공, 테라코타) · gate(관문·검증, 블루) */
+.node {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.42rem 0.7rem;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.node.io { background: transparent; border-style: dashed; color: var(--ink-3); }
+.node.lead { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+.node.gate { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+.arrow { color: var(--accent); flex: none; }
+.arrow.back { color: var(--blue); }
+/* 분기 — 한 지점에서 갈라지거나 모이는 노드 묶음 */
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-left: 1px solid var(--line);
+  padding-left: 0.55rem;
+}
+.diagram .caption {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+  margin: 0.9rem 0 0;
+  max-width: none;
+}
+/* ═══════ 플로우 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow"><span class="mark">◆</span> html-doc 스킬 · patterns/flow.html — 이 파일이 복사 원본</p>
+    <h1>플로우 패턴</h1>
+    <p class="standfirst">
+      파이프라인·수집 경로·처리 단계를 <strong>왼쪽에서 오른쪽으로 흐르는 모노스페이스
+      노드 행</strong>으로 그린다. 좌표 계산이 없는 순수 마크업 — v1의 architecture
+      패턴(존·층)을 흡수한 후계다.
+    </p>
+  </header>
+
+  <main>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>언제 쓰나</h2></div>
+      <p><strong>단계·경로·파이프라인</strong> — 데이터가 순서대로 흘러가는 구조.
+        입력/출력의 묶음은 <span class="k">branch</span>로 세로 분기한다.
+        되돌아가는 루프 하나까지는 <span class="k">arrow.back</span>(블루 ↺)으로
+        표현할 수 있다.</p>
+      <p><strong>안 되는 것</strong>: 자유 배치 박스 사이를 대각선·우회 엣지가 잇는
+        임의 그래프. 그건 <span class="k">pre.diagram</span>(ASCII)으로 후퇴하거나
+        구조를 단계형으로 다시 정리한다 — 엣지가 얽히는 그림은 대개 설계가 덜
+        정리됐다는 신호다.</p>
+      <p>노드 의미색: 기본 = 내부 컴포넌트 · <span class="k">io</span> = 외부
+        입출력(점선) · <span class="k">lead</span> = 주인공(테라코타) ·
+        <span class="k">gate</span> = 관문/검증(블루). 색이 의미를 가지면 본문에
+        범례를 먼저 선언한다.</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>데모 — 커버리지 파이프라인</h2></div>
+
+      <!-- ═══════ 플로우 패턴 마크업:START — 이 블록을 복사해 내용을 교체한다 ═══════ -->
+      <div class="diagram" role="group" aria-label="커버리지 파이프라인 플로우">
+        <div class="flow">
+          <span class="branch">
+            <span class="node io">session.jsonl</span>
+            <span class="node io">subagents/*.jsonl</span>
+          </span>
+          <span class="arrow">→</span>
+          <span class="node">extract</span>
+          <span class="arrow">→</span>
+          <span class="node">expose</span>
+          <span class="arrow">→</span>
+          <span class="node lead">metrics</span>
+          <span class="arrow">→</span>
+          <span class="branch">
+            <span class="node gate">CLI report</span>
+            <span class="node gate">dashboard</span>
+          </span>
+        </div>
+        <p class="caption">코어는 순수 함수 — 입력(점선)과 소비자(블루) 사이에서 산출물은 JSON 하나</p>
+      </div>
+      <!-- ═══════ 플로우 패턴 마크업:END ═══════ -->
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>사용법 (모델용 절차)</h2></div>
+      <ol class="plain">
+        <li>CSS 블록을 문서 <span class="k">&lt;style&gt;</span> 끝에 복사한다.
+          색은 전부 토큰 참조라 추가로 지킬 것이 없다.</li>
+        <li>마크업 블록을 복사해 교체한다. 흐름은 왼→오른쪽 하나,
+          갈라짐/모임은 <span class="k">branch</span>, 되돌이는
+          <span class="k">arrow.back</span> 하나까지만.</li>
+        <li>다이어그램 내부에 h2/h3 금지 — 라벨은 노드 텍스트와
+          <span class="k">caption</span>으로. <span class="k">lead</span>는
+          다이어그램당 1~2개만.</li>
+        <li>렌더 후 <span class="k">check.mjs</span>는 평소대로.</li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+</body>
+</html>

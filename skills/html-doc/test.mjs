@@ -107,11 +107,43 @@ test("인쇄 CSS", () => {
     .includes("print-css"));
 });
 
-test("h2/h3 id 강제", () => {
-  const noId = validDoc().replace('<h3 id="detail">상세</h3>', "<h3>상세</h3>");
-  const found = checkHtml(noId).errors.filter((e) => e.rule === "heading-id");
-  assert.equal(found.length, 1);
-  assert.match(found[0].msg, /상세/);
+test("no-script: v2 문서는 <script> 자체가 금지", () => {
+  const inline = validDoc().replace("</main>", "<script>var x=1;</script></main>");
+  assert.ok(rules(inline).includes("no-script"));
+  // escaped 예시(<pre>/<code>)는 실제 태그가 아니므로 무해
+  const escaped = validDoc().replace(
+    "</main>", "<pre><code>&lt;script src=x&gt;&lt;/script&gt;</code></pre></main>");
+  assert.ok(!rules(escaped).includes("no-script"));
+});
+
+test("section-id: id 없는 <section>은 거부", () => {
+  const noId = validDoc().replace("</main>", "<section><h2>무제</h2></section></main>");
+  assert.ok(rules(noId).includes("section-id"));
+  const withId = validDoc().replace(
+    "</main>", '<section id="s9"><h2>이름 있음</h2></section></main>');
+  assert.ok(!rules(withId).includes("section-id"));
+});
+
+test("rail-anchor: rail 링크는 대응 id가 있어야 한다", () => {
+  const broken = validDoc().replace(
+    "</main>",
+    '<nav class="rail"><ol><li><a href="#nope">없는 섹션</a></li></ol></nav></main>');
+  assert.ok(rules(broken).includes("rail-anchor"));
+  const okRail = validDoc().replace(
+    "</main>",
+    '<nav class="rail"><ol><li><a href="#s1">있는 섹션</a></li></ol></nav>' +
+    '<section id="s1"><h2>본문</h2></section></main>');
+  assert.ok(!rules(okRail).includes("rail-anchor"));
+});
+
+test("table-scroll: 표는 컨테이너 안에서만", () => {
+  const bare = validDoc().replace(
+    "</main>", "<table><tr><td>셀</td></tr></table></main>");
+  assert.ok(rules(bare).includes("table-scroll"));
+  const wrapped = validDoc().replace(
+    "</main>",
+    '<div class="table-scroll"><table class="picker"><tr><td>셀</td></tr></table></div></main>');
+  assert.ok(!rules(wrapped).includes("table-scroll"));
 });
 
 test("{{...}} 플레이스홀더 잔재", () => {
@@ -166,11 +198,17 @@ test("HTML 주석은 검사 전에 제거된다 — 양방향", () => {
 
 test("patterns/*.html: 모든 패턴 견본이 철칙을 통과한다 (골든)", () => {
   const files = readdirSync(join(HERE, "patterns")).filter((f) => f.endsWith(".html"));
-  assert.ok(files.length >= 6, "패턴 견본이 사라졌다");
+  assert.ok(files.length >= 4, "패턴 견본이 사라졌다");
   for (const f of files) {
     const { errors } = checkHtml(readFileSync(join(HERE, "patterns", f), "utf8"));
     assert.deepEqual(errors, [], `${f}가 철칙을 어긴다`);
   }
+});
+
+test("examples/showcase.html: 완성 견본이 철칙을 통과한다 (골든)", () => {
+  const { errors } = checkHtml(
+    readFileSync(join(HERE, "examples", "showcase.html"), "utf8"));
+  assert.deepEqual(errors, [], "showcase.html이 철칙을 어긴다");
 });
 
 test("template.html: 플레이스홀더만 채우면 철칙을 통과한다", () => {

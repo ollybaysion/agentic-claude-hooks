@@ -4,12 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="light dark">
-<title>{{문서 제목}}</title>
+<title>html-doc v2 쇼케이스 — 완성 문서 견본</title>
 <style>
-/* ── 토큰 ──────────────────────────────────────────────────
-   editorial 팔레트(웜 그레이 + 테라코타 + 보조 블루). 라이트가 기본,
-   다크는 두 경로: ① OS(prefers-color-scheme) ② 뷰어 토글(:root[data-theme]).
-   토글 셀렉터는 Artifact 뷰어 계약과 동일 — 문서엔 JS가 없다. */
 :root {
   --bg:        #EEF0F1;
   --surface:   #F9FAFA;
@@ -30,8 +26,8 @@
           "Liberation Mono", monospace;
   --serif: Georgia, "Times New Roman", "Apple SD Gothic Neo", serif;
 
-  --measure: 34rem;   /* 본문 산문 폭 */
-  --rail: 13.5rem;    /* 좌측 TOC 레일 폭 */
+  --measure: 34rem;
+  --rail: 13.5rem;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -81,7 +77,6 @@
   --blue-bg:   rgba(63, 97, 128, 0.10);
 }
 
-/* ── 기본 ── */
 * { box-sizing: border-box; }
 
 body {
@@ -97,7 +92,6 @@ body {
 
 .page { max-width: 66rem; margin: 0 auto; padding: 0 1.5rem 6rem; }
 
-/* ── masthead: eyebrow → h1(+.en) → standfirst → credits ── */
 .masthead { padding: 4.5rem 0 2.25rem; border-bottom: 1px solid var(--ink); }
 
 .eyebrow {
@@ -146,7 +140,6 @@ h1 .en {
 }
 .credits a { color: var(--accent); }
 
-/* 개정 로그 — 모드 B에서 masthead 아래 접힘 블록으로 유지 */
 details.revlog {
   margin-top: 1.5rem;
   background: var(--sunken);
@@ -166,7 +159,6 @@ details.revlog summary {
 }
 details.revlog ul { margin: 0.5rem 0 0.25rem; padding-left: 1.1rem; }
 
-/* ── shell: 정적 rail TOC + 본문 컬럼 ── */
 .shell { display: grid; grid-template-columns: 1fr; gap: 0; }
 .rail { display: none; }
 
@@ -199,7 +191,6 @@ details.revlog ul { margin: 0.5rem 0 0.25rem; padding-left: 1.1rem; }
 .rail a:focus-visible { color: var(--ink); border-left-color: var(--accent); }
 .rail .num { color: var(--ink-3); }
 
-/* ── 섹션: #s1… id + .sec-head(모노 번호 + h2) ── */
 section { padding-top: 3.5rem; scroll-margin-top: 2rem; }
 
 .sec-head {
@@ -226,7 +217,6 @@ p:last-child { margin-bottom: 0; }
 .lede { font-size: 1.0625rem; color: var(--ink-2); }
 strong { font-weight: 650; color: var(--ink); }
 
-/* 인라인 코드/식별자 — 모드 A의 인라인 code도 같은 모양 */
 .k, code {
   font-family: var(--mono);
   font-size: 0.86em;
@@ -250,7 +240,6 @@ ol.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.2rem; 
 ol.plain li { margin-bottom: 0.55rem; }
 ol.plain li::marker { color: var(--ink-3); font-family: var(--mono); font-size: 0.85em; }
 
-/* ── 코드 블록 · ASCII 다이어그램 폴백 ── */
 pre.code, pre.diagram {
   background: var(--sunken);
   border: 1px solid var(--line-soft);
@@ -265,7 +254,6 @@ pre.code, pre.diagram {
 }
 pre.diagram { line-height: 1.35; }
 
-/* ── 결정 콜아웃 — 날짜·근거 필수 ── */
 .decision {
   border-left: 2px solid var(--accent);
   background: var(--accent-bg);
@@ -285,7 +273,6 @@ pre.diagram { line-height: 1.35; }
   margin-bottom: 0.3rem;
 }
 
-/* ── 인용 — serif 이탤릭 + cite (인용 전용, 결정 기록엔 .decision) ── */
 blockquote {
   margin: 2rem 0;
   padding: 0 0 0 1.4rem;
@@ -313,7 +300,6 @@ blockquote cite {
   margin-top: 0.9rem;
 }
 
-/* ── 순서 있는 단계 — 01 카운터 ── */
 .steps {
   max-width: 44rem;
   margin: 0 0 1.25rem;
@@ -340,7 +326,6 @@ blockquote cite {
 .steps b { display: block; font-weight: 650; }
 .steps span { font-size: 0.9375rem; color: var(--ink-2); }
 
-/* ── 순서 없는 체크리스트 — 마크(◆·식별자)는 의미 있을 때만 ── */
 .rules {
   display: flex;
   flex-direction: column;
@@ -362,7 +347,6 @@ blockquote cite {
   margin-left: 0.5rem;
 }
 
-/* ── 표 — 반드시 .table-scroll로 감싼다(check가 강제) ── */
 .picker {
   width: 100%;
   border-collapse: collapse;
@@ -390,7 +374,6 @@ blockquote cite {
 .picker td:first-child { color: var(--ink); font-weight: 650; }
 .table-scroll { overflow-x: auto; }
 
-/* ── 파생물 표기(모드 A 전용) · 문서 푸터 ── */
 footer {
   margin-top: 4.5rem;
   padding-top: 1.25rem;
@@ -403,9 +386,7 @@ footer {
   gap: 0.4rem 2rem;
 }
 footer a { color: var(--accent); }
-footer.derived { display: block; }
 
-/* ── 인쇄 ── */
 @media print {
   .rail { display: none; }
   .shell { display: block; }
@@ -414,32 +395,79 @@ footer.derived { display: block; }
   pre.code, pre.diagram, .table-scroll { overflow-x: visible; }
   a { color: inherit; }
 }
+
+/* ═══════ 플로우 패턴 CSS:START (patterns/flow.html에서 복사 — 패턴 조립 시범) ═══════ */
+.diagram {
+  background: var(--sunken);
+  border: 1px solid var(--line-soft);
+  border-radius: 4px;
+  padding: 1.25rem 1.25rem;
+  margin: 1.25rem 0;
+  overflow-x: auto;
+}
+.flow {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: max-content;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  line-height: 1.35;
+}
+.node {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 0.42rem 0.7rem;
+  white-space: nowrap;
+  color: var(--ink);
+}
+.node.io { background: transparent; border-style: dashed; color: var(--ink-3); }
+.node.lead { border-color: var(--accent); background: var(--accent-bg); color: var(--accent); }
+.node.gate { border-color: var(--blue); background: var(--blue-bg); color: var(--blue); }
+.arrow { color: var(--accent); flex: none; }
+.arrow.back { color: var(--blue); }
+.branch {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  border-left: 1px solid var(--line);
+  padding-left: 0.55rem;
+}
+.diagram .caption {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  color: var(--ink-3);
+  margin: 0.9rem 0 0;
+  max-width: none;
+}
+/* ═══════ 플로우 패턴 CSS:END ═══════ */
 </style>
 </head>
 <body>
 
 <div class="page">
-<!-- CONTENT:START — 아래 예시를 실제 내용으로 교체한다. {{...}}는 전부 채운다.
-     블록 어휘·스니펫·확장 규칙은 design.md — 색은 var(--...) 토큰만.
-     rail 링크와 section id는 손으로 맞춘다(check가 rail-anchor로 검증). -->
 
   <header class="masthead">
-    <p class="eyebrow"><span class="mark">◆</span> {{프로젝트 · 문서 종류 · 날짜 또는 버전}}</p>
+    <p class="eyebrow"><span class="mark">◆</span> html-doc 스킬 · 완성 견본 · v2</p>
     <h1>
-      {{문서 제목}}
-      <span class="en">{{영문 또는 모노 부제 한 줄}}</span>
+      쇼케이스 — 문서 하나가 이렇게 생겼다
+      <span class="en">a complete html-doc v2 document, assembled</span>
     </h1>
     <p class="standfirst">
-      {{서두 요약 한 문단 — 이 문서가 답하는 것을 두세 문장으로. 핵심어는 <strong>강조</strong>.}}
+      템플릿을 채우면 나오는 <strong>완성 상태의 실물</strong>이다. 마스트헤드·정적
+      rail·섹션 골격 위에 코어 블록 전부와 패턴 조립 하나(flow)를 시범으로
+      담았다 — 새 문서를 만들 때 이 파일을 열어 최종 형태를 확인한다.
     </p>
     <div class="credits">
-      <span>작성 · {{YYYY-MM-DD}}</span>
-      <span>{{관련 링크 라벨}} · <a href="https://github.com/ollybaysion">{{링크}}</a></span>
+      <span>작성 · 2026-08-02</span>
+      <span>절차 · SKILL.md</span>
+      <span>어휘 · design.md</span>
     </div>
     <details class="revlog">
       <summary>개정 로그</summary>
       <ul>
-        <li><b>v0.1</b> ({{YYYY-MM-DD}}) — 최초 작성.</li>
+        <li><b>v2.0</b> (2026-08-02) — 디자인 시스템 v2와 함께 최초 동봉.</li>
       </ul>
     </details>
   </header>
@@ -448,53 +476,124 @@ footer.derived { display: block; }
 
     <nav class="rail" aria-label="목차">
       <ol>
-        <li><a href="#s1"><span class="num">01</span> {{섹션 제목}}</a></li>
-        <li><a href="#s2"><span class="num">02</span> {{섹션 제목}}</a></li>
+        <li><a href="#s1"><span class="num">01</span> 문서 골격</a></li>
+        <li><a href="#s2"><span class="num">02</span> 코어 블록</a></li>
+        <li><a href="#s3"><span class="num">03</span> 목록 두 가지</a></li>
+        <li><a href="#s4"><span class="num">04</span> 패턴 조립</a></li>
       </ol>
     </nav>
 
     <main>
 
       <section id="s1">
-        <div class="sec-head"><span class="num">01</span><h2>{{섹션 제목}}</h2></div>
-        <p class="lede">{{섹션 도입 — 조금 큰 글자의 요지 문단.}}</p>
-        <p>{{본문. 식별자는 <span class="k">coverage-core.mjs</span> 칩으로,
-          외부 참조는 일반 링크로 — 내비게이션은 self-contained 규칙에 안 걸린다.}}</p>
+        <div class="sec-head"><span class="num">01</span><h2>문서 골격</h2></div>
+        <p class="lede">
+          masthead(eyebrow → h1+영문 부제 → standfirst → credits → 개정 로그) 아래에
+          정적 rail과 본문 컬럼이 온다. 이 문단이 <span class="k">.lede</span> —
+          섹션 도입 요지다.
+        </p>
+        <p>본문 산문은 <span class="k">--measure</span>(34rem) 폭을 지킨다. 식별자와
+          경로는 <span class="k">core/check.mjs</span>처럼 칩으로, 외부 참조는
+          <a href="https://github.com/ollybaysion/agentic-claude-hooks">일반 링크</a>로
+          쓴다 — 내비게이션은 self-contained 규칙에 안 걸린다. rail의 링크와
+          <span class="k">section id</span>는 손으로 맞추며, check가
+          <span class="k">rail-anchor</span>로 검증한다.</p>
         <ul class="plain">
-          <li>{{목록 항목}}</li>
+          <li>이 문서엔 JS가 한 줄도 없다 — 테마 전환도 CSS 캐스케이드만으로 동작한다.</li>
+          <li>인쇄하면 rail이 사라지고 본문이 전체 폭을 쓴다 (@media print).</li>
         </ul>
       </section>
 
       <section id="s2">
-        <div class="sec-head"><span class="num">02</span><h2>{{섹션 제목}}</h2></div>
+        <div class="sec-head"><span class="num">02</span><h2>코어 블록</h2></div>
+
+        <h3>표 — table-scroll + picker</h3>
         <div class="table-scroll">
           <table class="picker">
-            <thead><tr><th>항목</th><th>값</th><th>비고</th></tr></thead>
-            <tbody><tr><td>{{항목}}</td><td>{{값}}</td><td>표는 .table-scroll로 감싼다</td></tr></tbody>
+            <thead><tr><th>블록</th><th>언제</th><th>비고</th></tr></thead>
+            <tbody>
+              <tr><td>picker</td><td>데이터가 본체일 때</td><td>모노 대문자 헤더 · 첫 열 강조</td></tr>
+              <tr><td>decision</td><td>결정 기록</td><td>날짜·근거 필수</td></tr>
+              <tr><td>blockquote</td><td>인용 전용</td><td>serif 이탤릭 + cite</td></tr>
+            </tbody>
           </table>
         </div>
-        <pre class="code">{{코드 블록 — 코드·식별자는 영어}}</pre>
+
+        <h3>코드 블록</h3>
+        <pre class="code">$ node skills/html-doc/check.mjs out.html
+OK: out.html — html-doc 철칙 통과</pre>
+
+        <h3>결정 콜아웃</h3>
         <div class="decision">
-          <div class="d-label">결정 · {{YYYY-MM-DD}}</div>
-          {{무엇을 결정했고 왜 — 날짜와 근거를 반드시 남긴다.}}
+          <div class="d-label">결정 · 2026-08-02</div>
+          결정 기록은 blockquote가 아니라 이 블록을 쓴다. "무엇"만이 아니라
+          "왜"까지 — 근거 없는 결정 기록은 기록이 아니다.
         </div>
+
+        <h3>인용</h3>
+        <blockquote>
+          <p>구조는 자유, 색은 부자유 — 레이아웃 조정은 일관성을 깨지 않지만
+             색은 깬다.</p>
+          <cite>design.md · 규율</cite>
+        </blockquote>
+      </section>
+
+      <section id="s3">
+        <div class="sec-head"><span class="num">03</span><h2>목록 두 가지 — 순서의 유무</h2></div>
+
+        <h3>steps — 실제 순서가 있을 때만</h3>
+        <ol class="steps">
+          <li><div><b>template.html 복사</b><span>출력 경로로 복사하고 CONTENT 마커 안을 교체한다.</span></div></li>
+          <li><div><b>내용 채우기</b><span>rail 링크·section id를 맞추고 인벤토리 스니펫을 조립한다.</span></div></li>
+          <li><div><b>check.mjs 검증</b><span>exit 0이 될 때까지 — 통과 전엔 완성이 아니다.</span></div></li>
+        </ol>
+
+        <h3>rules — 순서 없는 규칙 묶음 (마크 = 실제 식별자)</h3>
+        <ul class="rules">
+          <li><span class="mark">◆</span><div>
+            <b>토큰만 쓴다 <span class="state">check 강제</span></b>
+            <span>인라인 style의 색 리터럴은 <span class="k">inline-color</span>가 반려한다.</span></div></li>
+          <li><span class="mark">◆</span><div>
+            <b>모노 라벨은 정보일 때만</b>
+            <span>장식용 넘버링·라벨은 넣지 않는다 — 번호는 순서가, 라벨은 분류가 실재할 때.</span></div></li>
+        </ul>
+      </section>
+
+      <section id="s4">
+        <div class="sec-head"><span class="num">04</span><h2>패턴 조립 — flow를 예로</h2></div>
+        <p>patterns/의 견본에서 <span class="k">CSS:START…END</span> 블록을
+          <span class="k">&lt;style&gt;</span> 끝에, 마크업 블록을 본문에 복사하면
+          이렇게 붙는다:</p>
+
+        <div class="diagram" role="group" aria-label="문서 제작 파이프라인">
+          <div class="flow">
+            <span class="node io">template.html</span>
+            <span class="arrow">→</span>
+            <span class="node">내용 조립</span>
+            <span class="arrow">→</span>
+            <span class="node gate">check.mjs</span>
+            <span class="arrow">→</span>
+            <span class="node lead">완성 문서</span>
+            <span class="arrow">→</span>
+            <span class="branch">
+              <span class="node io">로컬 파일 (기본)</span>
+              <span class="node io">Artifact (옵션)</span>
+            </span>
+          </div>
+          <p class="caption">check를 통과하지 못한 문서는 산출물이 아니다</p>
+        </div>
+
+        <p>versus·triptych·sequence도 같은 방식으로 조립한다 — 어떤 패턴을 쓸지는
+          SKILL.md 철칙 6의 결정표가 정한다.</p>
       </section>
 
       <footer>
-        <span>{{문서 이름 · 버전}}</span>
-        <span>{{관련 문서 링크}}</span>
+        <span>html-doc v2 쇼케이스</span>
+        <span>이 파일 자체가 check.mjs 골든 테스트 대상이다</span>
       </footer>
 
     </main>
   </div>
-
-<!-- 모드 A(md 변환)일 때만 위 footer 대신 아래 파생물 footer를 쓴다.
-<footer class="derived" data-derived-from="docs/foo-design.md">
-  이 HTML은 <span class="k">docs/foo-design.md</span>에서 생성된 파생물이다
-  (생성 2026-01-01, 소스 커밋 abc1234). 내용 수정은 소스 md에서.
-</footer>
--->
-<!-- CONTENT:END -->
 </div>
 
 </body>

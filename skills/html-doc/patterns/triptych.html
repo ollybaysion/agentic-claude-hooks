@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>triptych 패턴 — 견본과 사용법</title>
+<style>
+:root {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Malgun Gothic", "Noto Sans KR", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+  --measure: 34rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+    --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+    --line: #273138; --line-soft: #1E272C;
+    --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+    --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+  --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+  --line: #273138; --line-soft: #1E272C;
+  --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+  --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+}
+:root[data-theme="light"] {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--sans); font-size: 16px; line-height: 1.72;
+  -webkit-font-smoothing: antialiased; word-break: keep-all;
+}
+.page { max-width: 66rem; margin: 0 auto; padding: 0 1.5rem 5rem; }
+.masthead { padding: 3.5rem 0 2rem; border-bottom: 1px solid var(--ink); }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 1.5rem;
+}
+.eyebrow .mark { color: var(--accent); }
+h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.15; letter-spacing: -0.025em; margin: 0; text-wrap: balance; }
+.standfirst { max-width: var(--measure); margin: 1.25rem 0 0; font-size: 1.0625rem; color: var(--ink-2); }
+section { padding-top: 3rem; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 0.85rem;
+  border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 1.5rem;
+}
+.sec-head .num { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.1em; color: var(--accent); }
+h2 { font-size: 1.4rem; letter-spacing: -0.02em; font-weight: 650; margin: 0; }
+p { max-width: var(--measure); margin: 0 0 1.1rem; }
+strong { font-weight: 650; color: var(--ink); }
+.k, code {
+  font-family: var(--mono); font-size: 0.86em; background: var(--sunken);
+  border: 1px solid var(--line-soft); border-radius: 3px;
+  padding: 0.08em 0.36em; white-space: nowrap;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+ol.plain, ul.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.2rem; }
+ol.plain li, ul.plain li { margin-bottom: 0.5rem; }
+@media print {
+  .page { max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  a { color: inherit; }
+}
+
+/* ═══════ triptych 패턴 CSS:START — 여기부터 END까지 문서 <style>에 통째로 복사 ═══════ */
+.triptych {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 1.25rem 0;
+}
+@media (min-width: 46rem) { .triptych { grid-template-columns: repeat(3, 1fr); } }
+.triptych > div { background: var(--surface); padding: 1.25rem 1.3rem 1.4rem; }
+/* 채택안 강조 — 대안 검토에서 하나만 */
+.triptych > div.pick { box-shadow: inset 0 0 0 1.5px var(--accent); }
+.triptych .zone {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+  display: block;
+  margin-bottom: 0.6rem;
+}
+.triptych .zone.alt { color: var(--ink-3); }
+.triptych h4 { margin: 0 0 0.5rem; font-size: 1rem; font-weight: 650; }
+/* 수치 타일 변형 — 리포트 머리 대표 수치 */
+.triptych h4.num { font-family: var(--mono); font-size: 1.5rem; letter-spacing: -0.02em; }
+.triptych p { font-size: 0.9375rem; color: var(--ink-2); margin: 0 0 0.6rem; max-width: none; }
+.triptych ul { margin: 0; padding-left: 1rem; font-size: 0.875rem; color: var(--ink-2); }
+.triptych li { margin-bottom: 0.3rem; }
+.triptych li::marker { color: var(--ink-3); }
+/* ═══════ triptych 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow"><span class="mark">◆</span> html-doc 스킬 · patterns/triptych.html — 이 파일이 복사 원본</p>
+    <h1>triptych 패턴</h1>
+    <p class="standfirst">
+      1px 괘선으로 이어붙인 <strong>3열 카드 그리드</strong>. 두 용법 —
+      ① 대안 3안 검토(채택안 <span class="k">pick</span> 강조),
+      ② 리포트 머리의 대표 수치 타일(<span class="k">h4.num</span>).
+      v1의 compare(3안)·stats 패턴을 흡수한 후계다.
+    </p>
+  </header>
+
+  <main>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>언제 쓰나</h2></div>
+      <p><strong>대안 검토</strong>: 옵션 3개를 나란히 — zone 라벨로 지위(기본값/옵션/
+        대안)를 표시하고 채택안에만 <span class="k">pick</span>. 결정과 근거는 카드
+        밖 <span class="k">.decision</span> 콜아웃에 날짜와 함께 적는다. 2안이면
+        <a href="versus.html">versus</a>, 4안 이상이면 표가 낫다.</p>
+      <p><strong>수치 타일</strong>: 리포트 머리에 대표 수치 3개(46rem 미만에선
+        세로 스택). 수치는 <span class="k">h4.num</span>, 라벨은 zone, 해석 한 줄은
+        p — 수치 자체에 색을 칠하지 않는다. 6개를 넘으면 표로.</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>데모 ① — 대안 3안 검토</h2></div>
+
+      <!-- ═══════ triptych 패턴 마크업:START — 이 블록을 복사해 내용을 교체한다 ═══════ -->
+      <div class="triptych">
+        <div>
+          <span class="zone alt">옵션 A</span>
+          <h4>scope — 사용자 지정 범위</h4>
+          <ul>
+            <li>감사 용도에 정확</li>
+            <li>세션마다 사람이 지정해야 — 자동 집계 불가</li>
+          </ul>
+        </div>
+        <div class="pick">
+          <span class="zone">기본값 B</span>
+          <h4>edit-derived — 자동 유도</h4>
+          <ul>
+            <li>완전 자동 — 대시보드 집계의 전제</li>
+            <li>편집 없는 세션엔 fallback 필요</li>
+          </ul>
+        </div>
+        <div>
+          <span class="zone alt">옵션 C</span>
+          <h4>golden — 명시적 목록</h4>
+          <ul>
+            <li>연구·회귀에 정확</li>
+            <li>목록 작성 비용 — 일상엔 비현실적</li>
+          </ul>
+        </div>
+      </div>
+      <!-- ═══════ triptych 패턴 마크업:END ═══════ -->
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>데모 ② — 수치 타일</h2></div>
+      <div class="triptych">
+        <div>
+          <span class="zone">병목</span>
+          <h4 class="num">&lt; 0.35</h4>
+          <p>SOTA의 라인 수준 F1 — 파일은 찾지만 라인 선택이 약하다.</p>
+        </div>
+        <div>
+          <span class="zone">usage drop</span>
+          <h4 class="num">43.1%</h4>
+          <p>찾아놓고 패치에 반영하지 못한 컨텍스트 비율.</p>
+        </div>
+        <div>
+          <span class="zone">역설</span>
+          <h4 class="num">0.708</h4>
+          <p>최고 성과 모델의 Redundancy — 재읽기가 가장 많았다.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="s4">
+      <div class="sec-head"><span class="num">04</span><h2>사용법 (모델용 절차)</h2></div>
+      <ol class="plain">
+        <li>CSS 블록을 문서 <span class="k">&lt;style&gt;</span> 끝에 복사한다.</li>
+        <li>대안 검토: <span class="k">pick</span>은 채택안 하나에만, 나머지 zone은
+          <span class="k">alt</span>(회색). 결정 기록은 카드 밖
+          <span class="k">.decision</span>으로.</li>
+        <li>수치 타일: 수치 출처(측정 시점·기간)를 섹션 제목이나 본문에 남긴다.</li>
+        <li>렌더 후 <span class="k">check.mjs</span>는 평소대로.</li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+</body>
+</html>
