@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>versus 패턴 — 견본과 사용법</title>
+<style>
+:root {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo",
+          "Malgun Gothic", "Noto Sans KR", Roboto, sans-serif;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+          "Liberation Mono", monospace;
+  --measure: 34rem;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+    --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+    --line: #273138; --line-soft: #1E272C;
+    --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+    --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0F1417; --surface: #161D21; --sunken: #12181B;
+  --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D;
+  --line: #273138; --line-soft: #1E272C;
+  --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13);
+  --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13);
+}
+:root[data-theme="light"] {
+  --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA;
+  --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85;
+  --line: #D2D8DB; --line-soft: #E2E6E8;
+  --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09);
+  --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10);
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font-family: var(--sans); font-size: 16px; line-height: 1.72;
+  -webkit-font-smoothing: antialiased; word-break: keep-all;
+}
+.page { max-width: 66rem; margin: 0 auto; padding: 0 1.5rem 5rem; }
+.masthead { padding: 3.5rem 0 2rem; border-bottom: 1px solid var(--ink); }
+.eyebrow {
+  font-family: var(--mono); font-size: 0.6875rem; letter-spacing: 0.16em;
+  text-transform: uppercase; color: var(--ink-3); margin: 0 0 1.5rem;
+}
+.eyebrow .mark { color: var(--accent); }
+h1 { font-size: clamp(1.8rem, 5vw, 2.6rem); line-height: 1.15; letter-spacing: -0.025em; margin: 0; text-wrap: balance; }
+.standfirst { max-width: var(--measure); margin: 1.25rem 0 0; font-size: 1.0625rem; color: var(--ink-2); }
+section { padding-top: 3rem; }
+.sec-head {
+  display: flex; align-items: baseline; gap: 0.85rem;
+  border-top: 1px solid var(--line); padding-top: 1rem; margin-bottom: 1.5rem;
+}
+.sec-head .num { font-family: var(--mono); font-size: 0.75rem; letter-spacing: 0.1em; color: var(--accent); }
+h2 { font-size: 1.4rem; letter-spacing: -0.02em; font-weight: 650; margin: 0; }
+p { max-width: var(--measure); margin: 0 0 1.1rem; }
+strong { font-weight: 650; color: var(--ink); }
+.k, code {
+  font-family: var(--mono); font-size: 0.86em; background: var(--sunken);
+  border: 1px solid var(--line-soft); border-radius: 3px;
+  padding: 0.08em 0.36em; white-space: nowrap;
+}
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+ol.plain, ul.plain { max-width: var(--measure); margin: 0 0 1.1rem; padding-left: 1.2rem; }
+ol.plain li, ul.plain li { margin-bottom: 0.5rem; }
+@media print {
+  .page { max-width: none; padding: 0; }
+  body { font-size: 11pt; }
+  a { color: inherit; }
+}
+
+/* ═══════ versus 패턴 CSS:START — 여기부터 END까지 문서 <style>에 통째로 복사 ═══════ */
+.versus {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+  margin: 1.25rem 0;
+}
+@media (min-width: 40rem) { .versus { grid-template-columns: 1fr 1fr; } }
+.versus > div { background: var(--surface); padding: 1.4rem 1.5rem 1.6rem; }
+.versus .tag {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  display: block;
+  margin-bottom: 0.5rem;
+}
+.versus h4 { margin: 0 0 0.75rem; font-size: 1.125rem; font-weight: 650; letter-spacing: -0.015em; }
+.versus p { font-size: 0.9375rem; margin: 0 0 0.9rem; max-width: none; }
+.versus .who { color: var(--accent); }
+/* 하단 대조 행 — 라벨/값 쌍. 두 카드가 같은 라벨 순서를 갖게 한다 */
+.versus dl {
+  margin: 0;
+  font-size: 0.875rem;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 0.3rem 1rem;
+  border-top: 1px dashed var(--line);
+  padding-top: 0.9rem;
+}
+.versus dt {
+  font-family: var(--mono);
+  font-size: 0.6875rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  padding-top: 0.2rem;
+}
+.versus dd { margin: 0; color: var(--ink-2); }
+.versus dd b { color: var(--ink); }
+/* ═══════ versus 패턴 CSS:END ═══════ */
+</style>
+</head>
+<body>
+
+<div class="page">
+
+  <header class="masthead">
+    <p class="eyebrow"><span class="mark">◆</span> html-doc 스킬 · patterns/versus.html — 이 파일이 복사 원본</p>
+    <h1>versus 패턴</h1>
+    <p class="standfirst">
+      <strong>정확히 두 대상</strong>을 대칭으로 맞세운다 — 두 실패 모드, 두 전략,
+      옛 방식 vs 새 방식. 카드 두 장이 같은 골격(tag → h4 → 설명 → dl 대조 행)을
+      공유해서 차이가 구조적으로 읽힌다.
+    </p>
+  </header>
+
+  <main>
+
+    <section id="s1">
+      <div class="sec-head"><span class="num">01</span><h2>언제 쓰나</h2></div>
+      <p><strong>2안의 대칭 대비</strong> 전용이다. 3안 이상의 대안 검토는
+        <a href="triptych.html">triptych</a>, 순서 있는 절차는 steps(코어 인벤토리),
+        채택/기각 판정과 근거 기록은 <span class="k">.decision</span> 콜아웃과
+        결합한다 — versus가 사실을 나란히 놓고, decision이 결론을 적는 분업.</p>
+      <p>블록 구성: <span class="k">tag</span>(모노 대문자 분류 라벨) ·
+        <span class="k">h4</span>(주장 한 줄) · 설명 문단(강조는
+        <span class="k">.who</span>) · <span class="k">dl</span>(라벨/값 대조 행 —
+        양쪽 카드가 같은 라벨을 같은 순서로).</p>
+    </section>
+
+    <section id="s2">
+      <div class="sec-head"><span class="num">02</span><h2>데모 — 재읽기 전략 두 가지</h2></div>
+
+      <!-- ═══════ versus 패턴 마크업:START — 이 블록을 복사해 내용을 교체한다 ═══════ -->
+      <div class="versus">
+        <div>
+          <span class="tag">Strategy A · 재읽기</span>
+          <h4>읽었던 파일을 다시 읽는다</h4>
+          <p>패치 직전에 관련 파일을 재방문해 <span class="who">희석된 컨텍스트를
+            갱신</span>한다. 중복 열람은 낭비처럼 보이지만 결과가 다르다.</p>
+          <dl>
+            <dt>usage drop</dt><dd>19.6% — 최저</dd>
+            <dt>해석</dt><dd>재읽기는 <b>손실을 막는 보상 전략</b></dd>
+          </dl>
+        </div>
+        <div>
+          <span class="tag">Strategy B · 일독</span>
+          <h4>한 번 읽고 재방문하지 않는다</h4>
+          <p>탐색 자체는 성공하지만, 정작 쓸 시점엔
+            <span class="who">소화가 안 된 상태로 패치를 쓴다</span>.</p>
+          <dl>
+            <dt>usage drop</dt><dd>43.1% — 찾은 것의 절반 증발</dd>
+            <dt>해석</dt><dd>"재읽기 적음 = 효율"이라는 <b>직관이 뒤집힌 지점</b></dd>
+          </dl>
+        </div>
+      </div>
+      <!-- ═══════ versus 패턴 마크업:END ═══════ -->
+    </section>
+
+    <section id="s3">
+      <div class="sec-head"><span class="num">03</span><h2>사용법 (모델용 절차)</h2></div>
+      <ol class="plain">
+        <li>CSS 블록을 문서 <span class="k">&lt;style&gt;</span> 끝에 복사한다.</li>
+        <li>마크업 블록을 복사해 교체한다. 카드 두 장이 <strong>같은 골격·같은 dl
+          라벨 순서</strong>를 갖게 한다 — 비대칭이면 대비가 아니라 나열이다.</li>
+        <li>결론이 있으면 versus 아래에 <span class="k">.decision</span>(날짜·근거
+          필수)을 붙인다. 카드 안에 판정을 넣지 않는다.</li>
+        <li>렌더 후 <span class="k">check.mjs</span>는 평소대로.</li>
+      </ol>
+    </section>
+
+  </main>
+</div>
+
+</body>
+</html>

@@ -4,9 +4,9 @@
 //
 // 검사 항목: self-contained(리소스 로드 0), 문서 골격(DOCTYPE/lang/title),
 // 테마(prefers-color-scheme + data-theme 양방향 오버라이드), 인쇄 CSS,
-// h2/h3 id, {{...}} 플레이스홀더 잔재, 인라인 style 색 리터럴(디자인 토큰
-// 강제 — design.md), (--derived) 파생물 표기.
-// 정적 검사의 한계: 인라인 JS의 런타임 네트워크 호출(fetch/XHR)은 못 잡는다.
+// section id, rail 앵커 정합, script 금지(v2 = JS 0), 표의 .table-scroll 격리,
+// {{...}} 플레이스홀더 잔재, 인라인 style 색 리터럴(디자인 토큰 강제 —
+// design.md), (--derived) 파생물 표기.
 //
 // <a href="https://...">는 허용한다 — 내비게이션 링크는 리소스 로드가 아니다.
 // 금지 대상은 "열 때 브라우저가 가져오는 것"(script/link/img/... 의 src·href,
@@ -123,14 +123,49 @@ export function checkHtml(html, { derived = false } = {}) {
     errors.push({ rule: "print-css", msg: "@media print 블록이 없다" });
   }
 
-  // h2/h3 id — TOC·앵커 안정성. id는 저작 시점에 부여한다(JS 생성 금지).
-  const HEADING_RE = /<h([23])\b([^>]*)>([\s\S]*?)<\/h\1>/gi;
-  let h;
-  while ((h = HEADING_RE.exec(doc)) !== null) {
-    if (!/\bid\s*=/i.test(h[2])) {
-      const text = h[3].replace(/<[^>]*>/g, "").trim().slice(0, 40);
-      errors.push({ rule: "heading-id", msg: `id 없는 h${h[1]}: "${text}"` });
+  // v2 = JS 0. TOC는 정적 rail, 테마는 media query + data-theme CSS만 —
+  // <script>가 있으면 계약 위반이다(escaped 예시는 실제 태그가 아니라 안 걸림).
+  if (/<script\b/i.test(doc)) {
+    errors.push({
+      rule: "no-script",
+      msg: "v2 문서는 JS를 포함하지 않는다 — <script> 금지 (TOC=정적 rail, 테마=CSS)",
+    });
+  }
+
+  // section id — rail 앵커의 진실원. 저작 시점에 부여한다(JS 생성 금지).
+  const SECTION_RE = /<section\b([^>]*)>/gi;
+  let sec;
+  while ((sec = SECTION_RE.exec(doc)) !== null) {
+    if (!/\bid\s*=/i.test(sec[1])) {
+      errors.push({ rule: "section-id", msg: "id 없는 <section> — rail 앵커가 끊긴다" });
     }
+  }
+
+  // rail 앵커 정합 — nav.rail의 #href마다 대응하는 id가 문서에 있어야 한다.
+  const rail = doc.match(/<nav\b[^>]*\brail\b[^>]*>([\s\S]*?)<\/nav>/i);
+  if (rail) {
+    const ids = new Set();
+    const ID_RE = /\bid\s*=\s*"([^"]+)"/gi;
+    let idm;
+    while ((idm = ID_RE.exec(doc)) !== null) ids.add(idm[1]);
+    const HREF_RE = /\bhref\s*=\s*"#([^"]+)"/gi;
+    let hm;
+    while ((hm = HREF_RE.exec(rail[1])) !== null) {
+      if (!ids.has(hm[1])) {
+        errors.push({ rule: "rail-anchor", msg: `rail 링크 #${hm[1]}에 대응하는 id가 없다` });
+      }
+    }
+  }
+
+  // 표는 .table-scroll 컨테이너 안에서만 가로 스크롤한다(body 가로 흐름 방지).
+  const tableCount = (doc.match(/<table\b/gi) ?? []).length;
+  const wrappedCount =
+    (doc.match(/table-scroll[^>]*>\s*<table\b/gi) ?? []).length;
+  if (tableCount > wrappedCount) {
+    errors.push({
+      rule: "table-scroll",
+      msg: `.table-scroll 밖의 <table> ${tableCount - wrappedCount}개 — <div class="table-scroll">로 감싼다`,
+    });
   }
 
   // 템플릿 플레이스홀더 잔재 — 코드 예시(<pre>/<code>) 속 {{ }}는 제외
