@@ -880,6 +880,46 @@ check("fleet: by_flag surfaces seeded inefficiencies (long-tail/search-storm/ret
 check("fleet: series + unattributed present", (ft.series || []).length > 0 && ft.totals.unattributed_cost_usd != null,
   JSON.stringify({ series: (ft.series || []).length, unatt: ft.totals && ft.totals.unattributed_cost_usd }));
 
+// ══ #138 — archival sessions (events trimmed → materialized-turns fallback) ══
+process.stdout.write("\n# archival sessions (#138)\n");
+{
+  const now = Date.now();
+  const dbw = new DatabaseSync(DB_PATH);
+  // a session whose events were fully trimmed by retention: only materialized
+  // rows (+ its title) survive. No usage rows → the materializer never treats
+  // it as a candidate, so these seeds are stable across later server spawns.
+  const ins = dbw.prepare(`INSERT INTO turns (session_id,turn_seq,source_app,n,status,auto,started_at,ended_at,duration_ms,tool_ms,wait_ms,gap_ms,calls,subagent_calls,distinct_tools,errors,orphans,dup_calls,guard_denies,queued_prompts,precompacts,cost_usd,cost_subagent_usd,flags,flags_mask,config_ver,materialized_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  ins.run("sess-arch", 0, "appA", 0, "virtual", null, now - 7_200_000, now - 7_200_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, "[]", 0, 1, now);
+  ins.run("sess-arch", 10, "appA", 1, "complete", null, now - 7_100_000, now - 7_000_000, 100_000, 40_000, 10_000, 50_000, 5, 2, 3, 1, 0, 0, 0, 0, 1, 1.25, 0.5, '["long-tail"]', 16, 1, now);
+  ins.run("sess-arch", 20, "appA", 2, "complete", "task-notification", now - 6_900_000, now - 6_800_000, 100_000, 0, 0, 100_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, "[]", 0, 1, now);
+  dbw.prepare("INSERT INTO session_titles (session_id, title, prompt_count, generated_at) VALUES ('sess-arch','아카이브 세션',1,?)").run(now);
+  dbw.close();
+}
+const arch = await statGet(45774, "/stats/sessions?window=7d&limit=100", null);
+const archRow = (arch.sessions || []).find((s) => s.session_id === "sess-arch");
+const liveRow = (arch.sessions || []).find((s) => s.session_id === "sess-turn");
+check("arch: turns-only session appears with archival flag", !!archRow && archRow.archival === true, JSON.stringify(archRow));
+check("arch: human turns counted (virtual+auto excluded → 1), calls summed (5)",
+  archRow && archRow.turns === 1 && archRow.tool_calls === 5,
+  archRow && JSON.stringify({ t: archRow.turns, c: archRow.tool_calls }));
+check("arch: ended, inactive, title joined, no first_prompt",
+  archRow && archRow.ended === true && archRow.active === false && archRow.title === "아카이브 세션" && archRow.first_prompt === null,
+  archRow && JSON.stringify({ e: archRow.ended, a: archRow.active, ti: archRow.title, fp: archRow.first_prompt }));
+check("arch: session with live events stays non-archival (events row wins, once)",
+  !!liveRow && !liveRow.archival && (arch.sessions || []).filter((s) => s.session_id === "sess-turn").length === 1,
+  JSON.stringify(liveRow));
+const archT = await statGet(45775, "/stats/turns?session_id=sess-arch", null);
+check("arch: drill falls back to materialized rows (archival, 3 turns)",
+  archT.archival === true && archT.count === 3, JSON.stringify({ a: archT.archival, c: archT.count }));
+const archT1 = (archT.turns || []).find((t) => t.turn_seq === 10);
+check("arch: fallback turn shape (flags array, cost, time split, no prompt)",
+  archT1 && Array.isArray(archT1.flags) && archT1.flags.includes("long-tail") && approx(archT1.cost_usd, 1.25)
+    && archT1.tool_ms === 40_000 && archT1.prompt === null,
+  JSON.stringify(archT1));
+const archTd = await statGet(45771, "/stats/turns?session_id=sess-arch&turn=10", null);
+check("arch: per-turn detail unavailable (payload gone → error body)", archTd && archTd.error != null, JSON.stringify(archTd));
+
 // ══ #92 — keyword-docs corpus viewer (/docs + /docs/content) ═════════════════
 process.stdout.write("\n# keyword-docs corpus viewer (/docs)\n");
 function getRaw(port, p) {
