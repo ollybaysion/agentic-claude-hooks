@@ -1,0 +1,48 @@
+<!-- svg-figure 템플릿: flow — 분기 하나가 있는 처리 흐름 (위→아래).
+     복사한 뒤 루트 id "flow-template"과 접두사를 파일 이름으로 전부 바꾼다.
+     행을 늘리려면 grid.md §flow 상수를 더한다:
+       단계 → 단계 112,  단계 → 분기 112,  분기 → 다음 136
+       캔버스 H = 마지막 박스 y + 높이 + 24 -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     id="flow-template" viewBox="0 0 704 360"
+     width="100%" preserveAspectRatio="xMidYMid meet"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Roboto, sans-serif">
+
+  <defs>
+    <marker id="flow-template-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#47535B"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="704" height="360" fill="#F9FAFA"/>
+
+  <!-- 단계 (박스 폭 240, 라벨 13px 한글 최대 16자) -->
+  <rect x="160" y="24" width="240" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="280" y="56" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{첫 단계}}</text>
+
+  <line x1="280" y1="88" x2="280" y2="136" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#flow-template-arrow)"/>
+
+  <!-- 분기 -->
+  <polygon points="280,136 400,180 280,224 160,180" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="280" y="180" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{판단}}</text>
+
+  <!-- 아니오 가지 → 오른쪽 -->
+  <text x="420" y="168" font-size="11" fill="#6E7C85" text-anchor="middle">아니오</text>
+  <line x1="400" y1="180" x2="440" y2="180" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#flow-template-arrow)"/>
+  <rect x="440" y="148" width="240" height="64" rx="4" fill="#E5E9EA" stroke="#D2D8DB"/>
+  <text x="560" y="180" font-size="13" font-weight="500" fill="#47535B"
+        text-anchor="middle" dominant-baseline="central">{{예외 처리}}</text>
+
+  <!-- 예 가지 → 아래 -->
+  <text x="300" y="252" font-size="11" fill="#6E7C85" text-anchor="middle">예</text>
+  <line x1="280" y1="224" x2="280" y2="272" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#flow-template-arrow)"/>
+  <rect x="160" y="272" width="240" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="280" y="304" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{다음 단계}}</text>
+</svg>

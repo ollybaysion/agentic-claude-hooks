@@ -1,0 +1,29 @@
+schema_version: "1.1"
+name: routing-figure-flowchart
+description: 도형+html — html-doc이 흡수하기 쉬운 문구
+tags: [routing, skills]
+plugins: [claude-hooks]
+
+execution:
+  prompt: |
+    순서도 html로 뽑아줘
+  max_turns: 3
+  timeout_seconds: 180
+  allowed_tools: [Skill]
+
+runs: 3
+
+graders:
+  - type: tool_used
+    name: svg-figure-발동
+    tool: Skill
+    input_match: "svg-figure"
+    min: 1
+  - type: tool_used
+    name: html-doc-미발동
+    tool: Skill
+    input_match: "html-doc"
+    max: 0
+
+expected_outcome: |
+  svg-figure 스킬이 발동하고 html-doc 는 발동하지 않는다.

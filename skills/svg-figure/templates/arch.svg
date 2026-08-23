@@ -1,0 +1,57 @@
+<!-- svg-figure 템플릿: arch — 계층(그룹) 안의 컴포넌트와 연결.
+     복사한 뒤 루트 id "arch-template"과 접두사를 파일 이름으로 전부 바꾼다.
+     grid.md §arch 상수:
+       컴포넌트 x = 40 + i×224 (한 행 최대 4개),  컴포넌트 행 pitch 88
+       그룹 높이 = 48 + 행수×88,  그룹 간 세로 간격 32 -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     id="arch-template" viewBox="0 0 960 352"
+     width="100%" preserveAspectRatio="xMidYMid meet"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Roboto, sans-serif">
+
+  <defs>
+    <marker id="arch-template-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#47535B"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="960" height="352" fill="#F9FAFA"/>
+
+  <!-- 상위 계층 -->
+  <rect x="24" y="24" width="912" height="136" rx="6" fill="#FFFFFF" stroke="#E2E6E8"/>
+  <text x="40" y="48" font-size="11" fill="#6E7C85" text-anchor="start">{{계층 1}}</text>
+
+  <rect x="40" y="72" width="200" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="140" y="104" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 A}}</text>
+
+  <rect x="264" y="72" width="200" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="364" y="104" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 B}}</text>
+
+  <rect x="488" y="72" width="200" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="588" y="104" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 C}}</text>
+
+  <rect x="712" y="72" width="200" height="64" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="812" y="104" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 D}}</text>
+
+  <!-- 하위 계층 -->
+  <rect x="24" y="192" width="912" height="136" rx="6" fill="#FFFFFF" stroke="#E2E6E8"/>
+  <text x="40" y="216" font-size="11" fill="#6E7C85" text-anchor="start">{{계층 2}}</text>
+
+  <rect x="40" y="240" width="200" height="64" rx="4" fill="#E5E9EA" stroke="#D2D8DB"/>
+  <text x="140" y="272" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 E}}</text>
+
+  <rect x="264" y="240" width="200" height="64" rx="4" fill="#E5E9EA" stroke="#D2D8DB"/>
+  <text x="364" y="272" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">{{컴포넌트 F}}</text>
+
+  <!-- 연결 -->
+  <line x1="140" y1="136" x2="140" y2="240" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#arch-template-arrow)"/>
+  <line x1="364" y1="136" x2="364" y2="240" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#arch-template-arrow)"/>
+</svg>

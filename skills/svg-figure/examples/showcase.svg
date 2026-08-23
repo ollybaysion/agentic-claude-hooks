@@ -1,0 +1,65 @@
+<!-- svg-figure 견본 — 참여자 4, 메시지 6의 실제 시퀀스.
+     템플릿이 어떻게 채워지는지 보여주는 골든 테스트 대상이다(test.mjs). -->
+<svg xmlns="http://www.w3.org/2000/svg"
+     id="showcase" viewBox="0 0 848 456"
+     width="100%" preserveAspectRatio="xMidYMid meet"
+     font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Apple SD Gothic Neo', 'Malgun Gothic', 'Noto Sans KR', Roboto, sans-serif">
+
+  <defs>
+    <marker id="showcase-arrow" viewBox="0 0 8 8" refX="7" refY="4"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#47535B"/>
+    </marker>
+    <marker id="showcase-arrow-soft" viewBox="0 0 8 8" refX="7" refY="4"
+            markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L8,4 L0,8 z" fill="#6E7C85"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="848" height="456" fill="#F9FAFA"/>
+
+  <rect x="24" y="24" width="176" height="40" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="112" y="44" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">브라우저</text>
+
+  <rect x="232" y="24" width="176" height="40" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="320" y="44" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">게이트웨이</text>
+
+  <rect x="440" y="24" width="176" height="40" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="528" y="44" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">판정 서비스</text>
+
+  <rect x="648" y="24" width="176" height="40" rx="4" fill="#FFFFFF" stroke="#D2D8DB"/>
+  <text x="736" y="44" font-size="13" font-weight="500" fill="#14181B"
+        text-anchor="middle" dominant-baseline="central">Oracle</text>
+
+  <line x1="112" y1="64" x2="112" y2="432" stroke="#D2D8DB" stroke-dasharray="2 4"/>
+  <line x1="320" y1="64" x2="320" y2="432" stroke="#D2D8DB" stroke-dasharray="2 4"/>
+  <line x1="528" y1="64" x2="528" y2="432" stroke="#D2D8DB" stroke-dasharray="2 4"/>
+  <line x1="736" y1="64" x2="736" y2="432" stroke="#D2D8DB" stroke-dasharray="2 4"/>
+
+  <text x="216" y="104" font-size="11" fill="#47535B" text-anchor="middle">질문 전송</text>
+  <line x1="112" y1="112" x2="320" y2="112" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#showcase-arrow)"/>
+
+  <text x="424" y="160" font-size="11" fill="#47535B" text-anchor="middle">필요 데이터 판정</text>
+  <line x1="320" y1="168" x2="528" y2="168" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#showcase-arrow)"/>
+
+  <text x="632" y="216" font-size="11" fill="#47535B" text-anchor="middle">카탈로그 조회</text>
+  <line x1="528" y1="224" x2="736" y2="224" stroke="#47535B" stroke-width="1.5"
+        marker-end="url(#showcase-arrow)"/>
+
+  <text x="632" y="272" font-size="11" fill="#6E7C85" text-anchor="middle">결과 행</text>
+  <line x1="736" y1="280" x2="528" y2="280" stroke="#6E7C85" stroke-width="1.5"
+        stroke-dasharray="4 4" marker-end="url(#showcase-arrow-soft)"/>
+
+  <text x="424" y="328" font-size="11" fill="#6E7C85" text-anchor="middle">데이터 요청 목록</text>
+  <line x1="528" y1="336" x2="320" y2="336" stroke="#6E7C85" stroke-width="1.5"
+        stroke-dasharray="4 4" marker-end="url(#showcase-arrow-soft)"/>
+
+  <text x="216" y="384" font-size="11" fill="#6E7C85" text-anchor="middle">판정 응답</text>
+  <line x1="320" y1="392" x2="112" y2="392" stroke="#6E7C85" stroke-width="1.5"
+        stroke-dasharray="4 4" marker-end="url(#showcase-arrow-soft)"/>
+</svg>
