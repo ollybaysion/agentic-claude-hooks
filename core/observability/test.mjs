@@ -15,6 +15,8 @@
 // #66 — session titles: /stats/sessions first_prompt derivation, the batch
 // `title-sessions` (LLM stubbed via OBS_TITLE_STUB), title→first_prompt fallback,
 // and the candidate filter (0-prompt skipped, titled-not-grown not re-titled).
+// #142 — titler recursion guard: a session whose first prompt is the titler's
+// own instruction is skipped, never titled.
 
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync, spawn } from "node:child_process";
@@ -327,6 +329,22 @@ check("short --idle titles the recent session", /sess-rec/.test(tShort), tShort.
 const stR2 = await statGet(45744, "/stats/sessions?window=7d&limit=100", null);
 const rr2 = (stR2.sessions || []).find((r) => r.session_id === "sess-recent");
 check("recent session titled with short idle", rr2 && rr2.title === "최근 스텁", rr2 && JSON.stringify(rr2.title));
+
+// ══ #142 — titler recursion guard (a titler's own -p session is never titled) ═
+process.stdout.write("\n# titler recursion guard (#142)\n");
+{
+  const db = new DatabaseSync(DB_PATH);
+  const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+  const past = Date.now() - 3600000; // idle + untitled → would be a candidate without the guard
+  insE.run(130, "e130", "testapp", "sess-titler", "UserPromptSubmit", past, JSON.stringify({
+    prompt: "다음은 한 코딩 세션에서 사용자가 순서대로 보낸 요청들이다. 이 세션이 무엇에 관한 것인지 한국어로 8단어 이내 제목 한 줄로만 답하라. 따옴표·마침표·설명 없이 제목만 출력:\n\n1. 진짜 사용자 요청" }));
+  db.close();
+}
+const tRec = cliEnv({ OBS_TITLE_STUB: "재귀 제목" }, "title-sessions");
+check("titler-prompt session skipped (titled=0)", /titled=0\b/.test(tRec), tRec.trim());
+const stRec = await statGet(45790, "/stats/sessions?window=7d&limit=100", null);
+const rec = (stRec.sessions || []).find((r) => r.session_id === "sess-titler");
+check("titler-prompt session stays untitled", rec && rec.title === null, rec && JSON.stringify(rec.title));
 
 // ══ #63 — nudge observation (/stats/nudges: fires + join to outcomes) ════════
 process.stdout.write("\n# nudge observation (/stats/nudges)\n");
