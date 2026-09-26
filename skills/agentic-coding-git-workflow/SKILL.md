@@ -71,10 +71,11 @@ description: >-
    로컬 `main`이 있으면 best-effort ff: `git -C <MAIN> pull --ff-only origin main` (실패 무시).
 
 4. **브랜치 + 워크트리 생성.** 슬러그는 이슈 제목에서 kebab-case. 타입은 기능 `feat/`,
-   버그 `fix/`. 경로는 `<MAIN>`의 형제(`<repo>-<slug>`):
+   버그 `fix/`. 경로는 `<MAIN>` 옆 `worktrees/` 폴더 안의 `<repo>-<slug>` — 워크트리를
+   메인 체크아웃과 섞지 않고 한 폴더에 모은다(`worktrees/`는 `worktree add`가 만든다):
 
    ```bash
-   git -C <MAIN> worktree add "$(dirname <MAIN>)/$(basename <MAIN>)-<slug>" \
+   git -C <MAIN> worktree add "$(dirname <MAIN>)/worktrees/$(basename <MAIN>)-<slug>" \
      -b feat/<slug> origin/main
    ```
 
@@ -175,5 +176,6 @@ PR이 머지된 뒤 실행한다. 워크트리를 제거하고 로컬 main을 �
 - `--force` 금지(`--force-with-lease`만), `--no-verify` 금지.
 - `git`은 `git -C <경로>`로, `gh`는 `-C`가 없으니 `(cd <경로> && gh …)`나 `-R`로 실행한다
   (서브셸 `(cd …)`는 `bash-guard`가 허용하는 형태).
-- 워크트리 경로는 `<MAIN>`의 형제 `<repo>-<slug>`, 디렉토리명과 브랜치명을 맞춰 혼동을 줄인다.
+- 워크트리 경로는 `$(dirname <MAIN>)/worktrees/<repo>-<slug>`, 디렉토리명과 브랜치명을 맞춰
+  혼동을 줄인다.
 - `gh`가 없거나 미인증이면 멈추고 안내한다 — 조용히 건너뛰지 않는다.
