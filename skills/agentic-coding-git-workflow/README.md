@@ -34,7 +34,8 @@
 
 ## 규칙
 
-- 작업 브랜치는 `feat/*` 또는 `fix/*`, 워크트리 경로는 형제 `<repo>-<slug>`
+- 작업 브랜치는 `feat/*` 또는 `fix/*`, 워크트리 경로는 메인 체크아웃 옆 `worktrees/<repo>-<slug>`
+  (메인 체크아웃과 섞지 않고 한 폴더에 모은다)
 - `--force` 대신 `--force-with-lease`, `--no-verify` 사용 안 함
 - `git`은 `git -C <경로>`, `gh`는 `-C`가 없으니 `(cd <경로> && gh …)`나 `-R`로
 
