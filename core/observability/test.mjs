@@ -12,11 +12,10 @@
 // per-session diagnostics (group=session: avg/peak ctx, model switches +
 // rewrite est, mega flag), and the session timeline (group=timeline: context
 // series, compact markers, compact what-if).
-// #66 — session titles: /stats/sessions first_prompt derivation, the batch
-// `title-sessions` (LLM stubbed via OBS_TITLE_STUB), title→first_prompt fallback,
-// and the candidate filter (0-prompt skipped, titled-not-grown not re-titled).
-// #142 — titler recursion guard: a session whose first prompt is the titler's
-// own instruction is skipped, never titled.
+// v9 — session labels (auto-titler removed): /stats/sessions first_prompt
+// derivation, retention pins each first prompt into session_labels before it
+// trims (the label outlives the event), and the v8→v9 migration keeps an old
+// LLM title only for sessions whose events are already gone.
 
 import { DatabaseSync } from "node:sqlite";
 import { spawnSync, spawn } from "node:child_process";
@@ -42,10 +41,7 @@ const DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "obs-ttl-"));
 const DB_PATH = path.join(DATA_DIR, "events.db");
 const TRANSCRIPT = path.join(DATA_DIR, "transcript.jsonl");
 const NOW = new Date().toISOString();
-// OBS_TITLE_AUTO=0 pins off the server-side auto-titler so no spawned test server
-// fires a `title-sessions` child at a live claude (the CLI titler path below is
-// tested directly and is unaffected by this gate).
-const baseEnv = { ...process.env, OBS_DATA_DIR: DATA_DIR, OBS_TOKEN: "", OBS_TITLE_AUTO: "0" };
+const baseEnv = { ...process.env, OBS_DATA_DIR: DATA_DIR, OBS_TOKEN: "" };
 
 // 3 assistant messages, all main-chain, same model:
 //   m_old  — mixed TTL, PRE-SEEDED into a v3 usage row (cache_create_1h missing)
@@ -273,78 +269,24 @@ check("what-if @200k ≈ 0.05, @300k = 0", tl.whatif && approx(tl.whatif["200000
 const tlBad = await statGet(45737, "/stats/tokens?group=timeline", null);
 check("timeline without session_id → error", !!tlBad.error, JSON.stringify(tlBad));
 
-// ══ #66 — session titles (first-prompt fallback + batch titler) ══════════════
-process.stdout.write("\n# session titles (first_prompt + title-sessions)\n");
+// ══ session labels — first_prompt derivation ════════════════════════════════
+process.stdout.write("\n# session labels (first_prompt)\n");
 {
   const db = new DatabaseSync(DB_PATH);
   const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
-  const past = Date.now() - 3600000; // > ACTIVE_MS ago → idle → titler candidate
+  const past = Date.now() - 3600000;
   insE.run(100, "e100", "testapp", "sess-title", "UserPromptSubmit", past,        JSON.stringify({ prompt: "대시보드 세션 제목 만들기" }));
   insE.run(101, "e101", "testapp", "sess-title", "PreToolUse",       past + 1000, JSON.stringify({}));
   insE.run(102, "e102", "testapp", "sess-title", "UserPromptSubmit", past + 2000, JSON.stringify({ prompt: "두 번째 질문" }));
   insE.run(110, "e110", "testapp", "sess-noprompt", "SessionStart",  past,        JSON.stringify({}));
   db.close();
 }
-// first_prompt derived from the earliest UserPromptSubmit; title still null
 const st1 = await statGet(45738, "/stats/sessions?window=7d&limit=100", null);
 const stt = (st1.sessions || []).find((r) => r.session_id === "sess-title");
 const stn = (st1.sessions || []).find((r) => r.session_id === "sess-noprompt");
 check("first_prompt = earliest UserPromptSubmit", stt && stt.first_prompt === "대시보드 세션 제목 만들기", stt && JSON.stringify(stt.first_prompt));
-check("title null before titling", stt && stt.title === null, stt && JSON.stringify(stt.title));
 check("no prompt → first_prompt null", stn && stn.first_prompt === null, stn && JSON.stringify(stn.first_prompt));
-
-// batch titler with a stubbed LLM (OBS_TITLE_STUB) — deterministic, no claude spawn
-const tOut = cliEnv({ OBS_TITLE_STUB: "스텁 제목" }, "title-sessions");
-check("titler titled exactly 1 (only idle, ≥1 prompt, untitled)", /titled=1\b/.test(tOut), tOut.trim());
-const st2 = await statGet(45739, "/stats/sessions?window=7d&limit=100", null);
-const stt2 = (st2.sessions || []).find((r) => r.session_id === "sess-title");
-const stn2 = (st2.sessions || []).find((r) => r.session_id === "sess-noprompt");
-check("title set, overrides first_prompt", stt2 && stt2.title === "스텁 제목", stt2 && JSON.stringify(stt2.title));
-check("0-prompt session stays untitled", stn2 && stn2.title === null, stn2 && JSON.stringify(stn2.title));
-
-// re-run without growth → not re-titled (candidate filter excludes titled-not-grown)
-const tOut2 = cliEnv({ OBS_TITLE_STUB: "다른 제목" }, "title-sessions");
-check("no candidates on re-run (titled=0)", /titled=0\b/.test(tOut2), tOut2.trim());
-const st3 = await statGet(45740, "/stats/sessions?window=7d&limit=100", null);
-const stt3 = (st3.sessions || []).find((r) => r.session_id === "sess-title");
-check("existing title unchanged without growth", stt3 && stt3.title === "스텁 제목", stt3 && JSON.stringify(stt3.title));
-
-// ══ auto-titler short idle gate (--idle) — recent sessions titled for the fleet ═
-process.stdout.write("\n# auto-titler short idle gate (--idle)\n");
-{
-  const db = new DatabaseSync(DB_PATH);
-  const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
-  const recent = Date.now() - 5000; // quiet only 5s → "active", excluded by the default 600s gate
-  insE.run(120, "e120", "testapp", "sess-recent", "UserPromptSubmit", recent, JSON.stringify({ prompt: "방금 시작한 활성 세션" }));
-  db.close();
-}
-// default gate (ACTIVE_MS=600s): the recent session is NOT a candidate → untitled
-cliEnv({ OBS_TITLE_STUB: "최근 스텁" }, "title-sessions");
-const stR1 = await statGet(45743, "/stats/sessions?window=7d&limit=100", null);
-const rr1 = (stR1.sessions || []).find((r) => r.session_id === "sess-recent");
-check("recent session untitled at default idle gate", rr1 && rr1.title === null, rr1 && JSON.stringify(rr1.title));
-// short idle (--idle 2 = 2s quiet): now a candidate → titled (what the auto-titler passes)
-const tShort = cliEnv({ OBS_TITLE_STUB: "최근 스텁" }, "title-sessions", "--idle", "2");
-check("short --idle titles the recent session", /sess-rec/.test(tShort), tShort.trim());
-const stR2 = await statGet(45744, "/stats/sessions?window=7d&limit=100", null);
-const rr2 = (stR2.sessions || []).find((r) => r.session_id === "sess-recent");
-check("recent session titled with short idle", rr2 && rr2.title === "최근 스텁", rr2 && JSON.stringify(rr2.title));
-
-// ══ #142 — titler recursion guard (a titler's own -p session is never titled) ═
-process.stdout.write("\n# titler recursion guard (#142)\n");
-{
-  const db = new DatabaseSync(DB_PATH);
-  const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
-  const past = Date.now() - 3600000; // idle + untitled → would be a candidate without the guard
-  insE.run(130, "e130", "testapp", "sess-titler", "UserPromptSubmit", past, JSON.stringify({
-    prompt: "다음은 한 코딩 세션에서 사용자가 순서대로 보낸 요청들이다. 이 세션이 무엇에 관한 것인지 한국어로 8단어 이내 제목 한 줄로만 답하라. 따옴표·마침표·설명 없이 제목만 출력:\n\n1. 진짜 사용자 요청" }));
-  db.close();
-}
-const tRec = cliEnv({ OBS_TITLE_STUB: "재귀 제목" }, "title-sessions");
-check("titler-prompt session skipped (titled=0)", /titled=0\b/.test(tRec), tRec.trim());
-const stRec = await statGet(45790, "/stats/sessions?window=7d&limit=100", null);
-const rec = (stRec.sessions || []).find((r) => r.session_id === "sess-titler");
-check("titler-prompt session stays untitled", rec && rec.title === null, rec && JSON.stringify(rec.title));
+check("no title field (auto-titler removed)", stt && !("title" in stt), stt && JSON.stringify(Object.keys(stt)));
 
 // ══ #63 — nudge observation (/stats/nudges: fires + join to outcomes) ════════
 process.stdout.write("\n# nudge observation (/stats/nudges)\n");
@@ -816,7 +758,7 @@ cli("ingest-usage");
   const curs = db2.prepare("SELECT COUNT(*) c FROM transcript_cursor WHERE session_id = ?").get(SESSION);
   const ver = db2.prepare("SELECT * FROM pragma_user_version").get();
   db2.close();
-  check("sub: v3 DB migrated to schema v8 (cursor PK rebuild + usage.agent_id/inserted_at + events.runtime)", ver && Object.values(ver)[0] === 8, JSON.stringify(ver));
+  check("sub: v3 DB migrated to schema v9 (cursor PK rebuild + usage.agent_id/inserted_at + events.runtime + session_labels)", ver && Object.values(ver)[0] === 9, JSON.stringify(ver));
   check("sub: agent file ingested — sidechain=1 + agent_id from filename",
     subRows.length === 2 && subRows.every((r) => r.sidechain === 1 && r.agent_id === "agsub1"), JSON.stringify(subRows));
   check("sub: per-(session,path) cursors — main + 1 agent file = 2", curs && curs.c === 2, JSON.stringify(curs));
@@ -843,7 +785,7 @@ cli("materialize-turns"); // backfill from the seeded events
   const openRows = rows("sess-open").length;
   const virt = rows("sess-zero").find((r) => r.turn_seq === 0);
   db2.close();
-  check("mat: v8 turns/turn_cursor live", ver && Object.values(ver)[0] === 8, JSON.stringify(ver));
+  check("mat: v9 turns/turn_cursor live", ver && Object.values(ver)[0] === 9, JSON.stringify(ver));
   check("mat: sess-turn — all 6 settled turns materialized (idle session)", stRows.length === 6, JSON.stringify(stRows.map((r) => r.turn_seq)));
   check("mat: row mirrors buildTurns (T1 tool_ms 40400 + long-tail flag+mask)",
     t1 && t1.tool_ms === 40400 && JSON.parse(t1.flags).includes("long-tail") && (t1.flags_mask & 16) !== 0,
@@ -904,14 +846,14 @@ process.stdout.write("\n# archival sessions (#138)\n");
   const now = Date.now();
   const dbw = new DatabaseSync(DB_PATH);
   // a session whose events were fully trimmed by retention: only materialized
-  // rows (+ its title) survive. No usage rows → the materializer never treats
+  // rows (+ its captured label) survive. No usage rows → the materializer never treats
   // it as a candidate, so these seeds are stable across later server spawns.
   const ins = dbw.prepare(`INSERT INTO turns (session_id,turn_seq,source_app,n,status,auto,started_at,ended_at,duration_ms,tool_ms,wait_ms,gap_ms,calls,subagent_calls,distinct_tools,errors,orphans,dup_calls,guard_denies,queued_prompts,precompacts,cost_usd,cost_subagent_usd,flags,flags_mask,config_ver,materialized_at)
     VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
   ins.run("sess-arch", 0, "appA", 0, "virtual", null, now - 7_200_000, now - 7_200_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, "[]", 0, 1, now);
   ins.run("sess-arch", 10, "appA", 1, "complete", null, now - 7_100_000, now - 7_000_000, 100_000, 40_000, 10_000, 50_000, 5, 2, 3, 1, 0, 0, 0, 0, 1, 1.25, 0.5, '["long-tail"]', 16, 1, now);
   ins.run("sess-arch", 20, "appA", 2, "complete", "task-notification", now - 6_900_000, now - 6_800_000, 100_000, 0, 0, 100_000, 0, 0, 0, 0, 0, 0, 0, 0, 0, null, null, "[]", 0, 1, now);
-  dbw.prepare("INSERT INTO session_titles (session_id, title, prompt_count, generated_at) VALUES ('sess-arch','아카이브 세션',1,?)").run(now);
+  dbw.prepare("INSERT INTO session_labels (session_id, label) VALUES ('sess-arch','아카이브 세션')").run();
   dbw.close();
 }
 const arch = await statGet(45774, "/stats/sessions?window=7d&limit=100", null);
@@ -921,9 +863,9 @@ check("arch: turns-only session appears with archival flag", !!archRow && archRo
 check("arch: human turns counted (virtual+auto excluded → 1), calls summed (5)",
   archRow && archRow.turns === 1 && archRow.tool_calls === 5,
   archRow && JSON.stringify({ t: archRow.turns, c: archRow.tool_calls }));
-check("arch: ended, inactive, title joined, no first_prompt",
-  archRow && archRow.ended === true && archRow.active === false && archRow.title === "아카이브 세션" && archRow.first_prompt === null,
-  archRow && JSON.stringify({ e: archRow.ended, a: archRow.active, ti: archRow.title, fp: archRow.first_prompt }));
+check("arch: ended, inactive, captured label as first_prompt",
+  archRow && archRow.ended === true && archRow.active === false && archRow.first_prompt === "아카이브 세션",
+  archRow && JSON.stringify({ e: archRow.ended, a: archRow.active, fp: archRow.first_prompt }));
 check("arch: session with live events stays non-archival (events row wins, once)",
   !!liveRow && !liveRow.archival && (arch.sessions || []).filter((s) => s.session_id === "sess-turn").length === 1,
   JSON.stringify(liveRow));
@@ -1245,6 +1187,56 @@ process.stdout.write("\n# runtime tagging + all-time window (#74)\n");
     srv.kill("SIGTERM");
     await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
   }
+}
+
+// ══ v9 — retention pins first prompts; v8→v9 keeps old titles only where trimmed ══
+process.stdout.write("\n# session labels: retention capture + v8→v9 migration\n");
+{
+  // own data dir: this pass trims events, which the shared fixtures must not see
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "obs-lbl-"));
+  const dbFile = path.join(dir, "events.db");
+  cliEnv({ OBS_DATA_DIR: dir }, "retain"); // fresh v9 schema
+  {
+    const db = new DatabaseSync(dbFile);
+    // rewind to v8: the auto-titler's table, one title per kind of session
+    db.exec(`CREATE TABLE session_titles (session_id TEXT PRIMARY KEY, title TEXT NOT NULL,
+        prompt_count INTEGER NOT NULL DEFAULT 0, generated_at INTEGER NOT NULL);
+      PRAGMA user_version = 8;`);
+    const insT = db.prepare("INSERT INTO session_titles VALUES (?,?,1,0)");
+    insT.run("sess-gone", "옛 LLM 제목");   // events already trimmed → the title is the only label left
+    insT.run("sess-live", "버릴 LLM 제목"); // events still here → its first prompt takes over
+    const insE = db.prepare(`INSERT INTO events (seq,id,source_app,session_id,hook_event_type,received_at,payload) VALUES (?,?,?,?,?,?,?)`);
+    const old = Date.now() - 8 * 86_400_000; // past the 7d age cap → trimmed by the next pass
+    insE.run(1, "l1", "testapp", "sess-live", "UserPromptSubmit", old, JSON.stringify({ prompt: "  첫 질문\n여러   줄 " }));
+    insE.run(2, "l2", "testapp", "sess-live", "UserPromptSubmit", Date.now() - 60_000, JSON.stringify({ prompt: "나중 질문" }));
+    db.close();
+  }
+  cliEnv({ OBS_DATA_DIR: dir }, "retain"); // migrate v8→v9, capture labels, then trim by age
+  {
+    const db = new DatabaseSync(dbFile, { readOnly: true });
+    const labels = Object.fromEntries(db.prepare("SELECT session_id, label FROM session_labels").all().map((r) => [r.session_id, r.label]));
+    const titlesGone = !db.prepare("SELECT name FROM sqlite_master WHERE name = 'session_titles'").get();
+    const ver = Object.values(db.prepare("SELECT * FROM pragma_user_version").get())[0];
+    const left = db.prepare("SELECT seq FROM events WHERE session_id = 'sess-live' ORDER BY seq").all().map((r) => r.seq);
+    db.close();
+    check("v9: session_titles dropped, user_version 9", titlesGone && ver === 9, JSON.stringify({ titlesGone, ver }));
+    check("v9: trimmed session keeps its old LLM title as its label", labels["sess-gone"] === "옛 LLM 제목", JSON.stringify(labels));
+    check("retain: first prompt pinned as one line before the trim", labels["sess-live"] === "첫 질문 여러 줄", JSON.stringify(labels));
+    check("retain: that first prompt's event really was trimmed", left.length === 1 && left[0] === 2, JSON.stringify(left));
+  }
+  const port = 45796;
+  const srv = spawn("node", [...NODE_ARGS, SERVER], { env: { ...baseEnv, OBS_DATA_DIR: dir, OBS_PORT: String(port) }, stdio: "ignore" });
+  try {
+    if (!(await waitHealth(port))) throw new Error("server did not come up");
+    const s = await get(port, "/stats/sessions?window=all&limit=50");
+    const live = (s.sessions || []).find((r) => r.session_id === "sess-live");
+    check("sessions: captured label wins over the earliest surviving prompt",
+      live && live.first_prompt === "첫 질문 여러 줄", JSON.stringify(live && live.first_prompt));
+  } finally {
+    srv.kill("SIGTERM");
+    await new Promise((r) => { srv.on("exit", r); setTimeout(r, 2000); });
+  }
+  try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
 }
 
 // ── done ─────────────────────────────────────────────────────────────────────

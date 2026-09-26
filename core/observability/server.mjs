@@ -29,13 +29,13 @@ import path from "node:path";
 import os from "node:os";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
-import { spawnSync, spawn } from "node:child_process";
+import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
 import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
-const VERSION = "0.26.1"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP) · 0.24.1: custom page nav links (#129 후속 — 대시보드 nav에 config customPages 링크 자동 주입: 서빙 시점 <!--custom-nav--> 마커 치환, 해시탭 아닌 별도 페이지 링크(우측 정렬·↗)) · 0.25.0: opencode 세션 관측 (#74 — events.runtime 컬럼 스키마 v8: 어느 하네스가 만든 이벤트인지 승격 컬럼으로 기록(CC=NULL, opencode 어댑터만 "opencode"), /stats/sessions가 MAX(runtime)으로 세션당 런타임을 돌려주고 sessions 탭이 CC 아닌 세션에만 배지 표시; 기간 화이트리스트에 90d·all 추가 + sessions 셀렉터에 30d·전체) · 0.25.1: pricing — claude-opus-5 추가 ($5/$25, 어떤 프리픽스에도 안 걸려 unpriced로 새던 것; DB 실측 7.1k rows) · 0.26.0: sessions 전체 기간 (#138 — events 리텐션(7d) 너머 세션을 materialized turns(#82, 리텐션 미적용)로 재구성해 /stats/sessions에 archival:true 유니온(events 판 우선, first_prompt·runtime 없음·ended 고정), 드릴다운 /stats/turns는 events 0건+materialized 존재 시 집계-only 폴백(archival:true, ?turn= 상세는 404), UI = 세션행 archive 배지·드릴 안내문·per-turn 로컬 렌더) · 0.26.1: 티틀러 자기재귀 차단 (#142 — 희생 59999 수집기가 같은 서버 코드라 자기 피더 세션을 auto-titling해 티틀러가 티틀러를 낳는 무한 루프(projects/에 정크 트랜스크립트 52k·2.7GB 누적); 스폰 env에 OBS_TITLE_AUTO=0으로 루프 절단, cwd=void로 티틀러 트랜스크립트를 projects/<void>에 격리(+프로젝트 CLAUDE.md 미로딩), 심층방어로 첫 프롬프트가 티틀러 지시문인 세션은 후보 skip)
+const VERSION = "0.27.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP) · 0.24.1: custom page nav links (#129 후속 — 대시보드 nav에 config customPages 링크 자동 주입: 서빙 시점 <!--custom-nav--> 마커 치환, 해시탭 아닌 별도 페이지 링크(우측 정렬·↗)) · 0.25.0: opencode 세션 관측 (#74 — events.runtime 컬럼 스키마 v8: 어느 하네스가 만든 이벤트인지 승격 컬럼으로 기록(CC=NULL, opencode 어댑터만 "opencode"), /stats/sessions가 MAX(runtime)으로 세션당 런타임을 돌려주고 sessions 탭이 CC 아닌 세션에만 배지 표시; 기간 화이트리스트에 90d·all 추가 + sessions 셀렉터에 30d·전체) · 0.25.1: pricing — claude-opus-5 추가 ($5/$25, 어떤 프리픽스에도 안 걸려 unpriced로 새던 것; DB 실측 7.1k rows) · 0.26.0: sessions 전체 기간 (#138 — events 리텐션(7d) 너머 세션을 materialized turns(#82, 리텐션 미적용)로 재구성해 /stats/sessions에 archival:true 유니온(events 판 우선, first_prompt·runtime 없음·ended 고정), 드릴다운 /stats/turns는 events 0건+materialized 존재 시 집계-only 폴백(archival:true, ?turn= 상세는 404), UI = 세션행 archive 배지·드릴 안내문·per-turn 로컬 렌더) · 0.26.1: 티틀러 자기재귀 차단 (#142 — 희생 59999 수집기가 같은 서버 코드라 자기 피더 세션을 auto-titling해 티틀러가 티틀러를 낳는 무한 루프(projects/에 정크 트랜스크립트 52k·2.7GB 누적); 스폰 env에 OBS_TITLE_AUTO=0으로 루프 절단, cwd=void로 티틀러 트랜스크립트를 projects/<void>에 격리(+프로젝트 CLAUDE.md 미로딩), 심층방어로 첫 프롬프트가 티틀러 지시문인 세션은 후보 skip) · 0.27.0: auto-titler 제거 (세션 라벨 = 첫 프롬프트; 3분마다 claude -p 스폰·title-sessions CLI·OBS_TITLE_* 걷음; 스키마 v9 — session_titles → session_labels, 리텐션이 이벤트를 지우기 직전 세션 첫 프롬프트를 굳혀 archival 행에도 라벨 유지, 이미 이벤트가 지워진 세션만 옛 LLM 제목을 라벨로 이관)
 const STARTED_AT = Date.now();
 
 // ── config (env OBS_* > config.json > default) ──────────────────────────────
@@ -396,7 +396,7 @@ function initSchema(impl) {
     impl.exec("PRAGMA auto_vacuum = INCREMENTAL;");
     impl.exec("VACUUM;"); // one-time migration of an existing non-incremental DB
   }
-  impl.exec("PRAGMA user_version = 8;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage) · v7 = + turns/turn_cursor + usage.inserted_at (#82 fleet turn materialization) · v8 = + events.runtime (#74 opencode adapter)
+  impl.exec("PRAGMA user_version = 9;"); // v2 = + v_tool_calls view · v3 = + usage/transcript_cursor (10a) · v4 = + usage.cache_create_1h (#57) · v5 = + session_titles (#66) · v6 = + usage.agent_id + cursor PK (session,path) (#81 subagent usage) · v7 = + turns/turn_cursor + usage.inserted_at (#82 fleet turn materialization) · v8 = + events.runtime (#74 opencode adapter) · v9 = session_titles → session_labels (LLM auto-titler removed; first prompt captured before retention)
   impl.exec(`CREATE TABLE IF NOT EXISTS events (
     seq INTEGER PRIMARY KEY, id TEXT NOT NULL,
     source_app TEXT NOT NULL, session_id TEXT NOT NULL, hook_event_type TEXT NOT NULL,
@@ -499,14 +499,25 @@ function initSchema(impl) {
     last_emitted TEXT NOT NULL DEFAULT '[]',
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, path))`);
-  // #66: human-readable session titles, generated offline by the `title-sessions`
-  // batch (a cheap LLM summary of the session's user prompts). Separate table so
-  // titling never touches the ingest hot path; prompt_count records how many
-  // prompts the title was built from, so the batch can re-title only when a
-  // session has grown.
-  impl.exec(`CREATE TABLE IF NOT EXISTS session_titles (
-    session_id TEXT PRIMARY KEY, title TEXT NOT NULL,
-    prompt_count INTEGER NOT NULL DEFAULT 0, generated_at INTEGER NOT NULL)`);
+  // v9: one display label per session, kept apart from `events` so it OUTLIVES
+  // retention — runRetention captures each session's first prompt before it
+  // trims (captureSessionLabels), so archival rows (#138) still say what the
+  // session was about. Pre-v9 archival sessions hold their old LLM title here
+  // instead: their events (and so their real first prompt) were already gone.
+  impl.exec(`CREATE TABLE IF NOT EXISTS session_labels (
+    session_id TEXT PRIMARY KEY, label TEXT NOT NULL)`);
+  // v8→v9: the LLM auto-titler (#66) is gone. Its titles survive only where they
+  // are the sole label left — sessions whose events retention already trimmed;
+  // sessions still in `events` get their first prompt at the next capture.
+  if (exists && prevVersion < 9 &&
+      impl.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='session_titles'").get()) {
+    try {
+      impl.exec(`INSERT OR IGNORE INTO session_labels (session_id, label)
+          SELECT session_id, title FROM session_titles
+           WHERE session_id NOT IN (SELECT DISTINCT session_id FROM events);
+        DROP TABLE session_titles;`);
+    } catch (e) { logSafe("migrate v9", e); }
+  }
   // #82: materialized SETTLED turns — one summary row per turn, computed ONCE by
   // running the same buildTurns/attachTurnCosts as the drill-down and persisting
   // the output. Fleet aggregates read this (cheap SQL) and it OUTLIVES `events`
@@ -623,6 +634,29 @@ function archiveAndDeletePaged(whereSql, params) {
   }
 }
 
+// One line of a prompt, as the session label shows it.
+function promptLabel(p) {
+  return p == null ? null : String(p).replace(/\s+/g, " ").trim().slice(0, 120) || null;
+}
+
+// v9: pin each session's first prompt into session_labels while its events still
+// exist. Only sessions without a label yet; the first capture wins (a later
+// partial trim can't move it). SQLite takes bare columns from the MIN(seq) row.
+function captureSessionLabels() {
+  const rows = db.impl.prepare(
+    `SELECT session_id sid, json_extract(payload, '$.prompt') p, MIN(seq)
+       FROM events
+      WHERE hook_event_type = 'UserPromptSubmit'
+        AND session_id NOT IN (SELECT session_id FROM session_labels)
+      GROUP BY session_id`
+  ).all();
+  const ins = db.impl.prepare("INSERT OR IGNORE INTO session_labels (session_id, label) VALUES (?, ?)");
+  for (const r of rows) {
+    const label = promptLabel(r.p);
+    if (label) ins.run(r.sid, label);
+  }
+}
+
 function runRetention() {
   // Whole thing in try/catch — a throw escaping setInterval would kill the process.
   try {
@@ -632,6 +666,7 @@ function runRetention() {
     // by rows/size (no age floor), so a burst can drop recent events fast — the
     // materialized rows must already exist by then, or fleet history has a hole.
     try { materializeSweep(Date.now(), 100_000); } catch (e) { logSafe("retention materialize", e); }
+    try { captureSessionLabels(); } catch (e) { logSafe("retention labels", e); } // same reason: first prompts
     archiveAndDeletePaged("received_at < ?", [Date.now() - MAX_AGE_MS]); // by age
     archiveAndDeletePaged("seq <= (SELECT MAX(seq) - ? FROM events)", [MAX_ROWS]); // by rows
     // size cap: page_count only shrinks after incremental_vacuum returns pages
@@ -1001,10 +1036,12 @@ function handleStatsSessions(req, res, u) {
          SUM(hook_event_type = 'SubagentStop')                    subagents,
          MAX(CASE WHEN hook_event_type = 'SessionEnd' THEN received_at END) last_end,
          MAX(runtime)                                             runtime,
-         (SELECT st.title FROM session_titles st WHERE st.session_id = events.session_id) title,
-         (SELECT json_extract(e2.payload, '$.prompt') FROM events e2
-            WHERE e2.session_id = events.session_id AND e2.hook_event_type = 'UserPromptSubmit'
-            ORDER BY e2.seq ASC LIMIT 1)                          first_prompt
+         -- captured label first: retention may already have trimmed the real first prompt
+         COALESCE(
+           (SELECT sl.label FROM session_labels sl WHERE sl.session_id = events.session_id),
+           (SELECT json_extract(e2.payload, '$.prompt') FROM events e2
+              WHERE e2.session_id = events.session_id AND e2.hook_event_type = 'UserPromptSubmit'
+              ORDER BY e2.seq ASC LIMIT 1))                       first_prompt
        FROM events WHERE ${where}
        GROUP BY session_id ORDER BY last_at DESC LIMIT ?`
     ).all(...params, limit).map((r) => {
@@ -1021,8 +1058,7 @@ function handleStatsSessions(req, res, u) {
         // NULL for Claude Code (no runtime stamped) — MAX() ignores NULLs, so a
         // session that emitted even one opencode-tagged event reads "opencode".
         runtime: r.runtime ? String(r.runtime) : "claude-code",
-        title: r.title ? String(r.title) : null,
-        first_prompt: r.first_prompt ? String(r.first_prompt).replace(/\s+/g, " ").trim().slice(0, 120) : null,
+        first_prompt: promptLabel(r.first_prompt),
       };
     });
     // #138: sessions whose events were trimmed by retention still have their
@@ -1040,7 +1076,7 @@ function handleStatsSessions(req, res, u) {
          SUM(errors)                                  errors,
          SUM(precompacts)                             precompacts,
          SUM(subagent_calls)                          subagents,
-         (SELECT st.title FROM session_titles st WHERE st.session_id = turns.session_id) title
+         (SELECT sl.label FROM session_labels sl WHERE sl.session_id = turns.session_id) first_prompt
        FROM turns WHERE ${app ? "started_at >= ? AND source_app = ?" : "started_at >= ?"}
        GROUP BY session_id ORDER BY last_at DESC LIMIT ?`
     ).all(...params, limit).filter((r) => !seen.has(r.session_id)).map((r) => ({
@@ -1054,8 +1090,7 @@ function handleStatsSessions(req, res, u) {
       subagents: Number(r.subagents),
       ended: true, active: false,
       runtime: "claude-code", // turns has no runtime column — opencode archival rows read as CC
-      title: r.title ? String(r.title) : null,
-      first_prompt: null, // payload is gone with the events
+      first_prompt: promptLabel(r.first_prompt), // payload is gone — only the captured label survives
       archival: true,
     }));
     const merged = sessions.concat(archival)
@@ -2642,9 +2677,8 @@ function attachTurnCosts(all, sid) {
 // attachTurnCosts per session and writing the output — buildTurns stays the
 // single source of truth (fleet aggregates and the drill-down agree by
 // construction). Runs IN-PROCESS on the shared db.impl connection: buildTurns is
-// milliseconds (not the blocking LLM the titler needs a detached child for), so
-// writes serialize on the event loop and there is NO cross-connection WAL
-// contention / spill risk. The design's adversarial review forced five guards,
+// milliseconds, so writes serialize on the event loop and there is NO
+// cross-connection WAL contention / spill risk. The design's adversarial review forced five guards,
 // tagged inline: [gate] [reconcile] [freeze] [arrival-wm] [residual].
 const TURN_MAT_AUTO = process.env.OBS_TURN_MAT !== "0";
 const TURN_MAT_INTERVAL_MS = intEnv("OBS_TURN_MAT_INTERVAL_SEC", 120) * 1000;
@@ -3080,7 +3114,6 @@ td.tprom{color:#3fb950}
 .card .k{font-size:11px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em}
 .card .v{font-size:18px;color:#e6edf3}
 .stitle{max-width:46ch;overflow:hidden;text-overflow:ellipsis;color:#e6edf3}
-.stitle.prov{color:#8b949e;font-style:italic}
 .stitle.dim{color:#6b7686}
 .ssub{font-size:11px;color:#6b7686;margin-top:1px}
 .rtag{display:inline-block;margin-left:6px;padding:0 5px;border-radius:3px;background:#1f2937;color:#9fd0ff;font-size:10px;letter-spacing:.04em;text-transform:uppercase}
@@ -3444,7 +3477,7 @@ const DASHBOARD_JS = `(function(){
       box.appendChild(c); }); }
   function fleetSeed(){ getJson("/stats/sessions?window=1h&limit=50").then(function(d){
       (d.sessions||[]).forEach(function(s){ var f=fleet[s.session_id]||(fleet[s.session_id]={what:""});
-        f.title=s.title||s.first_prompt||f.title;
+        f.title=s.first_prompt||f.title;
         if(!f.last_at||s.last_at>f.last_at){ f.app=s.source_app; f.last_at=s.last_at; f.ended=!!s.ended; } });
       renderFleet(); }).catch(function(){ renderFleet(); });
     // context size per session (compaction pressure) — best-effort, wider window
@@ -3471,8 +3504,8 @@ const DASHBOARD_JS = `(function(){
       (d.sessions||[]).forEach(function(s){ var tr=el("tr","sess"); var tk=tok[s.session_id];
         tr.appendChild(cell(s.active?"●":(s.ended?"✓":"·"),s.active?"ok":"dim"));
         tr.appendChild(cell(s.source_app));
-        var sc=el("td"); var lbl=s.title||s.first_prompt;
-        var main=el("div","stitle"+(s.title?"":(s.first_prompt?" prov":" dim")),lbl||s.session_id.slice(0,8));
+        var sc=el("td"); var lbl=s.first_prompt;
+        var main=el("div","stitle"+(lbl?"":" dim"),lbl||s.session_id.slice(0,8));
         if(lbl)main.title=lbl; sc.appendChild(main);
         var sub=el("div","ssub"); sub.appendChild(el("span",null,s.session_id.slice(0,8)));
         // runtime tag: only non-Claude-Code sessions are marked (#74) — the
@@ -3608,7 +3641,7 @@ const DASHBOARD_JS = `(function(){
       }).catch(function(e){ body.textContent=""; body.appendChild(el("div","err","detail load failed: "+e.message)); }); });
     return d; }
   function drill(s){ var box=$("drill"); box.textContent="";
-    box.appendChild(el("h2",null,(s.title||s.first_prompt||("session "+s.session_id.slice(0,8)))+" · "+s.source_app));
+    box.appendChild(el("h2",null,(s.first_prompt||("session "+s.session_id.slice(0,8)))+" · "+s.source_app));
     // context growth curve + compact what-if (from the token timeline, #56)
     var tlBox=el("div","cards"); box.appendChild(tlBox);
     getJson("/stats/tokens?group=timeline&session_id="+encodeURIComponent(s.session_id)).then(function(t){
@@ -4462,7 +4495,6 @@ async function startServer() {
 
   server.listen(PORT, HOST, () => {
     writePidfile();
-    startAutoTitler();
     startAutoMaterializer(); // #82: fleet turn materialization (in-process, shared connection)
     process.stderr.write(`[obs] ${SERVICE} listening on http://${HOST}:${PORT} (pid ${process.pid})\n`);
   });
@@ -4535,138 +4567,6 @@ async function cliIngestUsage() {
   const s = db.impl.prepare("SELECT COUNT(*) c, SUM(input+output+cache_create+cache_read) t FROM usage").get();
   process.stdout.write(`usage backfill${rescan ? " (rescan)" : ""}: sessions parsed=${parsed} skipped=${skipped}; msgs=${s.c} total_tokens=${s.t ?? 0}\n`);
   process.exit(0);
-}
-
-// ── #66 session titles: offline batch. Gather a session's user prompts and ask
-// a cheap model for a short human title. The LLM spawn is the ONLY external touch
-// (isolated in generateTitle; OBS_TITLE_STUB short-circuits it for tests).
-const TITLE_MODEL = process.env.OBS_TITLE_MODEL || "claude-haiku-4-5-20251001";
-const TITLE_MIN_GROWTH = intEnv("OBS_TITLE_MIN_GROWTH", 3); // re-title only after this many new prompts
-
-// Auto-titler (#66 follow-up): the collector titles recently-idle sessions on a
-// timer so the fleet strip shows a one-line summary instead of the raw first
-// prompt. It uses a SHORT idle gate (default 90s quiet) so active sessions get
-// titled soon after they pause, not just long-dead ones. On by default;
-// OBS_TITLE_AUTO=0 disables it.
-const TITLE_AUTO = process.env.OBS_TITLE_AUTO !== "0";
-const TITLE_AUTO_INTERVAL_MS = intEnv("OBS_TITLE_INTERVAL_SEC", 180) * 1000;
-const TITLE_AUTO_IDLE_MS = intEnv("OBS_TITLE_IDLE_SEC", 30) * 1000; // quiet this long → titled (short, so active sessions get a title during natural pauses)
-const TITLE_AUTO_LIMIT = intEnv("OBS_TITLE_LIMIT", 8); // cap LLM spawns per tick
-
-function sessionPromptRows(sid) {
-  return db.impl.prepare(
-    `SELECT json_extract(payload, '$.prompt') p FROM events
-       WHERE session_id = ? AND hook_event_type = 'UserPromptSubmit' ORDER BY seq ASC`
-  ).all(sid).map((r) => (r.p == null ? "" : String(r.p).replace(/\s+/g, " ").trim())).filter(Boolean);
-}
-
-function promptDigest(prompts, max = 4000) {
-  const joined = prompts.map((p, i) => `${i + 1}. ${p}`).join("\n");
-  return joined.length > max ? joined.slice(0, max) : joined;
-}
-
-// One-shot title via the claude CLI. The spawned claude runs its own Claude Code
-// hooks, so we ISOLATE its observability side effects: OBS_PORT=59999 keeps its
-// events off the live 4090 collector; OBS_DATA_DIR=<void> makes the sacrificial
-// collector that obs-lazy-start spawns on 59999 write to a throwaway DB — NOT
-// the shared one; OBS_TITLE_AUTO=0 keeps that sacrificial collector (this same
-// server code) from auto-titling its own feeder sessions — titling a titler
-// session spawns another titler, forever (#142); and cwd=<void> quarantines the
-// spawn's transcript under projects/<void> instead of the real project dir (and
-// keeps the titler claude from loading that project's CLAUDE.md every call).
-// Returns a clean one-line title, or null on any failure (titling is optional).
-const TITLE_VOID_DIR = path.join(os.tmpdir(), "obs-titler-void"); // throwaway DB + cwd for the titler's claude
-// First sentence of the instruction, doubling as the recursion guard: a session
-// whose FIRST prompt starts with it is a titler's own -p session and must never
-// be titled (#142) — belt to the env isolation's suspenders.
-const TITLE_INSTRUCTION_PREFIX = "다음은 한 코딩 세션에서 사용자가 순서대로 보낸 요청들이다.";
-function generateTitle(digest) {
-  if (process.env.OBS_TITLE_STUB) return process.env.OBS_TITLE_STUB.slice(0, 80); // tests
-  const instruction =
-    TITLE_INSTRUCTION_PREFIX +
-    " 이 세션이 무엇에 관한 것인지 한국어로 8단어 이내 제목 한 줄로만 답하라. " +
-    "따옴표·마침표·설명 없이 제목만 출력:\n\n" + digest;
-  try {
-    fs.mkdirSync(TITLE_VOID_DIR, { recursive: true, mode: 0o700 }); // cwd must exist before spawn
-    const r = spawnSync("claude", ["-p", instruction, "--model", TITLE_MODEL], {
-      encoding: "utf8", timeout: 60000, maxBuffer: 1 << 20, cwd: TITLE_VOID_DIR,
-      env: { ...process.env, OBS_PORT: "59999", OBS_DATA_DIR: TITLE_VOID_DIR, OBS_TITLE_AUTO: "0" },
-    });
-    if (r.status !== 0 || !r.stdout) return null;
-    const line = r.stdout.trim().split("\n").map((s) => s.trim()).filter(Boolean)[0];
-    return line ? line.replace(/^["'“”]+|["'“”.]+$/g, "").slice(0, 80) : null;
-  } catch (e) { logSafe("title gen", e); return null; }
-}
-
-// Sessions worth (re)titling: idle (no events for a gate), have >=1 prompt, and
-// are untitled OR grown by >= TITLE_MIN_GROWTH prompts since the last title.
-function titleCandidates(all = false, idleMs = ACTIVE_MS) {
-  const cutoff = Date.now() - idleMs;
-  return db.impl.prepare(
-    `SELECT e.session_id sid,
-            SUM(e.hook_event_type = 'UserPromptSubmit') prompts, MAX(e.received_at) last_at,
-            st.title title, st.prompt_count tpc
-       FROM events e LEFT JOIN session_titles st ON st.session_id = e.session_id
-       GROUP BY e.session_id HAVING prompts >= 1 AND last_at < ?`
-  ).all(cutoff).filter((r) =>
-    all || r.title == null || (Number(r.prompts) - Number(r.tpc || 0)) >= TITLE_MIN_GROWTH);
-}
-
-async function cliTitleSessions() {
-  await startBackend();
-  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
-  const all = process.argv.includes("--all");
-  const li = process.argv.indexOf("--limit");
-  const limit = li >= 0 ? Math.max(1, Number(process.argv[li + 1]) || 0) : Infinity;
-  // --idle <sec>: how long a session must be quiet to be a candidate (the
-  // auto-titler passes a short value so recently-paused sessions get titled).
-  const ii = process.argv.indexOf("--idle");
-  const idleMs = ii >= 0 ? Math.max(0, Number(process.argv[ii + 1]) || 0) * 1000 : ACTIVE_MS;
-  const cands = titleCandidates(all, idleMs);
-  const upsert = db.impl.prepare(
-    `INSERT INTO session_titles(session_id, title, prompt_count, generated_at) VALUES(?,?,?,?)
-       ON CONFLICT(session_id) DO UPDATE SET title = excluded.title,
-       prompt_count = excluded.prompt_count, generated_at = excluded.generated_at`
-  );
-  let titled = 0, skipped = 0, done = 0;
-  for (const c of cands) {
-    if (done >= limit) break;
-    done++;
-    const prompts = sessionPromptRows(c.sid);
-    if (!prompts.length) { skipped++; continue; }
-    if (prompts[0].startsWith(TITLE_INSTRUCTION_PREFIX)) { skipped++; continue; } // titler's own session (#142)
-    const title = generateTitle(promptDigest(prompts));
-    if (!title) { skipped++; continue; }
-    upsert.run(c.sid, title, prompts.length, Date.now());
-    titled++;
-    process.stdout.write(`  ${c.sid.slice(0, 8)}  ${title}\n`);
-  }
-  process.stdout.write(`title-sessions: titled=${titled} skipped=${skipped} candidates=${cands.length}\n`);
-  process.exit(0);
-}
-
-// Periodic auto-titler. Spawns our OWN `title-sessions` CLI as a DETACHED child
-// rather than titling in-process: generateTitle is a blocking spawnSync(claude)
-// that would stall ingest/SSE for seconds. The child opens the shared DB (WAL +
-// busy_timeout make the concurrent write safe) and exits; it runs the CLI path,
-// which never starts its own auto-titler, so there is no recursion. Timers are
-// unref'd so they never hold the process open on their own.
-function startAutoTitler() {
-  if (!TITLE_AUTO) return;
-  const tick = () => {
-    try {
-      const child = spawn(process.execPath, [
-        "--disable-warning=ExperimentalWarning", process.argv[1],
-        "title-sessions",
-        "--idle", String(Math.round(TITLE_AUTO_IDLE_MS / 1000)),
-        "--limit", String(TITLE_AUTO_LIMIT),
-      ], { detached: true, stdio: "ignore", env: process.env });
-      child.on("error", (e) => logSafe("auto-title spawn", e));
-      child.unref();
-    } catch (e) { logSafe("auto-title", e); }
-  };
-  setTimeout(tick, Math.min(30_000, TITLE_AUTO_INTERVAL_MS)).unref(); // first pass soon after startup (≤30s)
-  setInterval(tick, TITLE_AUTO_INTERVAL_MS).unref();                  // then every interval
 }
 
 // #82: one materialization sweep from the CLI (backfill after deploy, or refresh).
@@ -4750,7 +4650,6 @@ if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
 else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
-else if (cmd === "title-sessions") await cliTitleSessions(); // #66: batch LLM session titles; --all re-titles, --limit N caps
 else if (cmd === "materialize-turns") await cliMaterializeTurns(); // #82: backfill/refresh the fleet turns table; --rebuild forces re-derive of non-frozen sessions
 else if (cmd === "representative-queries") await cliRepresentativeQueries(); // #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs
 else await startServer();
