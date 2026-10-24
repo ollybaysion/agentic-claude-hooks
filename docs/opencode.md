@@ -67,10 +67,11 @@ npm install은 없다(런타임 의존성 0).
 스텁이 체크아웃 경로를 가리키므로 **경로가 변하지 않는 clone**이 필요하다.
 
 ```bash
-git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/repo/claude-hooks
-# PR #132 머지 전이라면:
-git -C ~/repo/claude-hooks switch feat/opencode-adapter
+git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/work/claude-plugins/claude-hooks
 ```
+
+처음부터 끝까지(Claude Code · opencode · 환경변수 · AKG)는 `skills/setup/SKILL.md` 가
+한 절차로 묶어 둔 것이 있다. 아래 예시의 `~/repo/claude-hooks` 는 그 체크아웃 경로로 읽는다.
 
 > ⚠️ `~/.claude/plugins/…` **마켓플레이스 캐시 경로를 가리키게 하지 마라** — 플러그인
 > 업데이트마다 경로가 바뀌어 스텁이 끊긴다. 체크아웃을 옮겼다면 설치기를 다시 실행한다.
