@@ -29,10 +29,8 @@ import path from "node:path";
 import os from "node:os";
 import zlib from "node:zlib";
 import crypto from "node:crypto";
-import { spawn } from "node:child_process";
-import { fileURLToPath } from "node:url";
 import { dataDir, configFile, pidFile } from "../../lib/obs-paths.mjs";
-import { resolveIndexEntries, userDocIndexes, expandTilde } from "../../lib/doc-index.mjs";
+import { expandTilde } from "../../lib/doc-index.mjs";
 
 const SERVICE = "claude-observability";
 const VERSION = "0.27.0"; // 0.5: tokens UI (10b) · 0.5.1: resume≠ended (#51) · 0.6: cost + daily/model views (#53) · 0.7: guard observation (stage 9) · 0.8: cache-write TTL split (#57) · 0.9: cost anatomy + session diagnostics (#56) · 0.9.1: metric help tooltips (#61) · 0.9.2: tooltip copy → Korean · 0.9.3: tooltip UX (fixed-position tips, native copy, ko UI labels) · 0.10: session titles (#66, schema v5) · 0.11: nudge observation (#63, /stats/nudges + Nudges tab) · 0.12: auto-titler (recent sessions titled on a timer → fleet shows summary not raw prompt) · 0.12.1: titler DB isolation (void OBS_DATA_DIR — stop titler prompts leaking as sessions) + shorter idle gate (30s) + VERSION label fix · 0.13: /stats/turns (#73 Turn Inspector stage 1 — turn grouping, session-wide pairing, tool/wait/gap time split, inefficiency flags) · 0.13.1: Turn Inspector UI (#73 stage 2 — drill-down replaced with /stats/turns: time-split stack bar, call timeline + markers, flags filter, auto-turn labels; fetchSession removed) · 0.14: per-turn cost (#73 stage 3 — single-bucket usage attribution emitted→follows→ts, unattributed line, compact badge, null over $0.00; main-chain only) · 0.15: subagent usage (#81, schema v6 — subagents/agent-*.jsonl ingested via per-(session,path) cursors + usage.agent_id; turn cost_subagent_usd; Tokens-tab subagent columns live again) · 0.15.1: reveal truncated text (#86 — fleet chip hover title + full turn prompt rendered on expand) · 0.16: DB query observation (#87 — /stats/db + DB tab; agent-db-plugin DbQuery events, sql verbatim/local-only) · 0.17.0: fleet turn materialization (#82 stage 1 — turns/turn_cursor tables schema v7, buildTurns-backed materializer with settle gating + reconcile-delete + completeness freeze + arrival-time usage watermark + unattributed residual; materialize-turns CLI + in-process auto-materializer + retention pre-trim hook; no aggregate endpoint/UI yet — stages 2-3) · 0.18.0: fleet turns view (#82 stages 2-3 — /stats/fleet-turns aggregate over the materialized table + Fleet Turns dashboard tab: totals/by-flag/by-project/series, efficiency ratios exclude virtual+auto turns) · 0.18.1: Fleet Turns (?) tooltips — explain the view's role + the 8 inefficiency flags (no issue-number/impl jargon) · 0.18.2: rename the Fleet Turns tab → "insight" (label/hash/tooltip-key only; endpoint /stats/fleet-turns + element ids unchanged) · 0.19.0: keyword-docs corpus viewer (#92 — /docs + /docs/content over the user-layer indexes of all keyword-docs instances via shared lib/doc-index.mjs, Docs tab renders full markdown with dbdoc tier highlighting; realpath allowlist + traversal guard) · 0.19.1: exact guard↔orphan correlation (#99 — guards stamp the blocked call's tool_use_id into the GuardDecision payload; buildTurns matches the deny to its Pre by id, falling back to the ±3s time window only for legacy rows without one; guard_denies counts only denies that orphaned a call) · 0.19.2: docs render fix (#101 — markdown tables → <table> with tier-highlighted cells, strip dbdoc/HTML comments so markers stop leaking + merging paragraphs, --- → <hr>, paragraph collector stops at table/hr; follow-up to #92) · 0.19.3: rename docs nav tab label → "keyword-docs" (#103 — matches the section header + tooltip; hash/element-id/endpoint unchanged) · 0.20.0: enrich review folded into keyword-docs (#90 stage 1 — no separate tab: the keyword-docs corpus table IS the review surface, its 추정) column = the pending queue (live file scan via /docs), 추정)>0 docs highlighted + a '추정) 대기' total card, and opening a doc shows each inferred slot + 근거 inline; /stats/schema-docs shrinks to the events-only apply/promote activity log (SchemaDocApply/SchemaDocPromote) shown as a history section under the corpus; enrich-cli emits both on --write (fire-and-forget via obs-client); promote stays a human CLI action, dashboard buttons deferred to stage 2) · 0.20.1: doc table header CSS fix (#110 — the global stats-table th rule (position:sticky;top:41px;uppercase;gray;11px) leaked into keyword-docs tables, floating the header so it overlapped the content below (header + 대표 쿼리 looked broken); .doc-tbl th now overrides position/top/text-transform/color/font-size — CSS-only, renderDoc unchanged) · 0.21.0: dashboard promote (#112, #90 stage 2 — POST /actions/schema-docs/promote: loopback+authed, POST-only, path realpath-allowlisted like /docs/content; delegates to db-schema-apply cli.mjs `promote --all --write` so promote logic + SchemaDocPromote emit + exit codes stay single-sourced; keyword-docs open-doc gains a `추정) N개 전체 승격` button (confirm → POST → re-render + refresh list/history); human-triggered, per-column/slot promote stays in the CLI) · 0.22.0: representative queries CLI (#114 — `representative-queries` subcommand: observed DbQuery events → per-table 대표 쿼리 proposals for the db-schema-docs manual slot; normalizeSql groups queries differing only in literals/binds, ranked count→success→recency, run_query-only + SUCCESSFUL-executions-only by default (--all-tools / --include-errors opt those in), proposal-only/read-only, --json or paste-ready markdown; reuses dbExtractTables, no schema/endpoint change) · 0.23.0: keyword-docs 검토 UX 재설계 (#115 — 미확인/채택/미작성 용어: file marker 추정)→미확인) (dual-recognised, cli `migrate`), corpus 열 미작성/미확인, dbdoc 문서는 region-aware 렌더(미확인/미작성/채택됨 badge + 근거 chips + SQL 절단위 줄바꿈); 항목마다 [채택](confirm as-is) + [수정](edit→confirmed, /actions/schema-docs/edit + cli `edit`) + [모두 채택]; promote endpoint accepts {all|columns|slots}) · 0.23.1: akg 이관 signpost (#123 — keyword-docs 탭 상단에 agent-knowledge-governance 대시보드 이전 안내 배너; 로컬 코퍼스 뷰어·채택/승격은 그대로 유지 — akg 실채택 전까지 비파괴, UI-only, 엔드포인트/스키마 불변) · 0.24.0: custom pages (#129 — config.customPages가 로컬 HTML 파일을 GET /<name>로 마운트; 플러그인엔 메커니즘만 실리고 콘텐츠·데이터는 로컬 유지, 요청마다 파일 재로딩, 내장 라우트 이후 매칭이라 엔드포인트 섀도잉 불가, 정적문서 CSP) · 0.24.1: custom page nav links (#129 후속 — 대시보드 nav에 config customPages 링크 자동 주입: 서빙 시점 <!--custom-nav--> 마커 치환, 해시탭 아닌 별도 페이지 링크(우측 정렬·↗)) · 0.25.0: opencode 세션 관측 (#74 — events.runtime 컬럼 스키마 v8: 어느 하네스가 만든 이벤트인지 승격 컬럼으로 기록(CC=NULL, opencode 어댑터만 "opencode"), /stats/sessions가 MAX(runtime)으로 세션당 런타임을 돌려주고 sessions 탭이 CC 아닌 세션에만 배지 표시; 기간 화이트리스트에 90d·all 추가 + sessions 셀렉터에 30d·전체) · 0.25.1: pricing — claude-opus-5 추가 ($5/$25, 어떤 프리픽스에도 안 걸려 unpriced로 새던 것; DB 실측 7.1k rows) · 0.26.0: sessions 전체 기간 (#138 — events 리텐션(7d) 너머 세션을 materialized turns(#82, 리텐션 미적용)로 재구성해 /stats/sessions에 archival:true 유니온(events 판 우선, first_prompt·runtime 없음·ended 고정), 드릴다운 /stats/turns는 events 0건+materialized 존재 시 집계-only 폴백(archival:true, ?turn= 상세는 404), UI = 세션행 archive 배지·드릴 안내문·per-turn 로컬 렌더) · 0.26.1: 티틀러 자기재귀 차단 (#142 — 희생 59999 수집기가 같은 서버 코드라 자기 피더 세션을 auto-titling해 티틀러가 티틀러를 낳는 무한 루프(projects/에 정크 트랜스크립트 52k·2.7GB 누적); 스폰 env에 OBS_TITLE_AUTO=0으로 루프 절단, cwd=void로 티틀러 트랜스크립트를 projects/<void>에 격리(+프로젝트 CLAUDE.md 미로딩), 심층방어로 첫 프롬프트가 티틀러 지시문인 세션은 후보 skip) · 0.27.0: auto-titler 제거 (세션 라벨 = 첫 프롬프트; 3분마다 claude -p 스폰·title-sessions CLI·OBS_TITLE_* 걷음; 스키마 v9 — session_titles → session_labels, 리텐션이 이벤트를 지우기 직전 세션 첫 프롬프트를 굳혀 archival 행에도 라벨 유지, 이미 이벤트가 지워진 세션만 옛 LLM 제목을 라벨로 이관)
@@ -1797,141 +1795,6 @@ function dbExtractTables(sql) {
   return out;
 }
 
-// ── representative-queries: observed DbQuery → per-table 대표 쿼리 proposals (#114) ──
-// Turns the DbQuery audit log into per-table representative queries that seed the
-// db-schema-docs `## 대표 쿼리` manual slot. READ-ONLY and PROPOSAL-ONLY: the CLI
-// prints a block a human pastes — it never writes a doc (manual-slot 원문 보존 +
-// enrich propose→promote discipline). Reuses dbExtractTables for table attribution.
-
-const REP_UNKNOWN_TABLE = "(테이블 미상)";
-
-// Canonicalize SQL so queries differing only in literals/binds collapse into one
-// group (WHERE id=1 / WHERE id=2 → one representative). Conservative: it erases
-// value noise (comments, string/number literals, binds, IN-lists, whitespace,
-// case) but never rewrites structure. Non-string → "".
-function normalizeSql(sql) {
-  if (typeof sql !== "string") return "";
-  return sql
-    .replace(/--[^\n]*/g, " ")             // line comments
-    .replace(/\/\*[\s\S]*?\*\//g, " ")     // block comments
-    .replace(/'(?:''|[^'])*'/g, "?")       // string literals ('' = escaped quote)
-    .replace(/:\w+/g, "?")                 // binds :name / :1 (before numeric)
-    .replace(/\b\d+(?:\.\d+)?\b/g, "?")    // numeric literals
-    .replace(/\bin\s*\(\s*\?(?:\s*,\s*\?)*\s*\)/gi, "in (?)") // IN (?,?,…) → IN (?)
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/;+$/, "")
-    .toLowerCase();
-}
-
-// A tidy one-liner of the ORIGINAL sql (case + literals kept) for display as the
-// representative example. Truncated so a pathological query can't blow up output.
-function displaySql(sql, max = 600) {
-  const s = String(sql ?? "")
-    .replace(/--[^\n]*/g, " ")
-    .replace(/\/\*[\s\S]*?\*\//g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .replace(/;+$/, "");
-  return s.length > max ? `${s.slice(0, max - 2)} …` : s;
-}
-
-// Group observed queries per table and rank representatives.
-//   rows: {alias, tool, sql, elapsedMs, oraError, ts}
-//   → [{table, total, distinct, queries:[{sql, normalized, count, aliases,
-//        lastTs, errorRate, avgMs}]}] sorted by total desc.
-// By DEFAULT only SUCCESSFUL executions feed representatives — a 대표 쿼리 that
-// seeds a doc must be runnable, so a query that only ever errored (agent typo'd a
-// column, ORA-00942, …) is noise here, not an example. `includeErrors` opts the
-// failures back in (for a "where does the agent keep failing on this table" view),
-// and only then can errorRate be > 0.
-// A JOIN attributes its query to EACH table it touches. Per table, queries are
-// grouped by normalized shape and ranked count desc → errorRate asc → recency
-// desc, then sliced to perTable. The representative sql shown is the most recent
-// SUCCESSFUL instance of the group (fallback, only under includeErrors: most
-// recent, if every instance errored). Rows whose FROM/JOIN can't be parsed collect
-// under REP_UNKNOWN_TABLE so nothing vanishes silently. `table` (if set) filters
-// to one table (case-insensitive).
-function collectRepresentative(rows, { perTable = 3, minCount = 1, table = null, includeErrors = false } = {}) {
-  const want = table ? String(table).toUpperCase() : null;
-  const byTable = new Map(); // table -> Map(normalized -> group)
-  for (const r of rows) {
-    const ok = !r.oraError;
-    if (!ok && !includeErrors) continue; // representatives come from successful runs
-    const key = normalizeSql(r.sql);
-    if (!key) continue;
-    let tables = [...new Set(dbExtractTables(r.sql))];
-    if (!tables.length) tables = [REP_UNKNOWN_TABLE];
-    const ts = Number(r.ts) || 0;
-    const ms = Number(r.elapsedMs);
-    for (const t of tables) {
-      if (want && t !== want) continue;
-      let groups = byTable.get(t);
-      if (!groups) byTable.set(t, (groups = new Map()));
-      let g = groups.get(key);
-      if (!g) groups.set(key, (g = { normalized: key, count: 0, errors: 0, aliases: new Set(), lastTs: 0, msSum: 0, msN: 0, repSql: null, repTs: -1, repOk: false }));
-      g.count++;
-      if (!ok) g.errors++;
-      if (r.alias) g.aliases.add(r.alias);
-      if (ts > g.lastTs) g.lastTs = ts;
-      if (Number.isFinite(ms)) { g.msSum += ms; g.msN++; }
-      // prefer the most recent successful instance; fall back to most recent overall
-      if (g.repSql == null || (ok && !g.repOk) || (ok === g.repOk && ts >= g.repTs)) {
-        g.repSql = r.sql; g.repTs = ts; g.repOk = ok;
-      }
-    }
-  }
-  const out = [];
-  for (const [t, groups] of byTable) {
-    const all = [...groups.values()].filter((g) => g.count >= minCount);
-    if (!all.length) continue;
-    const total = all.reduce((s, g) => s + g.count, 0);
-    const queries = all
-      .map((g) => ({
-        sql: displaySql(g.repSql),
-        normalized: g.normalized,
-        count: g.count,
-        aliases: [...g.aliases].sort(),
-        lastTs: g.lastTs,
-        errorRate: g.count ? g.errors / g.count : 0,
-        avgMs: g.msN ? Math.round(g.msSum / g.msN) : null,
-      }))
-      .sort((a, b) => b.count - a.count || a.errorRate - b.errorRate || b.lastTs - a.lastTs)
-      .slice(0, perTable);
-    out.push({ table: t, total, distinct: all.length, queries });
-  }
-  out.sort((a, b) => b.total - a.total || (a.table < b.table ? -1 : 1));
-  return out;
-}
-
-function repDate(ts) {
-  if (!ts) return "?";
-  try { return new Date(Number(ts)).toISOString().slice(0, 10); } catch { return "?"; }
-}
-
-// Render the per-table proposal a human pastes into each table's manual slot.
-function renderRepresentativeMarkdown(tables, { window_ms, allTools, includeErrors }) {
-  const win = Object.keys(WINDOW_MS).find((k) => WINDOW_MS[k] === window_ms) || `${window_ms}ms`;
-  const scope = `${allTools ? "all tools" : "run_query"}, ${includeErrors ? "실패 포함" : "성공 실행만"}`;
-  const lines = [
-    `<!-- 대표 쿼리 제안 — 관측 DbQuery (${scope}) · 최근 ${win} -->`,
-    "<!-- 사람이 검토 후, 각 테이블 문서의 '## 대표 쿼리' 구역(dbdoc:manual:queries 마커 안)에 붙이세요. -->",
-    "",
-  ];
-  for (const t of tables) {
-    lines.push(`### ${t.table}  (관측 ${t.total}건 · 대표 ${t.queries.length})`, "");
-    for (const q of t.queries) {
-      const meta = [`관측 ${q.count}회`];
-      if (q.aliases.length) meta.push(`alias ${q.aliases.join("/")}`);
-      meta.push(`최근 ${repDate(q.lastTs)}`);
-      if (q.avgMs != null) meta.push(`평균 ${q.avgMs}ms`);
-      if (q.errorRate > 0) meta.push(`⚠ 실패율 ${Math.round(q.errorRate * 100)}%`);
-      lines.push("```sql", `-- ${meta.join(" · ")}`, q.sql, "```", "");
-    }
-  }
-  return lines.join("\n").trimEnd();
-}
-
 function handleStatsDb(req, res, u) {
   if (!statsGate(req, res)) return;
   const window_ms = windowOf(u, "7d");
@@ -1987,243 +1850,6 @@ function handleStatsDb(req, res, u) {
         .sort((a, b) => b.count - a.count).slice(0, 20),
     });
   } catch (e) { logSafe("stats db", e); json(res, 500, { error: "query failed" }); }
-}
-
-// ── GET /stats/schema-docs (#90 — enrich apply/promote activity log) ─────────
-// The apply/promote HISTORY behind the keyword-docs review flow: SchemaDocApply /
-// SchemaDocPromote events, empty until enrich-cli --write runs. It records WHAT
-// changed WHEN, not current state — the pending "queue" itself is just the
-// keyword-docs corpus table's 추정) column, a live file scan the viewer already
-// does via /docs (summed client-side), so this endpoint is events-only and never
-// reads files. Read-only and loopback-gated like every other /stats endpoint.
-function handleStatsSchemaDocs(req, res, u) {
-  if (!statsGate(req, res)) return;
-  const window_ms = windowOf(u, "30d");
-  const history = [];
-  let applies = 0, promotes = 0, promotedSlots = 0, filledSlots = 0;
-  if (db) {
-    try {
-      const since = Date.now() - window_ms;
-      const rows = db.impl.prepare(
-        `SELECT received_at, source_app, hook_event_type,
-                json_extract(payload, '$.doc')      doc,
-                json_extract(payload, '$.filled')   filled,
-                json_extract(payload, '$.skipped')  skipped,
-                json_extract(payload, '$.promoted') promoted
-         FROM events
-         WHERE hook_event_type IN ('SchemaDocApply', 'SchemaDocPromote') AND received_at >= ?
-         ORDER BY received_at DESC LIMIT 200`
-      ).all(since);
-      const arr = (s) => { try { const v = JSON.parse(s); return Array.isArray(v) ? v : []; } catch { return []; } };
-      for (const r of rows) {
-        if (r.hook_event_type === "SchemaDocApply") {
-          const filled = arr(r.filled).length;
-          applies++; filledSlots += filled;
-          history.push({ ts: r.received_at, type: "apply", app: r.source_app, doc: r.doc || "(unknown)",
-            filled, skipped: arr(r.skipped).length });
-        } else {
-          const p = arr(r.promoted);
-          promotes++; promotedSlots += p.length;
-          history.push({ ts: r.received_at, type: "promote", app: r.source_app, doc: r.doc || "(unknown)", promoted: p.length });
-        }
-      }
-    } catch (e) { logSafe("schema-docs history", e); }
-  }
-  json(res, 200, {
-    window_ms,
-    totals: { applies, promotes, promoted_slots: promotedSlots, filled_slots: filledSlots },
-    history,
-  });
-}
-
-// ── GET /docs + /docs/content (#92 — keyword-docs corpus viewer) ────────────
-// List every doc the keyword-docs instances can inject at the USER layer, and
-// serve one doc's raw text. Path resolution + the content allowlist come from
-// the SHARED lib/doc-index.mjs — the exact resolution the hook injects with — so
-// discovery and the allowlist can't diverge. Files are the source of truth: read
-// fresh each request (no cache), everything fail-soft (a broken index or missing
-// doc contributes nothing, never a 500).
-const DOCS_MAX_BYTES = 512 * 1024;
-
-// Home root the docs viewer reads under. OBS_DOCS_HOME overrides it (test seam /
-// escape hatch, same spirit as OBS_DATA_DIR); production uses the real home.
-function docsHomeDir() {
-  return process.env.OBS_DOCS_HOME || os.homedir();
-}
-
-// dbdoc tier markers (db-schema-docs / apply #115). Best-effort: scaffold {{…}}
-// (표시: 미작성) and inferred "자동)" (or the legacy "추정)") are positively
-// marked; a confirmed (채택됨) slot drops its prefix so it isn't separately
-// counted. Marker-less docs → dbdoc:false (plain render).
-function docTiers(text) {
-  const scaffold = (text.match(/\{\{[^}]*\}\}/g) || []).length;
-  const inferred = (text.match(/(?:미확인|추정)\)/g) || []).length;
-  return { dbdoc: /<!--\s*dbdoc:/.test(text) || scaffold > 0 || inferred > 0, scaffold, inferred };
-}
-
-function handleDocsList(req, res) {
-  if (!statsGate(req, res)) return;
-  const docs = [];
-  try {
-    for (const { id, index } of userDocIndexes(docsHomeDir())) {
-      for (const e of resolveIndexEntries(index)) {
-        let exists = true, bytes = 0, tiers = { dbdoc: false, scaffold: 0, inferred: 0 };
-        try {
-          const text = fs.readFileSync(e.abs, "utf8");
-          bytes = Buffer.byteLength(text);
-          tiers = docTiers(text);
-        } catch { exists = false; }
-        docs.push({ instance: id, index, path: e.abs, display: e.path, keywords: e.keywords, exists, bytes, tiers });
-      }
-    }
-  } catch (e) { logSafe("docs list", e); return json(res, 500, { error: "docs failed" }); }
-  json(res, 200, { count: docs.length, docs });
-}
-
-function docUnder(child, parent) {
-  const rel = path.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
-}
-
-// realpath both the requested path and the allowlist so legit symlinked docs
-// work while an escape (a symlink to /etc/… or a `..` climb) resolves OUTSIDE
-// the allowed set and is refused.
-function docsAllowReal() {
-  const set = new Set();
-  for (const { index } of userDocIndexes(docsHomeDir()))
-    for (const e of resolveIndexEntries(index)) {
-      try { set.add(fs.realpathSync(e.abs)); } catch { /* missing doc — skip */ }
-    }
-  let root = null;
-  try { root = fs.realpathSync(path.join(docsHomeDir(), ".claude", "docs")); } catch { /* no docs dir */ }
-  return { set, root };
-}
-
-function handleDocsContent(req, res, u) {
-  if (!statsGate(req, res)) return;
-  const raw = u.searchParams.get("path");
-  if (!raw || raw.includes("\0")) return json(res, 400, { error: "path required" });
-  let real;
-  try { real = fs.realpathSync(path.resolve(expandTilde(raw))); }
-  catch { return json(res, 404, { error: "not found" }); }
-  const { set, root } = docsAllowReal();
-  if (!set.has(real) && !(root && docUnder(real, root)))
-    return json(res, 403, { error: "path not allowed" });
-  let content;
-  try {
-    const st = fs.statSync(real);
-    if (!st.isFile()) return json(res, 404, { error: "not found" });
-    if (st.size > DOCS_MAX_BYTES) return json(res, 413, { error: "doc too large" });
-    content = fs.readFileSync(real, "utf8");
-  } catch (e) { logSafe("docs content", e); return json(res, 500, { error: "read failed" }); }
-  json(res, 200, { path: real, bytes: Buffer.byteLength(content), content });
-}
-
-// ── POST /actions/schema-docs/promote (#112 — dashboard promote, stage 2) ────
-// The WRITE half of the keyword-docs review flow: flip a doc's reviewed 추정)
-// slots to confirmed. Human-triggered (the dashboard button); the agent never
-// calls this on its own inference. Loopback+authed like /stats and POST-only.
-// The target MUST resolve inside the same realpath allowlist /docs/content
-// serves — we never write outside the keyword-docs corpus. Delegates to the
-// db-schema-apply CLI (`promote --all --write`) so the promote logic, the
-// SchemaDocPromote emit (→ activity log) and the exit codes stay single-sourced;
-// promote only strips 추정) on already-inferred slots, so it can't fabricate a
-// confirmation. Read-then-write is the CLI's; here we only gate + delegate.
-const PROMOTE_CLI = fileURLToPath(new URL("../../skills/db-schema-apply/cli.mjs", import.meta.url));
-
-function handlePromoteAction(req, res) {
-  if (!statsGate(req, res)) return;
-  readBody(req, 8 * 1024).then((raw) => {
-    let body;
-    try { body = JSON.parse(raw.toString("utf8") || "{}"); }
-    catch { return json(res, 400, { error: "malformed json" }); }
-    const rawPath = typeof body.path === "string" ? body.path : "";
-    if (!rawPath || rawPath.includes("\0")) return json(res, 400, { error: "path required" });
-    // allowlist — identical to /docs/content: only a doc the indexes point at
-    let real;
-    try { real = fs.realpathSync(path.resolve(expandTilde(rawPath))); }
-    catch { return json(res, 404, { error: "not found" }); }
-    const { set, root } = docsAllowReal();
-    if (!set.has(real) && !(root && docUnder(real, root)))
-      return json(res, 403, { error: "path not allowed" });
-    // target: { all:true } (모두 채택) or per-item { columns:[…], slots:[…] }
-    // (개별 채택). Names are passed as literal argv (spawn, no shell) and promote
-    // only touches matching inferred slots, so an unknown name is a safe no-op.
-    const strArr = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === "string" && s).slice(0, 200) : []);
-    const cols = strArr(body.columns), slots = strArr(body.slots);
-    const cliArgs = [PROMOTE_CLI, "promote", "--doc", real, "--write"];
-    if (body.all === true) cliArgs.push("--all");
-    else if (cols.length || slots.length) {
-      for (const c of cols) cliArgs.push("--column", c);
-      for (const s of slots) cliArgs.push("--slot", s);
-    } else return json(res, 400, { error: "target required (all | columns | slots)" });
-    // delegate to the CLI (single source of truth for promote + emit)
-    let settled = false;
-    const child = spawn(process.execPath, cliArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    child.stderr.on("data", (d) => { err += d; });
-    child.stdout.on("data", () => {}); // drain (--write prints nothing here)
-    child.on("error", (e) => {
-      if (settled) return; settled = true;
-      logSafe("promote spawn", e); json(res, 500, { error: "promote failed", detail: e.message });
-    });
-    child.on("close", (code) => {
-      if (settled) return; settled = true;
-      if (code !== 0) return json(res, 500, { error: "promote failed", code, detail: err.trim().slice(0, 500) });
-      // CLI logs `promoted=N (a, b)` to stderr; recount remaining 추정) from disk
-      const m = /promoted=(\d+)\s*\(([^)]*)\)/.exec(err);
-      const promoted = m && m[2] !== "-" ? m[2].split(",").map((s) => s.trim()).filter(Boolean) : [];
-      let remaining = 0;
-      try { remaining = docTiers(fs.readFileSync(real, "utf8")).inferred; } catch { /* re-read best-effort */ }
-      json(res, 200, { ok: true, promoted, promoted_count: m ? Number(m[1]) : promoted.length, remaining_inferred: remaining });
-    });
-  }).catch((e) => json(res, e && e.status ? e.status : 400, { error: "bad body", detail: e && e.message }));
-}
-
-// ── POST /actions/schema-docs/edit (#115 — 수정: edit a slot, → confirmed) ────
-// Same gate + allowlist as promote. Writes a HUMAN-authored value (confirmed, no
-// prefix) to one column/slot via the CLI `edit` subcommand; text/evidence are
-// literal argv (spawn, no shell). Any tier can be edited — a human write wins.
-function handleEditAction(req, res) {
-  if (!statsGate(req, res)) return;
-  readBody(req, 16 * 1024).then((raw) => {
-    let body;
-    try { body = JSON.parse(raw.toString("utf8") || "{}"); }
-    catch { return json(res, 400, { error: "malformed json" }); }
-    const rawPath = typeof body.path === "string" ? body.path : "";
-    if (!rawPath || rawPath.includes("\0")) return json(res, 400, { error: "path required" });
-    const text = typeof body.text === "string" ? body.text : null;
-    if (text == null) return json(res, 400, { error: "text required" });
-    if (text.length > 4000) return json(res, 400, { error: "text too long" });
-    const col = typeof body.column === "string" ? body.column : "";
-    const slot = typeof body.slot === "string" ? body.slot : "";
-    if (!col && !slot) return json(res, 400, { error: "target required (column | slot)" });
-    const evidence = Array.isArray(body.evidence) ? body.evidence.filter((s) => typeof s === "string" && s).slice(0, 20) : [];
-    let real;
-    try { real = fs.realpathSync(path.resolve(expandTilde(rawPath))); }
-    catch { return json(res, 404, { error: "not found" }); }
-    const { set, root } = docsAllowReal();
-    if (!set.has(real) && !(root && docUnder(real, root)))
-      return json(res, 403, { error: "path not allowed" });
-    const cliArgs = [PROMOTE_CLI, "edit", "--doc", real, "--write", "--text", text];
-    if (col) cliArgs.push("--column", col); else cliArgs.push("--slot", slot);
-    if (evidence.length) cliArgs.push("--evidence", evidence.join("; "));
-    let settled = false;
-    const child = spawn(process.execPath, cliArgs, { stdio: ["ignore", "pipe", "pipe"] });
-    let err = "";
-    child.stderr.on("data", (d) => { err += d; });
-    child.stdout.on("data", () => {});
-    child.on("error", (e) => { if (settled) return; settled = true; logSafe("edit spawn", e); json(res, 500, { error: "edit failed", detail: e.message }); });
-    child.on("close", (code) => {
-      if (settled) return; settled = true;
-      if (code !== 0) return json(res, 500, { error: "edit failed", code, detail: err.trim().slice(0, 500) });
-      const m = /edited=(\d+)\s*\(([^)]*)\)/.exec(err);
-      const edited = m && m[2] !== "-" ? m[2].split(",").map((s) => s.trim()).filter(Boolean) : [];
-      let remaining = 0;
-      try { remaining = docTiers(fs.readFileSync(real, "utf8")).inferred; } catch { /* re-read best-effort */ }
-      json(res, 200, { ok: true, edited, edited_count: m ? Number(m[1]) : edited.length, remaining_inferred: remaining });
-    });
-  }).catch((e) => json(res, e && e.status ? e.status : 400, { error: "bad body", detail: e && e.message }));
 }
 
 // ── GET /stats/turns (#73 — Turn Inspector, stage 1) ────────────────────────
@@ -3071,44 +2697,6 @@ tbody tr.sess{cursor:pointer}
 .bar{fill:#2f6feb}
 .spark{stroke:#3fb950;fill:none;stroke-width:1.5}
 .err{color:#f85149}.warn{color:#d29922}.ok{color:#3fb950}.dim{color:#6b7686}
-.tsc{color:#6b7686}.tin{color:#d29922}
-.migr{margin:8px 16px 0;padding:8px 12px;border:1px solid #1c2230;border-left:3px solid #d29922;border-radius:4px;background:#0d1119;color:#8b949e;font-size:12px;line-height:1.6}
-.migr b{color:#e6edf3;font-weight:600}.migr code{color:#79c0ff}
-#doc-view{margin-top:14px}
-#doc-view h2,#doc-view h3,#doc-view h4,#doc-view h5,#doc-view h6{margin:12px 0 4px}
-#doc-view .doc{border:1px solid #1c2230;border-radius:6px;padding:12px 16px;background:#0d1119;line-height:1.5}
-#doc-view .doc pre{background:#161b22;padding:8px 10px;border-radius:4px;overflow-x:auto;white-space:pre-wrap}
-#doc-view .doc p{margin:6px 0}#doc-view .doc ul{margin:6px 0 6px 20px}
-#doc-view .doc table.doc-tbl{border-collapse:collapse;margin:8px 0;font-size:12px;display:block;overflow-x:auto;max-width:100%}
-#doc-view .doc table.doc-tbl th,#doc-view .doc table.doc-tbl td{border:1px solid #1c2230;padding:4px 8px;text-align:left;vertical-align:top;white-space:pre-wrap}
-/* override the global stats-table th (position:sticky;top:41px;uppercase;gray;11px) so it doesn't leak into doc tables and float/overlap the header — #110 */
-#doc-view .doc table.doc-tbl th{background:#161b22;color:#c8d0dc;font-weight:600;font-size:12px;white-space:nowrap;position:static;top:auto;text-transform:none;letter-spacing:normal}
-#doc-view .doc hr{border:0;border-top:1px solid #1c2230;margin:12px 0}
-#doc-view .promote-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:10px 0;padding:8px 12px;border:1px solid #2a2f3a;border-radius:6px;background:#0f1420}
-#doc-view button.promote{background:#238636;color:#fff;border:0;border-radius:5px;padding:5px 12px;font:inherit;cursor:pointer}
-#doc-view button.promote:hover{background:#2ea043}
-#doc-view button.promote:disabled{background:#2a2f3a;color:#8b949e;cursor:default}
-#doc-view .count b,#doc-view .count .tin{font-weight:600}
-#doc-view .badge{display:inline-block;font-size:11px;font-weight:600;border-radius:10px;padding:0 8px;margin-right:6px;vertical-align:middle;white-space:nowrap}
-#doc-view .badge.b-auto{background:#3a2d10;color:#e3b341;border:1px solid #5c4611}
-#doc-view .badge.b-todo{background:#20262e;color:#8b949e;border:1px solid #2a2f3a}
-#doc-view .badge.b-ok{background:#0f2c17;color:#3fb950;border:1px solid #1c5a2e}
-#doc-view .slot{display:flex;align-items:flex-start;gap:10px;padding:7px 0;border-bottom:1px solid #161b22}
-#doc-view .slot .slot-body{flex:1;min-width:0}
-#doc-view .ev{display:inline-block;font-size:11px;color:#7d8792;background:#161b22;border-radius:3px;padding:1px 6px;margin-left:6px;font-family:ui-monospace,monospace}
-#doc-view pre.sql{background:#161b22;border:1px solid #1c2230;border-radius:5px;padding:8px 10px;margin:6px 0;overflow-x:auto;white-space:pre;color:#c9d1d9}
-#doc-view td.act,#doc-view th.act{white-space:nowrap;text-align:center;width:1%}
-#doc-view .slot-act{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-start}
-#doc-view button.take{background:#238636;color:#fff;border:0;border-radius:5px;padding:3px 22px;min-width:72px;font:inherit;font-size:12px;cursor:pointer}
-#doc-view button.take:hover{background:#2ea043}
-#doc-view button.take:disabled{background:#2a2f3a;color:#8b949e;cursor:default}
-#doc-view button.take.ghost{background:transparent;color:#8b949e;border:1px solid #2a2f3a}
-#doc-view button.take.ghost:hover{background:#161b22;color:#c8d0dc}
-#doc-view textarea.edit-ta{width:100%;min-height:48px;box-sizing:border-box;background:#0d1119;color:#c8d0dc;border:1px solid #2a2f3a;border-radius:5px;padding:6px 8px;font:inherit;font-size:12px;resize:vertical}
-#docs-rows tr:hover{background:#161b22}
-#docs-rows tr.pending td:nth-child(2){box-shadow:inset 2px 0 #d29922}
-#docs-rows tr.pending td:nth-child(4){color:#d29922;font-weight:600}
-td.tprom{color:#3fb950}
 .cards{display:flex;gap:12px;padding:10px 16px;flex-wrap:wrap;align-items:stretch}
 .card{border:1px solid #1c2230;border-radius:6px;padding:8px 14px;min-width:100px}
 .card .k{font-size:11px;color:#6b7686;text-transform:uppercase;letter-spacing:.04em}
@@ -3151,7 +2739,6 @@ a.evlink:hover{color:#79c0ff}
     <a href="#guards" id="tab-guards">guards</a>
     <a href="#nudges" id="tab-nudges">nudges</a>
     <a href="#db" id="tab-db">db</a>
-    <a href="#docs" id="tab-docs">keyword-docs</a>
     <a href="#insight" id="tab-insight">insight</a>
     <!--custom-nav-->
   </nav>
@@ -3302,27 +2889,6 @@ a.evlink:hover{color:#79c0ff}
     <tbody id="db-table-rows"></tbody>
   </table>
 </section>
-<section id="view-docs">
-  <div class="migr"><b>이전 예정</b> — 이 코퍼스(db-schema·msg-format·domain-skill)의 열람·검토·승격은 <b>agent-knowledge-governance(akg)</b> 대시보드로 옮겨가는 중입니다. akg 서버를 도입한 조직은 그쪽에서 하세요 — 이 로컬 뷰는 akg 미도입 시의 정본입니다. <span class="dim">(#123 · akg B모드 = context.json <code>hub</code> opt-in)</span></div>
-  <div class="cards" id="docs-cards"></div>
-  <div class="toolbar">keyword-docs 코퍼스 (user 층)<span data-help="docs"></span>
-    <span class="dim">파일이 진실원 · 매 요청 새로 읽음 · 행을 누르면 전체 문서 · dbdoc 마커 있으면 티어 표시</span>
-  </div>
-  <table>
-    <thead><tr><th>instance</th><th>doc</th><th class="num">미작성</th><th class="num">미확인</th><th>keywords</th></tr></thead>
-    <tbody id="docs-rows"></tbody>
-  </table>
-  <div id="doc-view"></div>
-  <div class="toolbar">apply / promote 이력
-    <select id="docs-hist-window"><option>7d</option><option selected>30d</option><option>90d</option></select>
-    <span data-help="dochist"></span>
-    <span class="dim">enrich-cli --write 활동 로그 (SchemaDocApply/Promote) · 승격은 사람이 CLI로</span>
-  </div>
-  <table>
-    <thead><tr><th>time</th><th>type</th><th>doc</th><th>app</th><th class="num">slots</th></tr></thead>
-    <tbody id="docs-history-rows"></tbody>
-  </table>
-</section>
 <section id="view-insight">
   <div class="cards" id="ft-cards"></div>
   <div class="toolbar">기간
@@ -3382,8 +2948,6 @@ const DASHBOARD_JS = `(function(){
     guards:"git·bash 가드가 막은 기록\\n• deny — 아예 차단 / ask — 한 번 물어봄 (allow는 기록 안 함)\\n• 명령에 든 민감정보는 서버가 가림",
     nudges:"ctx-budget가 작업 경계에서 띄운 /compact 넛지\\n• fires — 넛지 발화 횟수 (수집기 다운 중 발화는 누락 → 관측 하한)\\n• template — start(새 작업 시작) / terminal(작업 종료)\\n• complied — 넛지 후 실제로 압축했는지 (순응 판정은 acp 원장이 단일 진실원)\\n• est$ — 그때 압축했으면 들 일회성 비용 추정",
     db:"agent-db-plugin이 실행한 조회의 감사 로그 (DbQuery 이벤트)\\n• by alias / tool — 접속 별칭·MCP 도구별 쿼리 수 (describe_table·list_tables의 내부 카탈로그 조회도 포함)\\n• slowest — elapsedMs 상위 · ⚠ = 에러로 끝난 쿼리\\n• errors — ORA 코드별 집계 (ORA-00942 반복 = 에이전트가 테이블명 헛짚음 → 스키마 문서 공백 신호)\\n• top tables — sql의 FROM/JOIN에서 추출 (근사) · sql은 원문 그대로 기록 (마스킹 없음, 로컬/리허설 한정)",
-    docs:"context 훅의 keyword-docs가 주입하는 문서 (user 층) — 문서 열람 + 검토(채택)를 한 화면에\\n• 대상 = keyword-docs·msg-format·db-schema·domain-docs 인스턴스의 ~/.claude 인덱스 (project/bundle 층은 스코프 밖)\\n• 행을 누르면 전체 문서 렌더 (파일이 진실원, 매번 새로 읽음)\\n• 미작성 = 아직 설명이 안 적힌 칸(회색) · 미확인 = 코드에서 추론해 채운 설명(주황), 사람 확인·채택 대기 · 채택됨 = 사람이 확인한 확정 설명(초록)\\n• 코퍼스 표의 '미작성'/'미확인' 열 = 각 문서의 해당 칸 수 · 미확인>0 문서는 강조 · 상단 '미확인' 카드 = 전 문서 미확인 칸 총합(파일 스캔이 진실원, 즉시 반영)\\n• 문서를 열면 항목마다 [채택] 버튼(개별) + [모두 채택](전체) — 채택 = 미확인를 확정으로(사람 액션)\\n• 경로는 인덱스가 가리키는 파일 + ~/.claude/docs/ 아래만 열람 (그 밖은 거부)",
-    dochist:"apply/채택 활동 로그 (db-schema-apply #89/#115 + 도메인 스킬)\\n• CLI/대시보드에서 실행하면 emit — apply = 미확인 칸 채움, 채택(promote) = 미확인→확정\\n• 상태가 아니라 변경 이력 — 현재 채택 대기는 위 코퍼스 표의 '미확인' 열(파일 스캔)이 진실원, 이력은 누가 언제 뭘 바꿨나\\n• 채택은 사람 액션(대시보드 [채택]/[모두 채택] 버튼 또는 CLI)",
     insight:"한 세션이 아니라 전 세션을 가로질러, 프롬프트 하나에 대한 응답(=턴)이 도구를 얼마나·얼마나 효율적으로 썼는지 보는 화면. 특정 작업 유형에서 도구 호출이 새는 곳을 찾는 용도다\\n• settled turns — 응답이 끝난(확정된) 턴만 셈 · 아직 진행 중인 마지막 턴은 뺀다\\n• avg calls/turn·dup-call% — 사람이 보낸 턴 기준 (내부 자동 턴·프롬프트 이전 잔여 턴은 제외)\\n• total/subagent cost — 그 기간 턴 비용 합 · subagent = 그 턴이 띄운 서브에이전트 지출\\n• unattributed — 어느 턴에도 안 붙은 잔여 비용 (진행 중 턴 비용 등을 흡수, 합을 정직하게 유지)\\n• ✂ cost-incomplete — 압축(compaction)이 낀 턴은 그 지출이 usage에 안 잡혀 비용이 하한값",
     "ft-flags":"턴에서 자동으로 잡아낸 비효율 패턴. 한 턴이 여러 flag를 가질 수 있어 flag별 비용을 다 더하면 총비용을 넘는다(중복 계상) · 비용은 '그 패턴을 보인 턴들의 비용'이지 아낄 수 있는 금액이 아님\\n• dup-call — 같은 도구를 같은 입력으로 반복 호출\\n• re-read — 한 파일을 겹치는 범위로 여러 번 읽음\\n• retry-loop — 같은 호출이 에러로 반복됨\\n• search-storm — 첫 Read/Edit 전에 Grep/Glob 검색만 연달아(5+ 배치)\\n• long-tail — 한 호출이 그 턴 도구 시간의 절반 이상을 잡아먹음\\n• gap-heavy — 도구 호출 사이 설명 안 되는 빈 시간이 많음\\n• orphaned — Pre만 있고 Post가 없는 호출(가드 deny·중단·크래시)\\n• mega-turn — 한 턴이 지나치게 길거나 호출이 너무 많음",
     "sess-ctx":"턴이 쌓일수록 커지는 문맥 크기 — /compact 하면 뚝 떨어져 톱니 모양이 됨 ('compact' = 떨어진 횟수)",
@@ -3415,7 +2979,7 @@ const DASHBOARD_JS = `(function(){
       for(var j=0;j<t.length;j++)t[j].style.display="none"; },true); }
 
   // ── tabs (#live | #sessions | #tools | #tokens | #guards | #nudges | #db) — hash routing
-  var TABS=["live","sessions","tools","tokens","guards","nudges","db","docs","insight"];
+  var TABS=["live","sessions","tools","tokens","guards","nudges","db","insight"];
   function showTab(name){ if(TABS.indexOf(name)<0)name="live";
     TABS.forEach(function(t){ $("view-"+t).className=t===name?"on":""; $("tab-"+t).className=t===name?"on":""; });
     if(name==="sessions")loadSessions();
@@ -3424,7 +2988,6 @@ const DASHBOARD_JS = `(function(){
     if(name==="guards")loadGuards();
     if(name==="nudges")loadNudges();
     if(name==="db")loadDb();
-    if(name==="docs")loadDocs();
     if(name==="insight")loadFleetTurns(); }
   window.addEventListener("hashchange",function(){ showTab(location.hash.slice(1)); });
 
@@ -3980,218 +3543,6 @@ const DASHBOARD_JS = `(function(){
     }).catch(function(){}); }
   $("ft-window").addEventListener("change",loadFleetTurns);
 
-  // ── docs tab (#92 — keyword-docs corpus viewer): list every doc the
-  // keyword-docs instances inject at the user layer; click a row to render the
-  // full doc. dbdoc tier markers ({{scaffold}} gray, 추정) amber) are highlighted.
-  // Not on the 30s poll — docs are read fresh from disk on each click.
-  function docTierize(container,s){
-    var re=/(\\{\\{[^}]*\\}\\})|((?:미확인|추정)\\)[^\\n]*)/g, last=0, m;
-    while((m=re.exec(s))){
-      if(m.index>last)container.appendChild(document.createTextNode(s.slice(last,m.index)));
-      container.appendChild(el("span",m[1]?"tsc":"tin",m[0]));
-      last=re.lastIndex;
-    }
-    if(last<s.length)container.appendChild(document.createTextNode(s.slice(last)));
-  }
-  // split a markdown row into cells, honoring escaped pipes (formatEvidence writes
-  // a literal | as \|): sentinel the \| out, split on real |, restore.
-  function docCells(ln){ var s=ln.trim().replace(/^\\|/,"").replace(/\\|$/,"");
-    s=s.split("\\\\|").join("\\u0001");
-    return s.split("|").map(function(c){ return c.trim().split("\\u0001").join("|"); }); }
-  function isRow(ln){ return /^\\s*\\|.*\\|\\s*$/.test(ln); }
-  function isSep(ln){ return /^\\s*\\|[\\s:|-]*\\|\\s*$/.test(ln)&&ln.indexOf("-")>=0; }
-  function isHr(ln){ return /^\\s*([-*_])(\\s*\\1){2,}\\s*$/.test(ln); }
-  function renderDoc(text){
-    // Strip HTML/dbdoc comments (<!-- ... -->) so markers don't leak as text and
-    // merge into paragraphs. Tier highlighting keys off the text ({{}}/추정)), not
-    // the markers, so hiding them loses nothing.
-    var root=el("div","doc"), lines=String(text).replace(/<!--[\\s\\S]*?-->/g,"").split(/\\r?\\n/), i=0;
-    while(i<lines.length){
-      var ln=lines[i];
-      if(/^\\s*\x60\x60\x60/.test(ln)){ var buf=[]; i++;
-        while(i<lines.length&&!/^\\s*\x60\x60\x60/.test(lines[i])){ buf.push(lines[i]); i++; }
-        i++; root.appendChild(el("pre",null,buf.join("\\n"))); continue; }
-      var h=ln.match(/^(#{1,6})\\s+(.*)/);
-      if(h){ var hd=el("h"+Math.min(6,h[1].length+1),null); docTierize(hd,h[2]); root.appendChild(hd); i++; continue; }
-      if(isRow(ln)&&i+1<lines.length&&isSep(lines[i+1])){
-        var tbl=el("table","doc-tbl"), thead=el("thead",null), htr=el("tr",null);
-        docCells(ln).forEach(function(c){ var th=el("th",null); docTierize(th,c); htr.appendChild(th); });
-        thead.appendChild(htr); tbl.appendChild(thead); i+=2;
-        var tb=el("tbody",null);
-        while(i<lines.length&&isRow(lines[i])){ var tr=el("tr",null);
-          docCells(lines[i]).forEach(function(c){ var td=el("td",null); docTierize(td,c); tr.appendChild(td); });
-          tb.appendChild(tr); i++; }
-        tbl.appendChild(tb); root.appendChild(tbl); continue; }
-      if(isHr(ln)){ root.appendChild(el("hr",null)); i++; continue; }
-      if(/^\\s*[-*]\\s+/.test(ln)){ var ul=el("ul",null);
-        while(i<lines.length&&/^\\s*[-*]\\s+/.test(lines[i])){ var li=el("li",null); docTierize(li,lines[i].replace(/^\\s*[-*]\\s+/,"")); ul.appendChild(li); i++; }
-        root.appendChild(ul); continue; }
-      if(!ln.trim()){ i++; continue; }
-      var para=[]; while(i<lines.length&&lines[i].trim()&&!/^\\s*(#{1,6}\\s|\x60\x60\x60|[-*]\\s|\\|)/.test(lines[i])&&!isHr(lines[i])){ para.push(lines[i]); i++; }
-      var p=el("p",null); docTierize(p,para.join(" ")); root.appendChild(p);
-    }
-    return root;
-  }
-  // ── review helpers (#115): 미확인/미작성/채택됨 tiers, 근거 chips, SQL 줄바꿈 ──
-  var AUTO_RE=/^(?:미확인|추정)\\) /;                       // inferred prefix (new + legacy)
-  function isAuto(s){ return AUTO_RE.test(String(s).trim()); }
-  function isTodo(s){ return String(s).indexOf("{{")>=0; }
-  function stripAuto(s){ return String(s).trim().replace(AUTO_RE,""); }
-  function stripTodo(s){ return String(s).replace(/\\{\\{\\s*/,"").replace(/\\s*\\}\\}/,""); }
-  function splitEv(s){ var t=String(s), ev=[]; var m=/\\[근거:\\s*([^\\]]*)\\]/.exec(t);
-    if(m){ m[1].split(";").forEach(function(r){ r=r.trim(); if(r)ev.push(r); }); t=(t.slice(0,m.index)+t.slice(m.index+m[0].length)).trim(); }
-    return {text:t,ev:ev}; }
-  function badge(kind){ var t=kind==="auto"?"미확인":kind==="todo"?"미작성":"채택됨";
-    return el("span","badge "+(kind==="auto"?"b-auto":kind==="todo"?"b-todo":"b-ok"),t); }
-  function evChips(box,ev){ ev.forEach(function(r){ box.appendChild(el("span","ev","근거 "+r)); }); }
-  var SQL_KW=/\\s+(?=(?:FROM|LEFT JOIN|RIGHT JOIN|INNER JOIN|OUTER JOIN|CROSS JOIN|JOIN|WHERE|GROUP BY|ORDER BY|HAVING|UNION ALL|UNION|LIMIT)\\b)/gi;
-  function looksSql(s){ return /\\bSELECT\\b/i.test(s)&&/\\bFROM\\b/i.test(s); }
-  function slotText(box,text){
-    if(looksSql(text)){ var i=text.search(/\\bSELECT\\b/i);
-      var pre=text.slice(0,i).trim(), sql=text.slice(i).trim().replace(SQL_KW,"\\n").replace(/\\s+(?=(?:AND|OR)\\b)/gi,"\\n  ");
-      if(pre)box.appendChild(document.createTextNode(pre+" "));
-      box.appendChild(el("pre","sql",sql));
-    } else box.appendChild(document.createTextNode(text)); }
-  function proseSlot(id,body,p,display){
-    var slot=el("div","slot"), b=el("div","slot-body"), act=el("div","slot-act"), raw=String(body).trim();
-    var cur="", ev=[], todo=isTodo(raw);
-    if(isAuto(raw)){ b.appendChild(badge("auto")); var pe=splitEv(stripAuto(raw)); cur=pe.text; ev=pe.ev; slotText(b,cur); evChips(b,ev);
-      var take=el("button","take","채택"); take.addEventListener("click",function(){ takeItem(p,display,{slots:[id]},take); }); act.appendChild(take); }
-    else if(todo){ b.appendChild(badge("todo")); b.appendChild(el("span","dim",stripTodo(raw)||"(아직 안 적힘)")); }
-    else { b.appendChild(badge("ok")); var pe2=splitEv(raw); cur=pe2.text; ev=pe2.ev; slotText(b,cur); evChips(b,ev); }
-    var edit=el("button","take ghost",todo?"작성":"수정");
-    (function(c,e){ edit.addEventListener("click",function(){ editSlotUI(p,display,b,act,c,e,{slot:id}); }); })(cur,ev);
-    act.appendChild(edit);
-    slot.appendChild(b); slot.appendChild(act);
-    return slot; }
-  function columnsTable(body,p,display){
-    var lines=String(body).split(/\\r?\\n/), rows=[], hdr=null, sepDone=false;
-    lines.forEach(function(l){ if(!isRow(l))return; if(!hdr){hdr=docCells(l);return;} if(!sepDone&&isSep(l)){sepDone=true;return;} rows.push(docCells(l)); });
-    if(!hdr)return el("div","dim","(빈 컬럼)");
-    var tbl=el("table","doc-tbl"), thead=el("thead",null), htr=el("tr",null);
-    hdr.forEach(function(c){ htr.appendChild(el("th",null,c)); });
-    htr.appendChild(el("th","act","채택")); thead.appendChild(htr); tbl.appendChild(thead);
-    var tb=el("tbody",null);
-    rows.forEach(function(cells){ var tr=el("tr",null), last=cells.length-1, descTd=null;
-      cells.forEach(function(v,ci){ var td=el("td",null);
-        if(ci===last){ descTd=td; if(isAuto(v)){ td.appendChild(badge("auto")); var pe=splitEv(stripAuto(v)); td.appendChild(document.createTextNode(pe.text)); evChips(td,pe.ev); }
-          else if(isTodo(v)){ td.appendChild(badge("todo")); td.appendChild(el("span","dim",stripTodo(v))); }
-          else { td.appendChild(badge("ok")); var pc=splitEv(v); td.appendChild(document.createTextNode(pc.text)); evChips(td,pc.ev); } }
-        else td.textContent=v;
-        tr.appendChild(td); });
-      var act=el("td","act"), desc=cells[last], name=cells[0], todo=isTodo(desc), cur="", ev=[];
-      if(isAuto(desc)){ var pe2=splitEv(stripAuto(desc)); cur=pe2.text; ev=pe2.ev;
-        var bt=el("button","take","채택"); (function(nm){ bt.addEventListener("click",function(){ takeItem(p,display,{columns:[nm]},bt); }); })(name); act.appendChild(bt); }
-      else if(!todo){ var pc2=splitEv(desc); cur=pc2.text; ev=pc2.ev; }
-      var edit=el("button","take ghost",todo?"작성":"수정");
-      (function(nm,c,e,bt,at){ edit.addEventListener("click",function(){ editSlotUI(p,display,bt,at,c,e,{column:nm}); }); })(name,cur,ev,descTd,act);
-      act.appendChild(edit);
-      tr.appendChild(act); tb.appendChild(tr); });
-    tbl.appendChild(tb); return tbl; }
-  function renderReviewDoc(text,p,display){
-    var root=el("div","doc"), lines=String(text).split(/\\r?\\n/), i=0;
-    while(i<lines.length){ var ln=lines[i];
-      var open=ln.match(/^\\s*<!--\\s*dbdoc:(?:auto|manual):([a-z0-9_]+)\\s*-->\\s*$/i);
-      if(open){ var id=open[1], buf=[]; i++;
-        var endRe=new RegExp("^\\\\s*<!--\\\\s*dbdoc:end:"+id+"\\\\s*-->");
-        while(i<lines.length&&!endRe.test(lines[i])){ buf.push(lines[i]); i++; }
-        i++; var body=buf.join("\\n");
-        if(id==="columns") root.appendChild(columnsTable(body,p,display));
-        else if(id==="keys"){ var ul=el("ul",null); body.split(/\\r?\\n/).forEach(function(l){ var mm=l.match(/^\\s*[-*]\\s+(.*)/); if(mm)ul.appendChild(el("li",null,mm[1])); }); root.appendChild(ul); }
-        else root.appendChild(proseSlot(id,body,p,display));
-        continue; }
-      if(/^\\s*<!--/.test(ln)){ i++; continue; }
-      var h=ln.match(/^(#{1,6})\\s+(.*)/);
-      if(h){ root.appendChild(el("h"+Math.min(6,h[1].length+1),null,h[2])); i++; continue; }
-      if(isHr(ln)){ root.appendChild(el("hr",null)); i++; continue; }
-      if(!ln.trim()){ i++; continue; }
-      var para=[]; while(i<lines.length&&lines[i].trim()&&!/^\\s*(#{1,6}\\s|<!--)/.test(lines[i])&&!isHr(lines[i])){ para.push(lines[i]); i++; }
-      root.appendChild(el("p",null,para.join(" ")));
-    }
-    return root; }
-  function openDoc(p,display){
-    var view=$("doc-view"); view.textContent=""; view.appendChild(el("div","dim","loading…"));
-    getJson("/docs/content?path="+encodeURIComponent(p)).then(function(d){
-      view.textContent=""; view.appendChild(el("h2",null,display));
-      var text=d.content||"", isDb=/<!--\\s*dbdoc:/.test(text);
-      var auto=(text.match(/(?:미확인|추정)\\)/g)||[]).length, todo=(text.match(/\\{\\{[^}]*\\}\\}/g)||[]).length;
-      if(isDb){ var bar=el("div","promote-bar");
-        var sum=el("span","count"); sum.appendChild(el("span","dim","미작성 "+todo+" · "));
-        sum.appendChild(el("span","tin","미확인 "+auto)); sum.appendChild(el("span","dim"," (채택 대기)")); bar.appendChild(sum);
-        if(auto>0){ var btn=el("button","promote","모두 채택 ("+auto+")");
-          btn.addEventListener("click",function(){ takeAll(p,display,auto,btn); }); bar.appendChild(btn);
-          bar.appendChild(el("span","dim","코드가 자동으로 채운 설명입니다 — 확인 후 채택하세요")); }
-        else bar.appendChild(el("span","dim","채택 대기 없음"));
-        view.appendChild(bar); view.appendChild(renderReviewDoc(text,p,display));
-      } else view.appendChild(renderDoc(text));
-      view.scrollIntoView({block:"nearest"});
-    }).catch(function(){ view.textContent=""; view.appendChild(el("div","err","문서를 불러올 수 없습니다 (삭제됐거나 접근 불가)")); });
-  }
-  function takeAll(p,display,n,btn){
-    if(!window.confirm("이 문서의 미확인 "+n+"개를 모두 채택(확정)합니다. 계속할까요?")) return;
-    btn.disabled=true; btn.textContent="채택 중…";
-    postJson("/actions/schema-docs/promote",{path:p,all:true}).then(function(){ openDoc(p,display); loadDocs(); })
-      .catch(function(){ btn.disabled=false; btn.textContent="채택 실패 — 재시도"; }); }
-  function takeItem(p,display,target,btn){
-    btn.disabled=true; btn.textContent="…";
-    var body={path:p}; if(target.columns)body.columns=target.columns; if(target.slots)body.slots=target.slots;
-    postJson("/actions/schema-docs/promote",body).then(function(){ openDoc(p,display); loadDocs(); })
-      .catch(function(){ btn.disabled=false; btn.textContent="실패"; }); }
-  // #115 수정: swap the item body for a textarea; save writes a human value
-  // (→ confirmed) via /edit, cancel re-renders. target = {slot:id}|{column:name}.
-  function editSlotUI(p,display,bodyEl,actEl,curText,ev,target){
-    bodyEl.textContent=""; actEl.textContent="";
-    var ta=el("textarea","edit-ta"); ta.value=curText||""; bodyEl.appendChild(ta);
-    var save=el("button","take","저장");
-    save.addEventListener("click",function(){ save.disabled=true; save.textContent="…";
-      var body={path:p,text:ta.value,evidence:ev||[]}; if(target.column)body.column=target.column; if(target.slot)body.slot=target.slot;
-      postJson("/actions/schema-docs/edit",body).then(function(){ openDoc(p,display); loadDocs(); })
-        .catch(function(){ save.disabled=false; save.textContent="저장 실패"; }); });
-    var cancel=el("button","take ghost","취소"); cancel.addEventListener("click",function(){ openDoc(p,display); });
-    actEl.appendChild(save); actEl.appendChild(cancel);
-    if(ta.focus)ta.focus(); }
-  // ── keyword-docs tab (#92 viewer + #90/#112/#115 review). The corpus table IS
-  // the review queue: the '미확인' column counts code-derived slots awaiting
-  // human 채택 (a live file scan via /docs), docs with 미확인>0 are highlighted,
-  // and the top card sums them. Opening a dbdoc doc renders each slot with a
-  // 미확인/미작성/채택됨 badge + 근거 + a [채택] button. HISTORY = the events log.
-  function loadDocs(){
-    getJson("/docs").then(function(d){
-      var box=$("docs-cards"); box.textContent="";
-      box.appendChild(card("docs",d.count||0));
-      var inst={}, pending=0;
-      (d.docs||[]).forEach(function(x){ inst[x.instance]=(inst[x.instance]||0)+1;
-        if(x.tiers&&x.tiers.inferred) pending+=x.tiers.inferred; });
-      Object.keys(inst).forEach(function(k){ box.appendChild(card(k,inst[k])); });
-      box.appendChild(card("미확인",pending));
-      var tb=$("docs-rows"); tb.textContent="";
-      (d.docs||[]).forEach(function(x){ var tr=document.createElement("tr");
-        var inf=x.tiers&&x.tiers.inferred?x.tiers.inferred:0;
-        if(inf) tr.className="pending";
-        tr.appendChild(cell(x.instance,"dim"));
-        var dtd=cell(x.display); if(!x.exists){ dtd.appendChild(el("span","err"," (missing)")); } tr.appendChild(dtd);
-        tr.appendChild(cell(x.tiers&&x.tiers.scaffold?x.tiers.scaffold:"","num"));
-        tr.appendChild(cell(inf?inf:"","num"));
-        tr.appendChild(cell((x.keywords||[]).join(", "),"dim"));
-        if(x.exists){ tr.style.cursor="pointer"; tr.addEventListener("click",function(){ openDoc(x.path,x.display); }); }
-        tb.appendChild(tr); });
-      if(!(d.docs||[]).length){ var e=document.createElement("tr"),etd=el("td","dim","user 층(~/.claude/context-docs*.json)에 keyword-docs 인덱스 없음"); etd.colSpan=5; e.appendChild(etd); tb.appendChild(e); }
-    }).catch(function(){});
-    loadDocsHistory(); }
-  function loadDocsHistory(){ var w=$("docs-hist-window").value;
-    getJson("/stats/schema-docs?window="+w).then(function(d){
-      var hr=$("docs-history-rows"); hr.textContent="";
-      (d.history||[]).forEach(function(x){ var tr=document.createElement("tr");
-        tr.appendChild(cell(fmtDT(x.ts)));
-        tr.appendChild(cell(x.type,x.type==="promote"?"tprom":"dim"));
-        tr.appendChild(cell(x.doc));
-        tr.appendChild(cell(x.app,"dim"));
-        tr.appendChild(cell(x.type==="promote"?x.promoted:x.filled,"num"));
-        hr.appendChild(tr); });
-      if(!(d.history||[]).length){ var h2=document.createElement("tr"),h2d=el("td","dim","이력 없음 — enrich-cli apply/promote를 --write 로 실행하면 여기 쌓임"); h2d.colSpan=5; h2.appendChild(h2d); hr.appendChild(h2); }
-    }).catch(function(){}); }
-  $("docs-hist-window").addEventListener("change",loadDocsHistory);
-
   // 30s refresh of whichever analytics tab is visible
   setInterval(function(){ var h=location.hash.slice(1); if(h==="sessions")loadSessions(); else if(h==="tools")loadTools(); else if(h==="tokens")loadTokens(); else if(h==="guards")loadGuards(); else if(h==="nudges")loadNudges(); else if(h==="db")loadDb(); else if(h==="insight")loadFleetTurns(); },30000);
 
@@ -4288,22 +3639,9 @@ function onRequest(req, res) {
       if (pathname === "/stats/guards") return handleStatsGuards(req, res, u);
       if (pathname === "/stats/nudges") return handleStatsNudges(req, res, u);
       if (pathname === "/stats/db") return handleStatsDb(req, res, u);
-      if (pathname === "/stats/schema-docs") return handleStatsSchemaDocs(req, res, u);
       if (pathname === "/stats/turns") return handleStatsTurns(req, res, u);
       if (pathname === "/stats/fleet-turns") return handleStatsFleetTurns(req, res, u);
       return json(res, 404, { error: "not found" });
-    }
-    if (pathname === "/docs" || pathname === "/docs/content") {
-      if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { Allow: "GET" });
-      return pathname === "/docs" ? handleDocsList(req, res) : handleDocsContent(req, res, u);
-    }
-    if (pathname === "/actions/schema-docs/promote") {
-      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
-      return handlePromoteAction(req, res);
-    }
-    if (pathname === "/actions/schema-docs/edit") {
-      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" }, { Allow: "POST" });
-      return handleEditAction(req, res);
     }
     if (pathname === "/health") {
       if (req.method === "GET") return handleHealth(req, res);
@@ -4586,70 +3924,10 @@ async function cliMaterializeTurns() {
   process.exit(0);
 }
 
-// #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs.
-// Read-only, proposal-only (prints; never writes a doc). Representatives come from
-// SUCCESSFUL executions only; --include-errors opts failures back in. Flags:
-// --window 30d, --alias X, --table T, --per-table N, --min-count N, --all-tools,
-// --include-errors, --json.
-async function cliRepresentativeQueries() {
-  await startBackend();
-  if (!db) { process.stdout.write(`${SERVICE}: no sqlite backend\n`); process.exit(1); }
-  const argv = process.argv;
-  const opt = (name, def) => { const i = argv.indexOf(name); return i >= 0 && argv[i + 1] != null ? argv[i + 1] : def; };
-  const has = (name) => argv.includes(name);
-  const window_ms = WINDOW_MS[opt("--window", "30d")] ?? WINDOW_MS["30d"];
-  const alias = opt("--alias", null);
-  const table = opt("--table", null);
-  const perTable = Math.max(1, Number(opt("--per-table", "3")) || 3);
-  const minCount = Math.max(1, Number(opt("--min-count", "1")) || 1);
-  const allTools = has("--all-tools");
-  const includeErrors = has("--include-errors");
-  const asJson = has("--json");
-  const since = Date.now() - window_ms;
-  let rows;
-  try {
-    let q = `SELECT received_at ts,
-                    json_extract(payload, '$.alias')     alias,
-                    json_extract(payload, '$.tool')      tool,
-                    json_extract(payload, '$.sql')       sql,
-                    json_extract(payload, '$.elapsedMs') elapsedMs,
-                    json_extract(payload, '$.oraError')  oraError
-             FROM events
-             WHERE hook_event_type = 'DbQuery' AND received_at >= ?`;
-    const binds = [since];
-    if (!allTools) q += " AND json_extract(payload, '$.tool') = 'run_query'";
-    if (alias) { q += " AND json_extract(payload, '$.alias') = ?"; binds.push(alias); }
-    rows = db.impl.prepare(q).all(...binds);
-  } catch (e) {
-    logSafe("representative-queries", e);
-    process.stdout.write(`${SERVICE}: query failed — ${e.message}\n`);
-    process.exit(1);
-  }
-  const tables = collectRepresentative(rows, { perTable, minCount, table, includeErrors });
-  if (asJson) {
-    process.stdout.write(`${JSON.stringify({ window_ms, all_tools: allTools, observed: rows.length, tables }, null, 2)}\n`);
-    process.exit(0);
-  }
-  if (!rows.length) {
-    process.stdout.write(
-      "관측된 DbQuery 없음 — agent-db-plugin의 run_query가 collector로 쌓여야 대표 쿼리를 뽑을 수 있습니다.\n" +
-      "(사내 실사용 트래픽 + observability collector 실행 필요. --window 를 늘리거나 --all-tools 로 카탈로그 조회까지 포함해 볼 수 있습니다.)\n"
-    );
-    process.exit(0);
-  }
-  if (!tables.length) {
-    process.stdout.write(`관측 ${rows.length}건이 있으나 조건(min-count ${minCount}${table ? `, table ${table}` : ""})에 맞는 대표 쿼리가 없습니다.\n`);
-    process.exit(0);
-  }
-  process.stdout.write(`${renderRepresentativeMarkdown(tables, { window_ms, allTools, includeErrors })}\n`);
-  process.exit(0);
-}
-
 const cmd = process.argv[2];
 if (cmd === "status") await cliStatus();
 else if (cmd === "stop") await cliStop();
 else if (cmd === "retain") await cliRetain(); // run one retention pass (ops/test)
 else if (cmd === "ingest-usage") await cliIngestUsage(); // backfill token usage (stage 10a); --rescan re-reads all transcripts (#57)
 else if (cmd === "materialize-turns") await cliMaterializeTurns(); // #82: backfill/refresh the fleet turns table; --rebuild forces re-derive of non-frozen sessions
-else if (cmd === "representative-queries") await cliRepresentativeQueries(); // #114: observed DbQuery → per-table 대표 쿼리 proposals for db-schema-docs
 else await startServer();
