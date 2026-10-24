@@ -1,0 +1,90 @@
+{
+  "kind": "swimlane",
+  "id": "chatagent-lane",
+  "caption": "ChatAgent 한 턴을 누가 하는지. 사용자 · BE 코드 · LLM 세 레인에 단계가 순서대로 내려가고, route_data 와 route_answer 가 되돌린다.",
+  "lanes": [
+    { "id": "user", "label": "사용자" },
+    { "id": "be", "label": "BE 코드" },
+    { "id": "llm", "label": "LLM" }
+  ],
+  "steps": [
+    {
+      "id": "ask",
+      "lane": "user",
+      "kind": "io",
+      "text": "질문 입력",
+      "sub": "agent 고르기"
+    },
+    {
+      "id": "initialize",
+      "lane": "be",
+      "text": "initialize",
+      "sub": "spec 적재"
+    },
+    { "id": "retrieve", "lane": "be", "text": "retrieve", "sub": "fdc.query" },
+    {
+      "id": "synthesize",
+      "lane": "llm",
+      "kind": "lead",
+      "text": "synthesize",
+      "sub": "query_table 루프"
+    },
+    {
+      "id": "route_data",
+      "lane": "be",
+      "kind": "gate",
+      "text": "route_data",
+      "sub": "dataRequests?"
+    },
+    {
+      "id": "verify_answer",
+      "lane": "llm",
+      "kind": "lead",
+      "text": "verify_answer",
+      "sub": "검토"
+    },
+    {
+      "id": "route_answer",
+      "lane": "be",
+      "kind": "gate",
+      "text": "route_answer",
+      "sub": "통과 · 예산 · 실패"
+    },
+    {
+      "id": "recommend_question",
+      "lane": "llm",
+      "kind": "lead",
+      "text": "recommend_question",
+      "sub": "후속 질문 셋"
+    },
+    {
+      "id": "done",
+      "lane": "user",
+      "kind": "io",
+      "text": "답 · 추천 질문",
+      "sub": "DoneSse"
+    }
+  ],
+  "flows": [
+    { "from": "ask", "to": "initialize" },
+    { "from": "initialize", "to": "retrieve" },
+    { "from": "retrieve", "to": "synthesize" },
+    { "from": "synthesize", "to": "route_data" },
+    { "from": "route_data", "to": "verify_answer", "label": "answer" },
+    {
+      "from": "route_data",
+      "to": "retrieve",
+      "kind": "back",
+      "label": "요청 모드 · 2 번까지"
+    },
+    { "from": "verify_answer", "to": "route_answer" },
+    { "from": "route_answer", "to": "recommend_question", "label": "통과" },
+    {
+      "from": "route_answer",
+      "to": "synthesize",
+      "kind": "back cond",
+      "label": "실패"
+    },
+    { "from": "recommend_question", "to": "done" }
+  ]
+}

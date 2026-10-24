@@ -1,0 +1,96 @@
+{
+  "kind": "gridmap",
+  "id": "chatagent-grid",
+  "caption": "ChatAgent 요청이 지나는 자리. demo-fe 가 ChatController 로 묻고, RunnerService 가 LLM GW · tools · retrieval 을 부르고, tools 는 Mirror DB 와 MCP 를, retrieval 은 AKG 를 본다.",
+  "boxes": [
+    {
+      "id": "fe",
+      "col": 0,
+      "row": 0,
+      "kind": "io",
+      "title": "demo-fe",
+      "lines": ["질문 입력", "SSE 수신"]
+    },
+    {
+      "id": "ctl",
+      "col": 1,
+      "row": 0,
+      "title": "ChatController",
+      "lines": ["POST /chat", "DoneSse"]
+    },
+    {
+      "id": "runner",
+      "col": 2,
+      "row": 0,
+      "kind": "lead",
+      "title": "RunnerService",
+      "lines": ["그래프 v3", "조달 · 합성 · 검토"]
+    },
+    {
+      "id": "llm",
+      "col": 3,
+      "row": 0,
+      "kind": "ext",
+      "title": "LLM GW",
+      "lines": ["chat · tool call"]
+    },
+    {
+      "id": "db",
+      "col": 1,
+      "row": 1,
+      "title": "Mirror DB",
+      "lines": ["SQLite 사본"]
+    },
+    {
+      "id": "tools",
+      "col": 2,
+      "row": 1,
+      "kind": "gate",
+      "title": "tools",
+      "lines": ["fdc.query", "query_table"]
+    },
+    {
+      "id": "mcp",
+      "col": 3,
+      "row": 1,
+      "kind": "ext",
+      "title": "MCP 서버",
+      "lines": ["외부 도구"]
+    },
+    {
+      "id": "retrieval",
+      "col": 2,
+      "row": 2,
+      "title": "retrieval",
+      "lines": ["BM25 + 임베딩", "rerank"]
+    },
+    {
+      "id": "kg",
+      "col": 3,
+      "row": 2,
+      "kind": "ext",
+      "title": "AKG",
+      "lines": ["스킬 md · 매뉴얼"]
+    }
+  ],
+  "frames": [
+    { "cols": [1, 2], "rows": [0, 2], "title": "fdc-agent-be" },
+    { "cols": [3, 3], "rows": [0, 2], "title": "BE 밖" }
+  ],
+  "edges": [
+    { "from": "fe", "to": "ctl", "kind": "both", "label": "/chat" },
+    { "from": "ctl", "to": "runner", "label": "ChatRequest" },
+    { "from": "runner", "to": "llm", "kind": "accent", "label": "chat" },
+    { "from": "runner", "to": "tools", "label": "조달" },
+    { "from": "tools", "to": "db", "label": "SQL" },
+    { "from": "tools", "to": "mcp" },
+    {
+      "from": "runner",
+      "to": "retrieval",
+      "out": "w",
+      "in": "w",
+      "label": "md 절"
+    },
+    { "from": "retrieval", "to": "kg" }
+  ]
+}
