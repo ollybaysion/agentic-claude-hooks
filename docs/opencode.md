@@ -22,6 +22,7 @@ claude-hooks의 가드(bash-guard·git-guard)와 관측(observability collector)
 | **재시도 차단** | 거부된 명령을 다시 시도하면 문구가 단계적으로 강해진다 (2회=재시도 금지, 3회+=사용자에게 물어라) | (opencode 전용) |
 | **관측** | 프롬프트·툴 호출·세션 라이프사이클을 로컬 collector로 전송 → 대시보드 sessions 탭에 `oc` 배지로 표시 | send-event |
 | **collector 자동 기동** | collector가 안 떠 있으면 detached로 띄움 | obs-lazy-start |
+| **스킬** | 체크아웃의 `skills/<name>/` 을 `~/.config/opencode/skills/<name>` 에 링크 → opencode 의 `skill` 도구가 읽는다(`agentic-coding-git-workflow` · `svg-diagram` …). 에이전트가 필요할 때 `skill({ name })` 으로 본문을 가져온다 | 플러그인 `skills/` 자동 발견 |
 
 **규칙은 복제되지 않았다.** 판정은 CC 훅이 쓰는 `core/*/decide.mjs`를 그대로
 호출한다 — 한쪽에서 규칙을 고치면 양쪽이 같이 바뀐다. 어댑터 파일은 I/O만 한다.
@@ -66,10 +67,11 @@ npm install은 없다(런타임 의존성 0).
 스텁이 체크아웃 경로를 가리키므로 **경로가 변하지 않는 clone**이 필요하다.
 
 ```bash
-git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/repo/claude-hooks
-# PR #132 머지 전이라면:
-git -C ~/repo/claude-hooks switch feat/opencode-adapter
+git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/work/claude-plugins/claude-hooks
 ```
+
+처음부터 끝까지(Claude Code · opencode · 환경변수 · AKG)는 `skills/setup/SKILL.md` 가
+한 절차로 묶어 둔 것이 있다. 아래 예시의 `~/repo/claude-hooks` 는 그 체크아웃 경로로 읽는다.
 
 > ⚠️ `~/.claude/plugins/…` **마켓플레이스 캐시 경로를 가리키게 하지 마라** — 플러그인
 > 업데이트마다 경로가 바뀌어 스텁이 끊긴다. 체크아웃을 옮겼다면 설치기를 다시 실행한다.
@@ -94,6 +96,17 @@ export { ClaudeHooksGuard } from "/path/to/claude-hooks/adapters/opencode/plugin
 
 즉 **체크아웃을 가리키기만 한다** → `git pull` 하면 가드도 같이 갱신된다(재설치 불필요).
 
+같은 실행이 **스킬도 링크한다**: `skills/<name>/SKILL.md` 가 있는 폴더마다
+`~/.config/opencode/skills/<name>` → 체크아웃의 `skills/<name>` 심볼릭 링크 하나.
+opencode 는 전역 스킬을 그 폴더에서 읽는다([공식 문서](https://opencode.ai/docs/skills/)).
+같은 이름의 진짜 폴더가 이미 있으면 그대로 두고 `kept` 로 알린다. 스킬 역시
+체크아웃을 가리키므로 `git pull` 이면 본문이 같이 바뀐다.
+
+| Claude Code | opencode |
+| --- | --- |
+| `/claude-hooks:agentic-coding-git-workflow setup <주제>` | 채팅에 "setup <주제> 로 워크트리 만들어" → 에이전트가 `skill({ name: "agentic-coding-git-workflow" })` 로 본문을 읽고 따른다 |
+| `disable-model-invocation: true` 인 스킬은 사용자만 부른다 | 그 필드는 무시된다 — 모든 스킬이 에이전트에게 보인다(`opencode.json` 의 `permission.skill` 로 `deny`/`ask` 가능) |
+
 ### 2.2 프로젝트 단위 설치
 
 ```bash
@@ -106,10 +119,10 @@ node /path/to/claude-hooks/adapters/opencode/install.mjs --project   # ./.openco
 ```bash
 node adapters/opencode/install.mjs --dir ~/.config/opencode/plugin   # 경로 직접 지정
 node adapters/opencode/install.mjs --print                           # 스텁 내용만 출력
-node adapters/opencode/install.mjs --uninstall                       # 설치한 스텁 제거
+node adapters/opencode/install.mjs --uninstall                       # 설치한 스텁 · 스킬 링크 제거
 ```
 
-**설치 후 opencode를 재시작**해야 한다 (플러그인은 기동 시 로드된다).
+**설치 후 opencode를 재시작**해야 한다 (플러그인과 스킬은 기동 시 로드된다).
 
 ---
 

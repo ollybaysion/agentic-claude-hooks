@@ -19,6 +19,12 @@
 // config dir on purpose: the directory name changed between opencode versions
 // (older: `plugin/`, current docs: `plugins/`), the wrong one is simply never
 // read, and guessing wrong means the guard silently does nothing.
+//
+// It also links every skill of this checkout (`skills/<name>/SKILL.md`) into
+// `<config>/skills/<name>` — the directory opencode's `skill` tool reads
+// (https://opencode.ai/docs/skills/). A symlink, for the same reason as the
+// stub: `git pull` updates the skill text in place. A real directory already
+// there (someone's own skill of the same name) is left alone.
 
 import fs from "node:fs";
 import os from "node:os";
@@ -27,6 +33,7 @@ import { fileURLToPath } from "node:url";
 
 const STUB_NAME = "claude-hooks.js";
 const PLUGIN = fileURLToPath(new URL("./plugin.js", import.meta.url));
+const SKILLS_SRC = fileURLToPath(new URL("../../skills/", import.meta.url));
 const DIR_NAMES = ["plugin", "plugins"];
 
 const argv = process.argv.slice(2);
@@ -58,9 +65,33 @@ function configRoot() {
 const root = configRoot();
 // `--dir` may point straight at a plugin directory; anything else is a config
 // root that owns plugin/ + plugins/ subdirectories.
-const targets = path.basename(root) === "plugin" || path.basename(root) === "plugins"
-  ? [root]
-  : DIR_NAMES.map((d) => path.join(root, d));
+const pluginDirGiven = path.basename(root) === "plugin" || path.basename(root) === "plugins";
+const targets = pluginDirGiven ? [root] : DIR_NAMES.map((d) => path.join(root, d));
+// Skills live beside the plugin dir: `<config>/skills/<name>`.
+const skillsRoot = path.join(pluginDirGiven ? path.dirname(root) : root, "skills");
+
+// Every `skills/<name>/` of this checkout that carries a SKILL.md.
+function bundledSkills() {
+  let names = [];
+  try {
+    names = fs.readdirSync(SKILLS_SRC);
+  } catch {
+    return [];
+  }
+  return names
+    .filter((n) => fs.existsSync(path.join(SKILLS_SRC, n, "SKILL.md")))
+    .sort()
+    .map((n) => ({ name: n, src: path.join(SKILLS_SRC, n), dst: path.join(skillsRoot, n) }));
+}
+
+// True when `dst` is a symlink this installer made (points into this checkout's skills/).
+function ownLink(dst) {
+  try {
+    return fs.lstatSync(dst).isSymbolicLink() && fs.readlinkSync(dst).startsWith(SKILLS_SRC);
+  } catch {
+    return false;
+  }
+}
 
 if (has("--uninstall")) {
   let removed = 0;
@@ -74,7 +105,17 @@ if (has("--uninstall")) {
       if (err.code !== "ENOENT") console.error(`failed   ${file}: ${err.message}`);
     }
   }
-  console.log(removed ? `\n${removed} stub(s) removed. Restart opencode.` : "\nnothing to remove.");
+  for (const { dst } of bundledSkills()) {
+    if (!ownLink(dst)) continue;
+    try {
+      fs.unlinkSync(dst);
+      console.log(`removed  ${dst}`);
+      removed++;
+    } catch (err) {
+      console.error(`failed   ${dst}: ${err.message}`);
+    }
+  }
+  console.log(removed ? `\n${removed} file(s) removed. Restart opencode.` : "\nnothing to remove.");
   process.exit(0);
 }
 
@@ -101,15 +142,45 @@ if (!written) {
   process.exit(1);
 }
 
+// Skills: one symlink per bundled skill. An existing symlink of ours is
+// refreshed (the checkout may have moved); anything else already there stays.
+const linked = [];
+for (const { name, src, dst } of bundledSkills()) {
+  try {
+    fs.mkdirSync(skillsRoot, { recursive: true });
+    if (ownLink(dst)) fs.unlinkSync(dst);
+    else if (fs.existsSync(dst) || isDanglingLink(dst)) {
+      console.log(`kept     ${dst} (not ours — left as is)`);
+      continue;
+    }
+    fs.symlinkSync(src, dst, "dir");
+    console.log(`linked   ${dst} → ${src}`);
+    linked.push(name);
+  } catch (err) {
+    console.error(`failed   ${dst}: ${err.message}`);
+  }
+}
+
+function isDanglingLink(p) {
+  try {
+    return fs.lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 console.log(`
 plugin source: ${PLUGIN}
+skills linked: ${linked.length ? linked.join(", ") : "(none)"}
 
 next:
-  1. restart opencode (plugins load at startup)
+  1. restart opencode (plugins and skills load at startup)
   2. verify the guard:   ask opencode to run  rm -rf /tmp/claude-hooks-guard-check
      → it must refuse with a "[claude-hooks/bash-guard]" message
   3. verify observation: open http://127.0.0.1:4090 → sessions tab
      (the session row is tagged "oc"; the collector starts on its own)
+  4. verify the skills:  ask opencode "setup <topic> 으로 워크트리 만들어"
+     → it must load agentic-coding-git-workflow through its skill tool
 
 switches (export before launching opencode):
   CLAUDE_HOOKS_OC_NUDGES=off    safety blocks only, no style nudges

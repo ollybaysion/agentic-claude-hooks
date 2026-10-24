@@ -576,7 +576,7 @@ export const STYLES = [
   {
     key: "doc",
     name: "문서 따라감",
-    desc: "html-doc 문서 안에 넣을 때. 색 · 글꼴을 그 문서의 토큰(--ink · --line · --accent · --sans …)에서 받아 라이트 · 다크가 문서와 같이 바뀐다. 선 처리는 편집 지면과 같다.",
+    desc: "토큰을 쓰는 HTML 문서 안에 넣을 때. 색 · 글꼴을 그 문서의 토큰(--ink · --line · --accent · --sans …)에서 받아 라이트 · 다크가 문서와 같이 바뀐다. 선 처리는 편집 지면과 같다.",
     webfonts: "",
     fonts: { diagram: "var(--sans)", mono: "var(--mono)" },
     stroke: { sw: 1, ew: 1.4, cap: "butt" },
@@ -675,7 +675,7 @@ function styleBlock(s) {
 export const cssFor = (keys) =>
   DIAGRAM_CSS + keys.map((k) => styleBlock(byKey(k))).join("\n");
 
-// 미리보기(--html)에서 doc 스타일이 참조하는 html-doc 토큰 — html-doc template.html 의 값
+// 미리보기(--html)에서 doc 스타일이 참조하는 문서 토큰의 기본값(편집 지면 팔레트). 실제 문서에서는 그 문서의 값이 쓰인다
 export const DOC_FALLBACK_CSS = `:root { --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA; --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85; --line: #D2D8DB; --line-soft: #E2E6E8; --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09); --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10); --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0F1417; --surface: #161D21; --sunken: #12181B; --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D; --line: #273138; --line-soft: #1E272C; --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13); --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13); color-scheme: dark; } }
 :root[data-theme="dark"] { --bg: #0F1417; --surface: #161D21; --sunken: #12181B; --ink: #E4E9EB; --ink-2: #A3B0B7; --ink-3: #77858D; --line: #273138; --line-soft: #1E272C; --accent: #E38C55; --accent-bg: rgba(227, 140, 85, 0.13); --blue: #83A9C6; --blue-bg: rgba(131, 169, 198, 0.13); color-scheme: dark; }

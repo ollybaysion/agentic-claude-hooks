@@ -22,6 +22,9 @@
 //     a `pulls/<n>/merge` endpoint, and `git merge` while on a protected branch.
 //     Merging a PR is a human decision (solo PR-only review); the agent stops at
 //     "PR created" and hands the merge back to the user.
+//   - kind "bash": the other ways to land history on a protected branch —
+//     `git pull <remote> <other-branch>` (a merge in disguise) and `git rebase`
+//     while on it (a rewrite of the protected history).
 //
 // Detection is argv-based, NOT substring-based: a shell command is split into
 // segments and each is tokenized into argv, so a rule fires only when `git`/`gh`
@@ -30,13 +33,17 @@
 // message text (e.g. `git show main:push.txt`, or `gh pr create --title "merge"`).
 // Branch-dependent rules judge the repo each invocation actually touches: edits
 // at the target file's repo (#71), bash git at the session cwd re-anchored by
-// any `-C <dir>` (#78).
+// any `-C <dir>` (#78) — and, within one command line, by what the EARLIER
+// segments did: a `cd` moves the anchor and a `git checkout`/`git switch` moves
+// HEAD, so `git checkout main && git merge feat && git push` is judged as a
+// merge and a push on main, not on whatever branch HEAD is on right now.
 //
 // Scope: main-branch protection + force-push + no-verify + PR-merge block. Other
 // destructive commands (reset --hard, clean -fd, checkout .) are bash-guard's job.
 
 import { spawnSync } from "node:child_process";
 import { existsSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { lexSegments, skipWrappers } from "../../lib/shell-lex.mjs";
 
@@ -50,6 +57,15 @@ function currentBranch(cwd) {
   });
   if (r.error || r.status !== 0) return "";
   return (r.stdout || "").trim();
+}
+
+// True when `name` is a local branch of the repo at `dir` — the test that tells
+// `git checkout main` (moves HEAD) from `git checkout README.md` (restores a file).
+function isLocalBranch(dir, name) {
+  const r = spawnSync("git", ["-C", dir, "show-ref", "--verify", "--quiet", `refs/heads/${name}`], {
+    timeout: 5000,
+  });
+  return !r.error && r.status === 0;
 }
 
 // Nearest existing ancestor of `dir` (inclusive), or null when even the root
@@ -74,6 +90,17 @@ const GIT_GLOBAL_VALUE_OPTS = new Set([
 // `git push` options that consume the following token as their value, so that
 // value isn't mistaken for a refspec (e.g. `--repo main` is a repo, not a target).
 const PUSH_VALUE_OPTS = new Set(["--repo", "-o", "--push-option", "--receive-pack", "--exec"]);
+// `git pull` options that consume the following token, so it isn't read as a refspec.
+const PULL_VALUE_OPTS = new Set([
+  "-s", "--strategy", "-X", "--strategy-option", "--depth", "--shallow-since", "--shallow-exclude",
+  "-o", "--server-option", "--upload-pack", "--negotiation-tip", "-j", "--jobs",
+]);
+// `git checkout`/`git switch`: flags that create a branch and move HEAD onto it
+// (next token = the new branch), and flags whose value must not be read as the target.
+const SWITCH_CREATE_OPTS = new Set(["-b", "-B", "-c", "-C", "--orphan"]);
+const SWITCH_VALUE_OPTS = new Set(["--conflict", "--pathspec-from-file", "--recurse-submodules"]);
+// `git rebase` flags that resume or finish an in-progress rebase — not a new rewrite.
+const REBASE_RECOVERY = new Set(["--abort", "--continue", "--quit", "--skip", "--edit-todo", "--show-current-patch"]);
 
 // The quote-aware segment/argv lexer and wrapper skipping live in the shared
 // lib/shell-lex.mjs (extracted from this module for #36 so bash-guard's
@@ -139,6 +166,69 @@ function pushTargetsProtected(args, branch) {
   return PROTECTED.has(branch); // no refspec → current branch is the target
 }
 
+// Source branches of a `git pull <remote> <refspec…>` (`feat:main` → feat,
+// `refs/heads/x` → x). Empty for a bare `git pull` / remote-only pull, which
+// brings in the tracking branch and is the sanctioned way to update main.
+function pullSources(args) {
+  const positionals = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (t.startsWith("-")) {
+      if (!t.includes("=") && PULL_VALUE_OPTS.has(t)) i++; // skip its value
+      continue;
+    }
+    positionals.push(t);
+  }
+  return positionals.slice(1).map((r) => {
+    const s = r.replace(/^\+/, "");
+    const colon = s.indexOf(":");
+    return (colon >= 0 ? s.slice(0, colon) : s).replace(/^refs\/heads\//, "");
+  });
+}
+
+// Where HEAD ends up after a `git checkout` / `git switch` segment, so the later
+// segments of the same command line are judged on THAT branch. Returns the
+// branch name; "" when HEAD becomes detached or unknowable (`checkout -`,
+// `$VAR`, a remote-tracking ref), which fails open; or null when the segment
+// doesn't move HEAD at all (a path restore: `--`, `checkout <tree-ish> <paths>`,
+// `checkout <existing file>`).
+function switchTarget(subcommand, args, dir) {
+  if (subcommand !== "checkout" && subcommand !== "switch") return null;
+  if (args.includes("--")) return null;
+  const positionals = [];
+  for (let i = 0; i < args.length; i++) {
+    const t = args[i];
+    if (SWITCH_CREATE_OPTS.has(t)) return args[i + 1] ?? "";
+    if (t.startsWith("-")) {
+      if (!t.includes("=") && SWITCH_VALUE_OPTS.has(t)) i++; // skip its value
+      continue;
+    }
+    positionals.push(t);
+  }
+  if (positionals.length !== 1) return null;
+  const target = positionals[0];
+  if (target === "-" || target.includes("$")) return "";
+  if (dir !== null && isLocalBranch(dir, target)) return target;
+  if (subcommand === "checkout" && dir !== null && existsSync(path.resolve(dir, target))) return null;
+  return ""; // DWIM remote branch, tag, commit — HEAD moves somewhere we can't name
+}
+
+// Where a `cd` segment moves the anchor for the later segments. Returns the new
+// directory; null when it can't be known from the text alone (`cd -`,
+// `cd "$DIR"`, `cd ~user`, a relative cd from an unknown anchor); undefined when
+// the segment isn't a `cd`.
+function cdTarget(tokens, dir) {
+  const i = skipWrappers(tokens);
+  if (tokens[i] !== "cd") return undefined;
+  const rest = tokens.slice(i + 1);
+  if (rest.length === 0) return os.homedir();
+  const arg = rest[rest.length - 1];
+  if (arg === "-" || arg.includes("$") || /^~[^/]/.test(arg)) return null;
+  const expanded = arg === "~" ? os.homedir() : arg.startsWith("~/") ? path.join(os.homedir(), arg.slice(2)) : arg;
+  if (path.isAbsolute(expanded)) return expanded;
+  return dir === null ? null : path.resolve(dir, expanded);
+}
+
 // `gh` options that consume the following token as their value (global + the
 // api / pr-merge-relevant ones). Skipped-with-value so a value can't masquerade
 // as a positional (the subcommand path). `-X`/`--method` is handled separately.
@@ -192,21 +282,43 @@ function decideCommand(command, cwd) {
   // cross-trigger a rule meant for another, and so only an actual git/gh
   // subcommand — not a co-occurring word — fires a rule.
   const branchCache = new Map();
-  const branchAt = (dir) => {
+  const actualBranch = (dir) => {
     if (!branchCache.has(dir)) branchCache.set(dir, currentBranch(dir));
     return branchCache.get(dir);
   };
+  // State the EARLIER segments of this command line leave behind for the later
+  // ones: where a `cd` moved the anchor (`cd ~/repo && git merge x`) and which
+  // branch a `git checkout`/`git switch` put HEAD on (`git checkout main && git
+  // merge feat && git push`). Judged on HEAD as it is now, both would pass —
+  // the second one is the exact sequence that lands an agent merge on main.
+  // Parens make the lexer drop subshell boundaries, so with any `(` in the
+  // command a `cd` is treated as scoped (not carried forward): the pre-existing
+  // behaviour, never a wrong anchor. null = unknowable → branch "" → fail open.
+  const hasSubshell = /[()`]/.test(command);
+  let curDir = cwd;
+  const switched = new Map(); // dir → branch HEAD will be on from here
+  const branchAt = (dir) => (dir === null ? "" : (switched.get(dir) ?? actualBranch(dir)));
+
   for (const tokens of lexSegments(command)) {
+    const moved = cdTarget(tokens, curDir);
+    if (moved !== undefined) {
+      if (!hasSubshell) curDir = moved;
+      continue;
+    }
     const git = parseGit(tokens);
     if (git) {
       const { subcommand, args, chdirs } = git;
       // Branch-dependent rules judge where THIS git invocation runs: the
-      // session cwd, re-anchored by each `-C` in order (git semantics — a
-      // later relative -C is relative to the preceding one; an absolute -C
-      // resets). An unresolvable -C (unexpanded $VAR, missing dir) makes
-      // currentBranch fail → "" → fail-open, NOT a cwd fallback: guessing
-      // the wrong repo would deny legitimate work.
-      const branch = branchAt(chdirs.reduce((d, c) => path.resolve(d, c), cwd));
+      // anchor (session cwd, moved by earlier `cd`s), re-anchored by each
+      // `-C` in order (git semantics — a later relative -C is relative to the
+      // preceding one; an absolute -C resets). An unresolvable -C (unexpanded
+      // $VAR, missing dir) makes currentBranch fail → "" → fail-open, NOT a
+      // cwd fallback: guessing the wrong repo would deny legitimate work.
+      const dir = chdirs.reduce(
+        (d, c) => (d === null ? (path.isAbsolute(c) ? c : null) : path.resolve(d, c)),
+        curDir,
+      );
+      const branch = branchAt(dir);
 
       if (args.includes("--no-verify")) {
         return deny("no-verify",
@@ -237,6 +349,28 @@ function decideCommand(command, cwd) {
             "작업하거나, PR 머지는 사용자에게 요청해라."
         );
       }
+      // `git pull <remote> <other-branch>` on a protected branch is that merge
+      // in disguise. Pulling the branch itself (`git pull origin main`, bare
+      // `git pull`) is the sanctioned update and stays allowed.
+      if (subcommand === "pull" && PROTECTED.has(branch)) {
+        const foreign = pullSources(args).filter((s) => !PROTECTED.has(s));
+        if (foreign.length) {
+          return deny("protected-merge",
+            `'${branch}'에서 \`git pull … ${foreign[0]}\` 거부 — 보호 브랜치로 다른 브랜치를 ` +
+              `끌어오는 것은 병합이다. 병합은 PR 로, 최신화는 \`git pull --ff-only origin ${branch}\`.`
+          );
+        }
+      }
+      // Rebasing a protected branch rewrites its history (recovery flags resume one).
+      if (subcommand === "rebase" && PROTECTED.has(branch) &&
+        !args.some((t) => REBASE_RECOVERY.has(t))) {
+        return deny("protected-rebase",
+          `'${branch}' rebase 거부 — 보호 브랜치 히스토리는 사람 몫이다. feature 브랜치에서 rebase 해라.`
+        );
+      }
+      // Carry the branch this segment moves HEAD onto into the later segments.
+      const next = switchTarget(subcommand, args, dir);
+      if (next !== null && dir !== null) switched.set(dir, next);
       continue;
     }
 

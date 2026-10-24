@@ -28,7 +28,6 @@ node core/observability/server.mjs retain     # run one retention pass (ops)
 node core/observability/server.mjs ingest-usage           # backfill token usage from transcripts, main + subagent files (idempotent)
 node core/observability/server.mjs ingest-usage --rescan  # drop cursors + re-read ALL transcripts (e.g. after the TTL-split or subagent (#81) migration)
 node core/observability/server.mjs materialize-turns      # #82: backfill/refresh the fleet `turns` table from events (--rebuild re-derives non-frozen sessions). Also runs in-process on a timer + before retention trims.
-node core/observability/server.mjs representative-queries  # #114: observed DbQuery (run_query, successful only) → per-table 대표 쿼리 proposals for the db-schema-docs `## 대표 쿼리` slot (read-only, proposal-only; --window 30d / --alias / --table / --per-table / --min-count / --all-tools / --include-errors / --json)
 ```
 
 Then open the dashboard at **<http://127.0.0.1:4090/>**. Node 24+ emits an
