@@ -1,0 +1,51 @@
+{
+  "kind": "sequence",
+  "id": "chatagent-seq",
+  "caption": "ChatAgent 한 턴. demo-fe 가 /chat 을 보내면 RunnerService 가 조달하고, synthesize 루프에서 LLM 과 query_table 을 오가고, 검토 · 추천 질문 뒤 DoneSse 로 끝난다.",
+  "parts": [
+    { "id": "fe", "label": "demo-fe", "kind": "io" },
+    { "id": "ctl", "label": "ChatController" },
+    { "id": "runner", "label": "RunnerService", "kind": "lead" },
+    { "id": "llm", "label": "LLM GW", "kind": "ext" },
+    { "id": "tools", "label": "tools", "kind": "gate" }
+  ],
+  "msgs": [
+    { "from": "fe", "to": "ctl", "text": "POST /chat" },
+    { "from": "ctl", "to": "runner", "text": "ChatRequest" },
+    { "from": "runner", "to": "runner", "text": "initialize · spec" },
+    { "from": "runner", "to": "tools", "text": "fdc.query(needs)" },
+    { "from": "tools", "to": "runner", "text": "tables", "kind": "ret" },
+    {
+      "from": "runner",
+      "to": "llm",
+      "text": "표 머리 + 질문",
+      "kind": "accent"
+    },
+    {
+      "from": "llm",
+      "to": "runner",
+      "text": "tool call query_table",
+      "kind": "ret"
+    },
+    { "from": "runner", "to": "tools", "text": "SQL" },
+    { "from": "tools", "to": "runner", "text": "rows", "kind": "ret" },
+    { "from": "llm", "to": "runner", "text": "answer", "kind": "ret" },
+    {
+      "from": "runner",
+      "to": "llm",
+      "text": "verify_answer",
+      "kind": "accent"
+    },
+    { "from": "llm", "to": "runner", "text": "verdict", "kind": "ret" },
+    {
+      "from": "runner",
+      "to": "llm",
+      "text": "recommend_question",
+      "kind": "accent"
+    },
+    { "from": "llm", "to": "runner", "text": "질문 셋", "kind": "ret" },
+    { "from": "runner", "to": "ctl", "text": "DoneSse", "kind": "ret" },
+    { "from": "ctl", "to": "fe", "text": "SSE done", "kind": "ret" }
+  ],
+  "blocks": [{ "from": 5, "to": 9, "label": "loop · synthesize 예산 안" }]
+}

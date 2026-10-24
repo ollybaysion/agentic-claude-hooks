@@ -1,0 +1,118 @@
+{
+  "kind": "boxflow",
+  "id": "chatagent-flow",
+  "caption": "ChatAgent 그래프. initialize 에서 recommend_question 까지 내려가고, route_data 는 retrieve 로, route_answer 실패는 synthesize 로 되돌아간다.",
+  "nodes": [
+    { "id": "START", "col": 0, "row": 0, "kind": "exit", "title": "START" },
+    {
+      "id": "initialize",
+      "col": 0,
+      "row": 1,
+      "kind": "lead",
+      "title": "initialize",
+      "rows": [
+        ["In", "agent · 비면 main"],
+        ["Out", "spec — md 도메인 절"],
+        ["LLM", "0 번"]
+      ]
+    },
+    {
+      "id": "retrieve",
+      "col": 0,
+      "row": 2,
+      "title": "retrieve",
+      "rows": [
+        ["In", "spec.needs"],
+        ["Out", "tables (Table{nn}_)"],
+        ["툴", "fdc.query"]
+      ]
+    },
+    {
+      "id": "synthesize",
+      "col": 0,
+      "row": 3,
+      "kind": "lead",
+      "title": "synthesize",
+      "rows": [
+        ["In", "표 머리 + 질문"],
+        ["Out", "answer 또는 dataRequests"],
+        ["LLM", "자율 루프"],
+        ["툴", "query_table"]
+      ]
+    },
+    {
+      "id": "route_data",
+      "col": 1,
+      "row": 3,
+      "kind": "gate",
+      "title": "route_data",
+      "rows": [
+        ["조건", "dataRequests 있나"],
+        ["상한", "한 턴에 2 번"]
+      ]
+    },
+    {
+      "id": "verify_answer",
+      "col": 0,
+      "row": 4,
+      "kind": "lead",
+      "title": "verify_answer",
+      "rows": [
+        ["In", "answer"],
+        ["Out", "verdict"],
+        ["LLM", "1 번"]
+      ]
+    },
+    {
+      "id": "route_answer",
+      "col": 0,
+      "row": 5,
+      "kind": "gate",
+      "title": "route_answer",
+      "rows": [
+        ["통과", "recommend_question"],
+        ["예산 소진", "recommend_question"],
+        ["실패", "synthesize"]
+      ]
+    },
+    {
+      "id": "recommend_question",
+      "col": 0,
+      "row": 6,
+      "kind": "lead",
+      "title": "recommend_question",
+      "rows": [
+        ["Out", "후속 질문 셋"],
+        ["LLM", "1 번"]
+      ]
+    },
+    { "id": "END", "col": 0, "row": 7, "kind": "exit", "title": "END" }
+  ],
+  "edges": [
+    { "from": "START", "to": "initialize" },
+    { "from": "initialize", "to": "retrieve" },
+    { "from": "retrieve", "to": "synthesize" },
+    { "from": "synthesize", "to": "route_data", "label": "dataRequests" },
+    {
+      "from": "route_data",
+      "to": "retrieve",
+      "kind": "back",
+      "side": "e",
+      "label": "요청 모드"
+    },
+    { "from": "synthesize", "to": "verify_answer", "label": "answer" },
+    { "from": "verify_answer", "to": "route_answer" },
+    {
+      "from": "route_answer",
+      "to": "recommend_question",
+      "label": "통과 · 예산 소진"
+    },
+    {
+      "from": "route_answer",
+      "to": "synthesize",
+      "kind": "back cond",
+      "label": "실패"
+    },
+    { "from": "recommend_question", "to": "END" }
+  ]
+}
