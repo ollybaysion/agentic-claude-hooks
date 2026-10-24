@@ -26,8 +26,8 @@ description: "설명용 그림을 스펙(JSON)→생성기→SVG 로 만든다. 
    한 번 쓰고 버릴 그림이라도 같다.
 4. **SVG 안에는 좌표와 class 만.** 색 · 선 굵기 · 글꼴은 CSS 토큰(`.d …`)이
    정한다. 인라인 `style` · `fill="#…"` 을 넣지 않는다.
-5. **script 0 · 외부 요청 0.** html-doc 철칙과 같다. 웹폰트는 호스트 페이지의
-   일이다(Artifact 는 Google Fonts 링크, html-doc 은 시스템 글꼴 폴백).
+5. **script 0 · 외부 요청 0.** 웹폰트는 호스트 페이지의 일이다(Artifact 는
+   Google Fonts 링크, 오프라인 문서는 시스템 글꼴 폴백).
 6. **글자는 기준 16px 비율.** 제목 1.25 · 상자 글 1 · 키 0.9 · 선 라벨 0.95 ·
    꼬리표 0.85(손그림만 기준 18px). 상자 폭은 글자 폭을 재서 정하므로 글이
    상자를 넘치지 않는다 — 그래도 미리보기로 확인한다.
@@ -57,10 +57,9 @@ description: "설명용 그림을 스펙(JSON)→생성기→SVG 로 만든다. 
    ```
 
 5. 붙인다. 셋 중 하나:
-   - **html-doc 문서 안**: 스타일 `doc`(문서 토큰을 따라 라이트 · 다크가 같이
-     바뀐다) 또는 원하는 스타일. 페이지 `<style>` 끝에 `--css` 출력을 **한 번**
-     넣고, SVG 조각을 `<figure>` 안에 넣는다. 그다음 html-doc 의 `check.mjs` 를
-     돌린다.
+   - **토큰을 쓰는 HTML 문서 안**: 스타일 `doc`(문서의 `--ink · --line · --accent ·
+     --sans …` 토큰을 따라 라이트 · 다크가 같이 바뀐다) 또는 원하는 스타일. 페이지
+     `<style>` 끝에 `--css` 출력을 **한 번** 넣고, SVG 조각을 `<figure>` 안에 넣는다.
 
      ```bash
      node "<이 스킬 폴더>/gen.mjs" --css --style doc            # <style> 에 한 번
@@ -80,7 +79,7 @@ description: "설명용 그림을 스펙(JSON)→생성기→SVG 로 만든다. 
 `node gen.mjs --list` 가 전부 보여 준다. key: editorial(편집 지면) ·
 blueprint(청사진, 다크 기본) · sketch(손그림) · product(제품 화면) ·
 modern(프리텐다드) · swiss(스위스 단색) · swissgrid(스위스 + 모눈) ·
-terminal(터미널, 다크 하나) · pastel(파스텔 노트) · doc(html-doc 문서 따라감).
+terminal(터미널, 다크 하나) · pastel(파스텔 노트) · doc(호스트 문서의 토큰 따라감).
 
 - default: **미정**. 정해지면 `lib/styles.mjs` 의 `DEFAULT_STYLE` 에 적는다.
 - 스위스 둘의 강조색: 미정(빨강 · 호박 기각). 정해지면 두 스타일의 `accent`
@@ -110,7 +109,7 @@ terminal(터미널, 다크 하나) · pastel(파스텔 노트) · doc(html-doc �
 
 - `gen.mjs` 가 스펙을 검사한다: id 중복, 없는 id 참조, blocks 범위, 없는 레인.
   오류면 exit 1.
-- html-doc 에 넣은 뒤엔 html-doc 의 `check.mjs` 가 script 0 · 외부 요청 0 ·
-  인라인 색 0 을 다시 확인한다.
+- 문서에 넣은 뒤엔 페이지 전체가 script 0 · 외부 요청 0 · 인라인 색 0 인지
+  `rg -n '<script|https?://|fill="#|style="' 파일.html` 로 다시 확인한다.
 - 미리보기 스크린샷으로 넘침 · 겹침을 본다. 글자 폭 추정은 넉넉하게 잡혀
   있지만 글꼴이 바뀌면 `lib/styles.mjs` 의 `textW · monoW` 계수를 맞춘다.

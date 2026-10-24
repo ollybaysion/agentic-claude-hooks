@@ -82,6 +82,19 @@ const MAIN_REPO = initRepo("main-repo", "main");
 const FEAT_REPO = initRepo("feat-repo", "feat/x");
 const PLAIN = path.join(FIX, "plain");
 mkdirSync(PLAIN);
+// A repo on feat/x that ALSO has a local main, so `git checkout main` is a real
+// branch switch (the guard verifies the branch exists before predicting it).
+const BOTH_REPO = initRepo("both-repo", "feat/x");
+for (const argv of [
+  ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "init"],
+  ["branch", "main"],
+]) {
+  const r = spawnSync("git", ["-C", BOTH_REPO, ...argv], { encoding: "utf8", timeout: 10_000 });
+  if (r.error || r.status !== 0) {
+    console.error(`fixture setup failed: ${r.stderr || r.error}`);
+    process.exit(1);
+  }
+}
 
 // [expected, event, note]
 const EDIT_CASES = [
@@ -143,6 +156,58 @@ const BASH_C_CASES = [
 ];
 
 for (const [expected, cwd, command, note] of BASH_C_CASES) {
+  const got = decideEvent({ tool_name: "Bash", cwd, tool_input: { command } });
+  const ok = got === expected;
+  if (!ok) failed++;
+  console.log(`${ok ? "ok  " : "FAIL"} ${expected.padEnd(4)} ${note}\n     cwd=${cwd} ${JSON.stringify(command)}${ok ? "" : ` → got ${got}`}`);
+}
+
+// ---- Earlier segments decide the later ones: checkout/switch, cd, pull, rebase ----
+// [expected, cwd, command, note]
+const SEQUENCE_CASES = [
+  ["deny", BOTH_REPO, "git checkout main && git merge feat/x",
+    "the agent-merge sequence: switch to main, then merge (judged on main)"],
+  ["deny", BOTH_REPO, "git switch main; git push",
+    "switch to main, then a bare push (pushes main)"],
+  ["deny", BOTH_REPO, "git checkout main && git pull origin feat/x",
+    "switch to main, then pull a feature branch into it"],
+  ["deny", BOTH_REPO, "git checkout main && git commit -m x",
+    "switch to main, then commit"],
+  ["pass", BOTH_REPO, "git checkout main -- README.md && git commit -m x",
+    "`checkout <branch> -- <path>` restores a file, HEAD stays on feat/x"],
+  ["pass", MAIN_REPO, "git checkout -b feat/y && git commit -m x",
+    "create + switch off main, then commit (no longer a false deny)"],
+  ["pass", MAIN_REPO, "git switch -c feat/y && git push -u origin feat/y",
+    "create + switch off main, then push the new branch"],
+  ["deny", MAIN_REPO, "git pull origin feat/x",
+    "pull of another branch into main is a merge"],
+  ["deny", MAIN_REPO, "git pull --rebase origin feat/x",
+    "pull --rebase of another branch onto main"],
+  ["pass", MAIN_REPO, "git pull --ff-only origin main",
+    "updating main from its own remote branch (cleanup step)"],
+  ["pass", MAIN_REPO, "git pull",
+    "bare pull brings the tracking branch"],
+  ["deny", MAIN_REPO, "git rebase feat/x",
+    "rebase while on main rewrites main"],
+  ["pass", MAIN_REPO, "git rebase --continue",
+    "rebase recovery flag is not a new rewrite"],
+  ["pass", FEAT_REPO, "git rebase origin/main",
+    "rebase on a feature branch is the normal sync"],
+  ["pass", FEAT_REPO, "git merge origin/main --no-edit",
+    "merge INTO a feature branch (finish step) stays allowed"],
+  ["deny", PLAIN, `cd ${MAIN_REPO} && git merge feat/x`,
+    "cd into a main checkout, then merge"],
+  ["pass", PLAIN, `cd ${FEAT_REPO} && git merge origin/main`,
+    "cd into a feature checkout, then merge"],
+  ["deny", FIX, "cd main-repo && git commit -m x",
+    "relative cd resolves against the session cwd"],
+  ["pass", MAIN_REPO, 'cd "$WT" && git commit -m x',
+    "unexpanded $VAR in cd → unknowable anchor → fail-open"],
+  ["pass", BOTH_REPO, `(cd ${MAIN_REPO} && gh pr view 1) && git commit -m x`,
+    "a cd inside a subshell is scoped: the commit is still judged at the session cwd"],
+];
+
+for (const [expected, cwd, command, note] of SEQUENCE_CASES) {
   const got = decideEvent({ tool_name: "Bash", cwd, tool_input: { command } });
   const ok = got === expected;
   if (!ok) failed++;

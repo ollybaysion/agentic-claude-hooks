@@ -201,20 +201,9 @@ repeated false positives become visible ("`mcp` fired 14 times, never
 relevant"), so index pruning is data-driven. Recording only (best-effort,
 never blocks injection; rolling cap ~4000 lines).
 
-To act on the data, run `/claude-hooks:keyword-docs-prune [days]` — it
-aggregates per keyword, joins transcripts for follow-up rates, and proposes
-removals/narrowings; changes apply only after your approval.
-
-To register a new doc the guided way, run
-`/claude-hooks:keyword-docs-add-index [doc-path]` — it picks the right instance from
-your config, proposes keywords, collision-checks every index file, and appends
-only after your approval.
-
-To create the doc itself from a template (and register it in the same pass),
-run `/claude-hooks:keyword-docs-new-docs [category] [name]` — per-category
-templates (`msg-format` / `db-schema` / `domain`) front-load the injection
-window, slots are filled by interview or code extraction, and the add-index
-flow runs at the end.
+Acting on the data — registering docs, pruning noisy keywords — moves to the
+`akg-pull` / `akg-push` skills (placeholders today, see `skills/`). Until they
+land, edit the index files by hand with the stats above as the evidence.
 
 ## Testing locally
 

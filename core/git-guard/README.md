@@ -7,8 +7,9 @@
 - **Requirement**: Node.js + `git` (PATH). git 저장소가 아니거나 git이 없으면 **fail-open**
 - **argv 기반 탐지**: 명령을 `;` `&&` `||` `|` `&` 줄바꿈·명령치환(`$(…)`/백틱)으로 쪼개 **각 조각을 따옴표 인식 argv로 토큰화**한 뒤, 실제 `git`/`gh` 서브커맨드(`push`/`commit`/`merge`, `gh pr merge`, `gh api …/pulls/<n>/merge`)일 때만 규칙을 건다. 단어 `push`·`main`·`merge`가 인자·메시지에 **우연히 함께 나온다고** 걸리지 않음 — 예: `git show main:push.txt`, `gh pr create --title "merge …"`는 통과. `push` 대상은 refspec 목적지에서만 `main`/`master`를, 머지 API는 **PUT**만 매칭(조회성 GET·`--help`는 통과)
 - **Write/Edit 판정 기준 = 대상 파일**: Write/Edit/MultiEdit은 세션 cwd가 아니라 **`file_path`가 속한 저장소**의 브랜치로 판정한다(#71). cwd가 main 체크아웃이어도 저장소 밖·다른 워크트리 파일은 통과하고, 반대로 cwd가 어디든 main 체크아웃 안 파일은 차단. 상대경로는 세션 cwd 기준으로 해석, 아직 없는 디렉토리는 존재하는 조상으로 판정
-- **Bash 판정 기준 = 실행 저장소**: 브랜치 의존 규칙(commit/merge/bare push)은 세션 cwd 기준이되, **`git -C <dir>`가 있으면 그 디렉토리로 재앵커**한다(#78) — `git -C <main 체크아웃> commit`은 어디서 치든 차단, `git -C <feature 워크트리> commit`은 cwd가 main이어도 통과. 복수 `-C`는 git 시맨틱대로 순차 결합, 상대경로는 세션 cwd 기준. 미확장 변수(`-C "$WT"`)·비존재 경로는 판정 불가 → **fail-open**(cwd 폴백으로 오탐 내지 않음)
-- **범위**: main 보호 + force-push + `--no-verify` + PR 머지 차단. `reset --hard`·`clean`·`checkout .`은 **bash-guard** 소관
+- **Bash 판정 기준 = 실행 저장소**: 브랜치 의존 규칙(commit/merge/pull/rebase/bare push)은 세션 cwd 기준이되, **`git -C <dir>`가 있으면 그 디렉토리로 재앵커**한다(#78) — `git -C <main 체크아웃> commit`은 어디서 치든 차단, `git -C <feature 워크트리> commit`은 cwd가 main이어도 통과. 복수 `-C`는 git 시맨틱대로 순차 결합, 상대경로는 세션 cwd 기준. 미확장 변수(`-C "$WT"`)·비존재 경로는 판정 불가 → **fail-open**(cwd 폴백으로 오탐 내지 않음)
+- **한 줄 안의 앞 조각이 뒤 조각을 정한다**: `cd <dir>`는 뒤 조각의 앵커를 옮기고, `git checkout <브랜치>`/`git switch <브랜치>`(`-b`/`-c` 포함)는 뒤 조각이 판정받을 브랜치를 옮긴다. 그래서 `git checkout main && git merge feat && git push`는 **main에서의 merge·push로** 차단되고, 반대로 `git switch -c feat/y && git commit`은 main 체크아웃에서 쳐도 통과한다. checkout 대상이 로컬 브랜치인지 `git show-ref`로 확인하므로 `git checkout README.md`(파일 복원)·`checkout <브랜치> -- <경로>`는 HEAD 이동으로 보지 않는다. 알 수 없는 이동(`checkout -`, `$VAR`, 원격 ref)·괄호 안 서브셸의 `cd`는 **fail-open**
+- **범위**: main 보호 + force-push + `--no-verify` + PR 머지 차단(머지와 같은 효과인 main에서의 `pull <다른 브랜치>`·`rebase` 포함). `reset --hard`·`clean`·`checkout .`은 **bash-guard** 소관
 - **파일 구성**: `decide.mjs` = 하네스 중립 정책 본체(`decideGit({kind,command,filePath,cwd})` → `{action,rule,reason}|null`, `kind`는 `"bash"`/`"edit"`), `git-guard.mjs` = Claude Code 어댑터(훅 I/O). opencode 어댑터(`adapters/opencode/`)도 같은 `decide.mjs`를 호출한다 — **정책은 한 곳에만**
 
 ## 차단 규칙
@@ -23,6 +24,9 @@
 | `Bash` (`gh pr merge`) | 모든 플래그 변형(`--merge`/`--squash`/`--rebase`/`--auto`/`--admin`) | 에이전트 PR 머지 → 사람이 리뷰 후 직접 (`--help`은 통과) |
 | `Bash` (`gh api`) | `pulls/<n>/merge` 엔드포인트에 `PUT` | REST 우회 머지 (조회성 `GET`은 통과) |
 | `Bash` (`git merge`) | 실행 저장소(`-C` 반영)의 HEAD가 `main`/`master` | 저수준 머지 우회 (`--abort`/`--continue`/`--quit`은 통과) |
+| `Bash` (`git pull <remote> <ref>`) | HEAD가 `main`/`master`이고 `<ref>`가 다른 브랜치 | 가장한 머지 (`git pull`·`git pull --ff-only origin main`은 통과) |
+| `Bash` (`git rebase`) | HEAD가 `main`/`master` | 보호 브랜치 히스토리 재작성 (`--abort`/`--continue`/`--skip` 등 복구 플래그는 통과) |
+| `Bash` (연쇄) | 앞 조각의 `cd`·`git checkout`·`git switch`가 옮긴 자리·브랜치로 뒤 조각을 판정 | `git checkout main && git merge feat && git push` → main에서의 merge·push로 차단 |
 
 > 왜 hook인가: "지금 어느 브랜치냐"는 **git 상태**가 필요해서 — 상태 없는 명령 매처(bash-guard)로는 불가능. main 보호·force-push·no-verify는 git-guard, 그 외 파괴적 명령은 bash-guard로 경계가 깔끔하다.
 >
@@ -48,6 +52,10 @@ echo '{"tool_name":"Bash","tool_input":{"command":"gh pr merge 30 --squash"}}' |
 echo '{"tool_name":"Bash","tool_input":{"command":"gh api -X PUT repos/o/r/pulls/30/merge"}}' | node core/git-guard/git-guard.mjs
 # main 체크아웃 상태의 git merge 차단 (feature 브랜치에선 통과)
 echo '{"tool_name":"Bash","tool_input":{"command":"git merge feature"}}' | node core/git-guard/git-guard.mjs
+# feature 브랜치에서 쳐도: main 으로 옮겨 간 뒤의 merge 는 차단
+echo '{"tool_name":"Bash","tool_input":{"command":"git checkout main && git merge feature"}}' | node core/git-guard/git-guard.mjs
+# main 에서 다른 브랜치를 pull 하는 것은 머지 (origin main 은 통과)
+echo '{"tool_name":"Bash","tool_input":{"command":"git pull origin feature"}}' | node core/git-guard/git-guard.mjs
 # 조회성/도움말은 통과 (gh pr view, gh pr merge --help, merge 엔드포인트 GET)
 echo '{"tool_name":"Bash","tool_input":{"command":"gh pr merge --help"}}' | node core/git-guard/git-guard.mjs
 # 일반 명령 통과
