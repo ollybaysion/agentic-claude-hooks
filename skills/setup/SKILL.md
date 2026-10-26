@@ -111,7 +111,7 @@ node ~/work/claude-plugins/claude-hooks/adapters/opencode/install.mjs
 
 AKG = [agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance).
 지식 문서의 공유 레지스트리(서버)와 그 CLI `akg` 다. `akg-pull` 은 `akg sync`,
-`akg-push` 는 `akg push` · `akg propose` 를 부른다.
+`akg-push` 는 `akg push <type>/<id> <파일>` · `akg propose` · `akg catalog-push` 를 부른다.
 
 1. 체크아웃과 CLI:
 
