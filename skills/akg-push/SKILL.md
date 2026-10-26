@@ -62,6 +62,7 @@ curl -sS -d grant_type=client_credentials -d client_id=fdc-voc-agent-a2a \
 | 올릴 것 | 파일 | 명령 | 확인 |
 | --- | --- | --- | --- |
 | 새 md 문서 | 본문 md | `akg push <type>/<id> 문서.md --create --note "<글>"` | 출력 `pushed <type>/<id> (rev <rev>) — 새 문서` |
+| 새 문서(json) | 문서 json(`"status": "inactive"`) | `akg push <type>/<id> 문서.json --create --note "<글>"` | 출력 `pushed <type>/<id> (rev <rev>) — 새 문서`, 문서 조회의 `.json.status` 가 `inactive` |
 | 기존 문서의 본문 수정 | 고친 본문 md | `akg push <type>/<id> 문서.md --rev <rev> --note "<글>"` | 출력 `pushed <type>/<id> (rev <rev>)`, 문서 조회의 `.json.body.markdown` 이 고친 글 |
 | 기존 문서 전체 수정(body · links) | 고친 문서 json | `akg push <type>/<id> 문서.json --rev <rev> --note "<글>"` | 출력 `pushed <type>/<id> (rev <rev>)`, 문서 조회의 `.json.body` · `.json.links` 가 고친 값 |
 | 슬롯 제안 | `proposal.json`(`{"slots": {…}}`) | `akg propose <type>/<id> proposal.json` | 출력 `proposed <type>/<id>: <uuid>` 또는 `proposal already pending: <uuid>` |
@@ -79,7 +80,11 @@ curl -sS -d grant_type=client_credentials -d client_id=fdc-voc-agent-a2a \
 `akg push` 의 플래그:
 
 - `--create` 는 새 문서를 만들 때 붙인다. 서버에 그 문서가 없으면(404) 이 플래그가 있을 때
-  만든다. 새 문서는 비활성(inactive)으로 들어간다. 활성화는 admin 이 AKG 화면에서 한다.
+  만든다. 새 문서의 status 는 파일 종류에 따라 정해진다.
+  - `.md` 로 만든 문서는 비활성(inactive)이다. CLI 가 봉투를 `status: "inactive"` 로 싼다.
+  - `.json` 으로 만든 문서는 파일의 `status` 그대로 들어간다. CLI 가 파일을 그대로 POST 한다.
+    그래서 파일에 `"status": "inactive"` 로 적는다.
+  - 활성화는 admin 이 AKG 화면에서 한다.
 - `--rev <rev>` 는 원본을 읽은 때의 rev 다. 서버가 그 뒤에 바뀌었으면 409 로 멈춘다.
   그래서 남이 그 사이에 고친 것이 지켜진다. 수정할 때는 늘 붙인다.
 - `--note <글>` 은 서버 이력의 메시지가 된다.
@@ -104,12 +109,14 @@ jq '.json' 원본.json > 문서.json                 # 문서 전체
 2. 2절 표에서 올릴 것을 고른다.
 3. 수정이면 2절의 `curl` 로 원본과 rev 를 받는다.
 4. 받은 원본 위에 고친다.
-5. `akg push` 면 같은 명령에 `--dry-run` 을 붙여 먼저 돌린다.
-6. 실제 명령과 dry-run 결과를 사용자에게 보여 준다.
-7. 사용자의 동의를 받는다.
-8. 명령을 돌린다. 수정이면 3에서 받은 rev 를 `--rev` 로 준다.
-9. 2절 표의 확인 칸대로 확인한다.
-10. 결과(생성 · 갱신 · 오류 글)를 사용자에게 보여 준다.
+5. 새 문서를 `.json` 으로 만들면 파일의 `status` 를 `"inactive"` 로 적는다.
+   활성화는 admin 이 AKG 화면에서 한다.
+6. `akg push` 면 같은 명령에 `--dry-run` 을 붙여 먼저 돌린다.
+7. 실제 명령과 dry-run 결과를 사용자에게 보여 준다.
+8. 사용자의 동의를 받는다.
+9. 명령을 돌린다. 수정이면 3에서 받은 rev 를 `--rev` 로 준다.
+10. 2절 표의 확인 칸대로 확인한다.
+11. 결과(생성 · 갱신 · 오류 글)를 사용자에게 보여 준다.
 
 ## 4. 오류
 
@@ -129,6 +136,6 @@ CLI 는 실패하면 `akg push failed: …` 와 서버의 오류 글을 stderr �
 ## 5. 올린 뒤
 
 agent 가 쓴 슬롯은 추정(inferred)으로 들어간다. 확정 슬롯을 고치면 추정으로 내려간다.
-확정(confirmed)으로 올리는 승격은 사람이 AKG 화면에서 한다. `--create` 로 만든 문서의
-활성화도 admin 이 화면에서 한다. 슬롯 제안은 리뷰 큐에 들어가고, 채택 · 기각도 admin 이
+확정(confirmed)으로 올리는 승격은 사람이 AKG 화면에서 한다. `--create` 로 만든 비활성
+문서의 활성화도 admin 이 화면에서 한다. 슬롯 제안은 리뷰 큐에 들어가고, 채택 · 기각도 admin 이
 화면에서 한다. 미러는 다음 `akg sync` 에서 갱신된다.
