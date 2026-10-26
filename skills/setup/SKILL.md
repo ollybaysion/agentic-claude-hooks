@@ -111,7 +111,8 @@ node ~/work/claude-plugins/claude-hooks/adapters/opencode/install.mjs
 
 AKG = [agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance).
 지식 문서의 공유 레지스트리(서버)와 그 CLI `akg` 다. `akg-pull` 은 `akg sync`,
-`akg-push` 는 `akg push <type>/<id> <파일>` · `akg propose` · `akg catalog-push` 를 부른다.
+`akg-push` 는 `akg push <type>/<id> <파일> [--create] [--rev <rev>] [--note <글>]` ·
+`akg propose` · `akg catalog-push` 를 부른다.
 
 1. 체크아웃과 CLI:
 
@@ -128,7 +129,12 @@ AKG = [agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledg
    ```bash
    export AKG_SERVER=https://<akg 서버>
    install -m 600 /dev/null ~/.claude/akg/token && printf '%s' '<토큰>' > ~/.claude/akg/token
+   curl -sS -H "Authorization: Bearer $(cat ~/.claude/akg/token)" "$AKG_SERVER/health"   # 200 이면 된다
    ```
+
+   `akg` 의 명령은 전부 agent 토큰을 쓴다. `<토큰>` 은 비밀번호 파일 서버면 users.yml 의
+   `group: agent` 줄 비밀번호, Keycloak 서버면 client `fdc-voc-agent-a2a` 의 access token 이다.
+   받는 법은 [`akg-push`](../akg-push/SKILL.md) 의 1절에 있다.
 
 3. 첫 동기화: `akg sync`. 서버가 꺼져 있으면 "나중에 다시" 로 **fail-open** 이다.
    미러 `~/.claude/akg/<type>/` 가 생기면 `core/context` 의 keyword-docs hub 모드가
