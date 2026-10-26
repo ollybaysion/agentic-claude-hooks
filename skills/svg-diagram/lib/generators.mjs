@@ -99,7 +99,7 @@ const bar = (w, h, kind) =>
     : "";
 
 // ── 생성기 1: 상자 흐름 그래프(boxflow) ────────────────────────────────
-// 스펙: nodes[{id, col, row, kind?, title, rows?[[k, v]]}], edges[{from, to, label?, kind?('back' | 'cond' | 'accent' …), side?('w' | 'e')}]
+// 스펙: nodes[{id, col, row, kind?, title, rows?[[k, v, 'code'?]]}], edges[{from, to, label?, kind?('back' | 'cond' | 'accent' …), side?('w' | 'e')}]
 // 상자 폭은 가장 긴 줄에서, 높이는 줄 수에서. 되돌아가는 선(back)은 왼쪽(기본) · 오른쪽(side: 'e') 통로로.
 function boxflow(p, spec) {
   const { fsTitle: fT, fsV: fV, fsK: fK, fsLabel: fL } = T;
@@ -145,7 +145,7 @@ function boxflow(p, spec) {
       : 0;
     const need = Math.max(
       tw(n.title, fT, false, true) + fT,
-      ...rows.map(([, v]) => kw + tw(v, fV)),
+      ...rows.map(([, v, m]) => kw + tw(v, fV, m === "code")),
     );
     return {
       ...n,
@@ -189,9 +189,9 @@ function boxflow(p, spec) {
     if (n.kind === "exit")
       return `<g class="n" transform="translate(${f(n.x)} ${f(n.y)})"><rect class="exit" width="${n.w}" height="${n.h}" rx="${T.rxPill}"/><text class="t-k" x="${n.w / 2}" y="${f(n.h * 0.68)}" text-anchor="middle">${esc(n.title)}</text></g>`;
     const rows = n.rows
-      .map(([k, v], i) => {
+      .map(([k, v, m], i) => {
         const yy = TITLE_H + ROW_H * (i + 1) - R(ROW_H * 0.32);
-        return `<text class="t-k" x="${PAD_X}" y="${yy}">${esc(k)}</text><text class="t-v" x="${PAD_X + n.kw}" y="${yy}">${esc(v)}</text>`;
+        return `<text class="t-k" x="${PAD_X}" y="${yy}">${esc(k)}</text><text class="t-v${m === "code" ? " code" : ""}" x="${PAD_X + n.kw}" y="${yy}">${esc(v)}</text>`;
       })
       .join("");
     const sep =
@@ -486,7 +486,7 @@ function sequence(p, spec) {
 }
 
 // ── 생성기 4: 스윔레인(swimlane, 세로) ─────────────────────────────────
-// 스펙: lanes[{id, label}], steps[{id, lane, text, sub?, kind?}], flows[{from, to, label?, kind?('back' | 'cond' …)}]
+// 스펙: lanes[{id, label}], steps[{id, lane, text, sub?, code?, kind?}], flows[{from, to, label?, kind?('back' | 'cond' …)}]
 // 상자 폭은 가장 긴 단계 글에서, 레인 폭은 상자 + 되돌아가는 선 통로. 단계는 적힌 순서대로 내려간다.
 function swimlane(p, spec) {
   const { fsTitle: fT, fsV: fV, fsLabel: fL } = T;
@@ -494,7 +494,10 @@ function swimlane(p, spec) {
   const BW = Math.ceil(
     Math.max(
       ...spec.steps.map((s) =>
-        Math.max(tw(s.text, fT, false, true), s.sub ? tw(s.sub, fV) : 0),
+        Math.max(
+          tw(s.text, fT, false, true),
+          s.sub ? tw(s.sub, fV, !!s.code) : 0,
+        ),
       ),
     ) +
       2 * PAD,
@@ -527,7 +530,7 @@ function swimlane(p, spec) {
   const lane = (l, i) =>
     `<rect class="lane${i % 2 ? " alt" : ""}" x="${f(l.x)}" y="${M}" width="${LW}" height="${f(H - 2 * M)}"/>${T.titleBar ? `<rect class="bar" x="${f(l.x)}" y="${M}" width="${LW}" height="${HEAD}"/>` : ""}<text class="t-lane ${T.titleBar ? "on-bar" : ""}" x="${f(l.x + LW / 2)}" y="${f(M + HEAD * 0.66)}" text-anchor="middle">${esc(l.label)}</text><line class="sep" x1="${f(l.x)}" y1="${M + HEAD}" x2="${f(l.x + LW)}" y2="${M + HEAD}"/>`;
   const step = (s) =>
-    `<g class="n" transform="translate(${f(s.x)} ${f(s.y)})"><rect class="${s.kind ?? "box"}" width="${s.w}" height="${s.h}" rx="${s.kind === "io" ? T.rxPill : T.rx}"/><text class="t-title ${s.kind === "lead" && !T.titleBar ? "on-lead" : ""}" x="${s.w / 2}" y="${s.sub ? R(fT * 1.15) + 4 : R(BH * 0.62)}" text-anchor="middle">${esc(s.text)}</text>${s.sub ? `<text class="t-v" x="${s.w / 2}" y="${BH - R(fV * 0.6)}" text-anchor="middle">${esc(s.sub)}</text>` : ""}</g>`;
+    `<g class="n" transform="translate(${f(s.x)} ${f(s.y)})"><rect class="${s.kind ?? "box"}" width="${s.w}" height="${s.h}" rx="${s.kind === "io" ? T.rxPill : T.rx}"/><text class="t-title ${s.kind === "lead" && !T.titleBar ? "on-lead" : ""}" x="${s.w / 2}" y="${s.sub ? R(fT * 1.15) + 4 : R(BH * 0.62)}" text-anchor="middle">${esc(s.text)}</text>${s.sub ? `<text class="t-v${s.code ? " code" : ""}" x="${s.w / 2}" y="${BH - R(fV * 0.6)}" text-anchor="middle">${esc(s.sub)}</text>` : ""}</g>`;
   let bk = 0;
   // 되돌아가는 선: 같은 레인이면 왼쪽 통로(라벨은 왼쪽 빈 레인 쪽), 오른쪽 레인으로 가면 오른쪽 통로
   const flow = (e) => {

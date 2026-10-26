@@ -628,6 +628,7 @@ export const DIAGRAM_CSS = `/* svg-diagram: SVG 안에는 좌표와 class 만, �
 .d .t-title.on-bar, .d .t-lane.on-bar { fill: var(--on-bar); }
 .d .t-k { font-family: var(--font-mono); font-size: var(--fs-k); fill: var(--fg); opacity: .72; }
 .d .t-v { font-size: var(--fs-v); }
+.d .t-v.code { font-family: var(--font-mono); }
 .d .t-lane { font-size: var(--fs-title); font-weight: 700; fill: var(--fg); }
 .d .t-label { font-size: var(--fs-label); fill: var(--fg); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
 .d .sep { stroke: var(--line); }
