@@ -79,12 +79,33 @@ git -C <임시> push <도착 URL> seed:main
 ### 레포별 자리 파일
 
 - **fdc-agent-be-spring**
-  - `src/main/java/fdc/agent/voc/port/impl/InhouseVocTicketSource.java` — `toRequest` · `toAct`
-  - `src/test/java/fdc/agent/voc/port/impl/InhouseVocTicketSourceTest.java` — 사내 응답 표본
+  - `src/main/java/fdc/agent/source/port/impl/InhouseVocTicketSource.java` — 사내가 채우는 자리 셋:
+    - 상수 `LINK_KEYWORD` — 링크에 이 글이 들어 있으면 VOC 구현체가 그 링크를 받는다. 대소문자는
+      가리지 않는다.
+    - `toRequest(link)` — 링크를 사내 API 요청 주소로 바꾼다.
+    - `toAct(element, index)` — 사내 응답의 항목 하나를 절 하나로 바꾼다.
+  - `src/test/java/fdc/agent/source/port/impl/InhouseVocTicketSourceTest.java` — 사내 응답 표본
   - 배포 설정의 `VOC_ENDPOINT` 값 — 트리 밖 환경 값이다. 규칙 2 의 제외 목록은 위 두 파일이다.
 - 다른 레포 — 아직 없음.
 
 새 자리가 생기면 이 목록에 더한다. 외부 PR 이 자리를 만들 때 같이 더한다.
+
+자리 파일이 `<출발>` 에서 **옮겨지거나 서명이 바뀌면** 규칙 1 의 `checkout --ours` 로 맞출 수
+없다. 패키지 이동 · `implements` 변경 · 반환 타입 변경이 그런 경우다. 3 단계에서 아래로 옮김을
+확인한다. 출력 줄은 `R<유사도> <옛 경로> <새 경로>` 모양이다:
+
+```bash
+git -C <MAIN> diff -M --diff-filter=R --name-status <LAST> <출발> | rg '<옛 경로>'
+```
+
+경로 제한(`-- <옛 경로>`)을 붙이면 git 이 새 경로를 보지 못해 옮김을 찾지 못한다. 그래서 전체
+diff 를 `rg` 로 거른다. 옮김이 보이면 아래 순서로 맞춘다:
+
+1. `<출발>` 쪽 새 파일을 그대로 받는다.
+2. 사내가 채운 본문(위 목록의 자리)을 옛 파일에서 새 파일로 손으로 옮긴다.
+3. 옛 파일을 지운다.
+4. 규칙 2 의 제외 목록과 이 목록을 새 경로로 쓴다.
+5. PR 본문에 "자리 파일이 옮겨졌다 — 사내 본문을 새 파일로 옮긴다" 를 적는다.
 
 ## 절차
 
