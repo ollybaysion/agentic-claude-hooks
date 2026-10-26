@@ -22,7 +22,7 @@ claude-hooks의 가드(bash-guard·git-guard)와 관측(observability collector)
 | **재시도 차단** | 거부된 명령을 다시 시도하면 문구가 단계적으로 강해진다 (2회=재시도 금지, 3회+=사용자에게 물어라) | (opencode 전용) |
 | **관측** | 프롬프트·툴 호출·세션 라이프사이클을 로컬 collector로 전송 → 대시보드 sessions 탭에 `oc` 배지로 표시 | send-event |
 | **collector 자동 기동** | collector가 안 떠 있으면 detached로 띄움 | obs-lazy-start |
-| **스킬** | 체크아웃의 `skills/<name>/` 을 `~/.config/opencode/skills/<name>` 에 링크 → opencode 의 `skill` 도구가 읽는다(`agentic-coding-git-workflow` · `svg-diagram` …). 에이전트가 필요할 때 `skill({ name })` 으로 본문을 가져온다 | 플러그인 `skills/` 자동 발견 |
+| **스킬** | 체크아웃의 `skills/<name>/` 을 `~/.config/opencode/skills/<name>` 에 링크 → opencode 의 `skill` 도구가 읽는다(`agentic-coding-git-workflow` · `svg-diagram` · `analysis-flow` …). 에이전트가 필요할 때 `skill({ name })` 으로 본문을 가져온다 | 플러그인 `skills/` 자동 발견 |
 
 **규칙은 복제되지 않았다.** 판정은 CC 훅이 쓰는 `core/*/decide.mjs`를 그대로
 호출한다 — 한쪽에서 규칙을 고치면 양쪽이 같이 바뀐다. 어댑터 파일은 I/O만 한다.

@@ -1,0 +1,95 @@
+{
+  "kind": "boxflow",
+  "id": "eqp-drift-box",
+  "title": "EQP01 센서 이탈 분석",
+  "caption": "EQP01 센서 이탈 분석 과정. 상자마다 출처 · 쿼리 첫 줄 · 얻은 것을 적었다. 번호는 아래 부록의 쿼리 · 명령 전문과 짝이다.",
+  "nodes": [
+    {
+      "id": "s1",
+      "col": 0,
+      "row": 0,
+      "title": "1. 센서 목록",
+      "rows": [
+        ["출처", "DB 표 fdc_sensor"],
+        ["쿼리", "SELECT sensor_id, sensor_name, unit FROM…", "code"],
+        ["결과", "센서 12개"]
+      ]
+    },
+    {
+      "id": "s2",
+      "col": 0,
+      "row": 1,
+      "title": "2. 센서 통계 조회",
+      "rows": [
+        ["출처", "DB 표 reading_stats"],
+        ["쿼리", "SELECT sensor_id, ts, mean_val, ucl, lcl", "code"],
+        ["결과", "시간별 통계 2,016행"]
+      ]
+    },
+    {
+      "id": "s3",
+      "col": 0,
+      "row": 2,
+      "title": "3. 수집 오류 확인",
+      "rows": [
+        ["출처", "서버 로그 /var/log/fdc/collector.log"],
+        ["명령", "rg -n 'EQP01.*(ERROR|timeout)' /var/log/…", "code"],
+        ["결과", "오류 0건"]
+      ]
+    },
+    {
+      "id": "s4",
+      "col": 0,
+      "row": 3,
+      "title": "4. 이탈 건수 · 평균 비교",
+      "rows": [
+        ["출처", "앞 단계 결과 2번 표 · 3번 로그"],
+        ["명령", "mean_val > ucl 또는 mean_val < lcl 인 행 수,", "code"],
+        ["결과", "이탈 9건 · 평균 +4.2%"]
+      ]
+    },
+    {
+      "id": "s5",
+      "col": 0,
+      "row": 4,
+      "kind": "gate",
+      "title": "5. 이탈 많은가",
+      "rows": [
+        ["출처", "사람 판단"],
+        ["명령", "이탈 > 5", "code"],
+        ["결과", "예"]
+      ]
+    },
+    {
+      "id": "s6",
+      "col": 1,
+      "row": 5,
+      "title": "6. 셋업 이벤트 조회",
+      "rows": [
+        ["출처", "DB 표 fdc_setup_event"],
+        ["쿼리", "SELECT event_id, ts, event_type, operato…", "code"],
+        ["결과", "셋업 변경 2건(10-23 PM 교체)"]
+      ]
+    },
+    {
+      "id": "s7",
+      "col": 0,
+      "row": 5,
+      "kind": "io",
+      "title": "7. 결과 정리",
+      "rows": [
+        ["출처", "앞 단계 결과 4번 · 6번"],
+        ["결과", "PM 교체 뒤 센서 3개 평균 이동"]
+      ]
+    }
+  ],
+  "edges": [
+    { "from": "s1", "to": "s2" },
+    { "from": "s2", "to": "s3" },
+    { "from": "s3", "to": "s4" },
+    { "from": "s4", "to": "s5" },
+    { "from": "s5", "to": "s6", "kind": "cond", "label": "이탈 > 5" },
+    { "from": "s5", "to": "s7", "kind": "cond", "label": "이탈 ≤ 5" },
+    { "from": "s6", "to": "s7" }
+  ]
+}

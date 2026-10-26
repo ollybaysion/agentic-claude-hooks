@@ -63,7 +63,7 @@ git clone git@github.com:ollybaysion/agentic-claude-hooks.git ~/work/claude-plug
   세션 안에서 고친 뒤에는 `/reload-plugins`. 이 길은 `git pull` 이 곧 갱신이다.
 
 확인: 새 세션을 열면 SessionStart 가 git 상태를 넣어 주고, `/claude-hooks:` 를 치면
-스킬 목록(agentic-coding-git-workflow · svg-diagram · setup · akg-pull · akg-push)이 뜬다.
+스킬 목록(agentic-coding-git-workflow · svg-diagram · analysis-flow · setup · akg-pull · akg-push)이 뜬다.
 
 ## 3. opencode 설치 (`opencode`)
 

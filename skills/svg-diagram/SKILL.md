@@ -42,6 +42,9 @@ description: "설명용 그림을 스펙(JSON)→생성기→SVG 로 만든다. 
 | 누가(레인) 하는지와 순서 | `swimlane` | lanes · steps · flows | [specs/lane.json](specs/lane.json) |
 | 그 밖 | 없음 | **생성기를 먼저 만든다**(철칙 3) | — |
 
+분석 과정 흐름은 [`analysis-flow`](../analysis-flow/SKILL.md) 가 모아 온다. 출처 ·
+쿼리 · 단계를 묻고 `swimlane` · `boxflow` 스펙을 쓴다.
+
 ## 절차
 
 1. 결정표에서 kind 를 고른다. 없으면 생성기를 먼저 만든다.
@@ -96,6 +99,9 @@ terminal(터미널, 다크 하나) · pastel(파스텔 노트) · doc(호스트 
   · `accent` 강조(LLM) · `ret` 응답(시퀀스, 점선) · `both` 양방향(격자 지도).
   띄어쓰기로 합친다: `"back cond"`.
 - 라벨은 선의 가장 긴 구간 가운데에 놓이고, 되돌아가는 선은 통로 쪽에 놓인다.
+- 고정폭 글: `swimlane` 단계의 `"code": true` 는 `sub` 를, `boxflow` 줄의 셋째 칸
+  `"code"`(`["쿼리", "SELECT …", "code"]`)는 값을 코드 글꼴(`--font-mono`)로 그린다.
+  쿼리 · 명령 줄에 쓴다.
 
 ## 새 생성기 만들기
 
