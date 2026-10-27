@@ -14,6 +14,7 @@ description: >-
 AKG 로 **올리는** 쪽이다. 짝은 [`akg-pull`](../akg-pull/SKILL.md)(가져오는 쪽)이다.
 처음 연결은 [`setup`](../setup/SKILL.md) 의 5절이 한다.
 md 에 그림을 넣으면 [`akg-mermaid`](../akg-mermaid/SKILL.md) 로 쓰고 확인한 뒤 올린다.
+에이전트 md 의 `## 데이터` 플로우 펜스는 [`fdc-flowchart`](../fdc-flowchart/SKILL.md) 로 쓰고 검사한 뒤 올린다.
 
 - AKG 레포: [ollybaysion/agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance),
   로컬 체크아웃 `~/work/fdc-agent/agent-knowledge-governance`.
