@@ -30,7 +30,7 @@ AKG 의 근거 파일(레포 [ollybaysion/agent-knowledge-governance](https://gi
   그래서 AKG 문서 안 그림은 이 스킬이, AKG 밖 문서의 그림은 svg-diagram 이 맡는다.
 - [`analysis-flow`](../analysis-flow/SKILL.md) 는 데이터 분석 과정(출처 · 쿼리 · 단계)을
   물어 모으고 svg-diagram 으로 그린다. 분석 과정 그림을 AKG 밖 문서에 넣을 때 쓴다.
-- [`fdc-flowchart`](../fdc-flowchart/SKILL.md) 는 FDC 에이전트 md 의 `## 데이터` 플로우 펜스를 쓴다.
+- [`fdc-agent-md`](../fdc-agent-md/SKILL.md) 는 FDC 에이전트 md 와 그 `## 데이터` 플로우 펜스를 쓴다.
   BE 가 그 펜스를 실행하므로 BE 문법이 먼저다. 이 스킬의 라벨 규칙(큰따옴표 · 크기 상한)과 부딪치는 곳은 그 스킬을 따른다.
 
 ## 1. 언제 쓰나
