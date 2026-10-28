@@ -45,10 +45,25 @@ akg-mermaid 의 일반 규칙과 BE 문법이 부딪치면 이 스킬은 BE 문�
 
 플로우 오류가 있는 md 는 BE 가 등록을 거부한다. 거부는 두 때에 일어난다.
 
-| 때 | 오류 | BE 가 하는 일 |
+| 때 | 오류 | BE · AKG 가 하는 일 |
 | --- | --- | --- |
 | md 를 읽을 때 | 펜스 하나로 아는 오류: 줄 꼴 · `SHAPE_CONFLICT` · `SUBGRAPH_*` 꼴 · 펜스 둘 | 그 md 를 등록하지 않는다. 사유는 오류마다 `N 번째 줄 코드 글` 이다. 번들 md 는 기동 때, AKG md 는 문서마다 "수용 불가 — 제외" 로 빠진다 |
 | 적재 때 | 등록된 md 를 같이 봐야 아는 뜻 검사 오류: 8절 표의 `UNKNOWN_ID` 부터 `MD_CYCLE` 까지 | 그 md 를 목록에서 뺀다. 뺀 md 를 가리키던 md 도 다시 검사해 오류면 뺀다. BE 는 warn 과 trace `조회 흐름 오류 (적재)` 한 줄을 남기고 남은 md 로 돈다 |
+| AKG 에 저장할 때 | 위 두 때의 오류 전부. 거기에 subgraph id · 조회 id · md 이름 겹침 | AKG 가 저장을 거부한다. 응답은 아래 표 |
+
+AKG 는 활성 문서를 저장할 때 BE 와 같은 검사를 돈다. 저장 길은 다섯이다:
+새 문서 올리기(POST) · 고치기(PUT) · facts PUT · 켜기(`activate`) · 검증 Set PUT.
+
+| 오류 | AKG 응답 |
+| --- | --- |
+| 본문 하나로 아는 거부: ASK 항목 · 펜스 없는 `:var` · 펜스 문법 오류 | 400 `validation_failed`. `details[]` 항목은 `$.body.markdown:` 으로 시작하고 그 뒤에 BE 의 거부 글이 그대로 온다. 검증 Set PUT 은 422 `invalid_verification_set` 이다 |
+| md 를 가로지르는 뜻 검사 오류(8절 표의 `UNKNOWN_ID` 부터 `MD_CYCLE` 까지) | 400 `flow_rejected`. `errors[]` 의 항목은 `code` · `line` · `message` 이고, `fenceLine` 이 펜스를 여는 md 줄이다. 뜻 검사 오류의 `line` 은 0 이다 |
+| 이 저장 때문에 다른 활성 md 의 플로우가 깨진다 | 저장은 끝나고 응답에 `flowWarnings[]`(`md` 이름과 그 md 의 `errors`)가 붙는다 |
+| subgraph id · 조회 id · md 이름이 다른 md 와 겹친다 | 409 `data_id_conflict`. `conflicts[]` 항목은 `id` · `doc`(겹친 md) · `kind`(`data` · `subgraph` · `md`) 이다 |
+
+- 비활성 초안의 본문 검사와 뜻 검사는 켤 때(`activate`) 돈다. id 겹침(409)은 초안을 저장할 때도 돈다.
+- AKG 편집기는 저장 전에 같은 검사를 미리 돌려 오류를 보여 준다. 저장 뒤 `flowWarnings` 는 알림으로 띄운다.
+- `akg-push` 로 올릴 때 이 응답이 오면 8절 표로 고치고 다시 올린다.
 
 그래서 올리기 전에 7절의 `scripts/check-flow` 를 꼭 돌린다. check-flow 는 두 때의 검사를 다 돈다.
 
@@ -212,7 +227,7 @@ unknown-bad.md:13 UNSOURCED_VAR param_list 의 :eqp_id 를 채울 입력이 없�
 | `OK 파일` | 그 파일에 오류가 없다 |
 | `파일:줄 코드 글` | 오류 하나. 코드는 8절 표의 이름이다 |
 | `파일:1 MD 글` | 펜스 밖 md 읽기 거부다. 흔히 `:var` 를 쓰는 SQL 항목이 있는데 펜스가 없다 |
-| `파일:줄 경고 SUBGRAPH_ID_CLASH 글` | 다른 md 에 같은 subgraph id 가 있다. BE 는 먼저 넘긴 md 의 것을 쓴다. 오류로 세지 않는다. AKG 는 저장 때 거부한다 |
+| `파일:줄 경고 SUBGRAPH_ID_CLASH 글` | 다른 md 에 같은 subgraph id 가 있다. BE 는 먼저 넘긴 md 의 것을 쓴다. check-flow 는 오류로 세지 않는다. AKG 는 저장 때 409 `data_id_conflict` 로 거부한다(2절) |
 
 - 줄은 md 파일의 줄이다. 펜스 하나로 아는 오류는 그 줄을 가리킨다.
   md 를 가로지르는 뜻 검사의 오류는 펜스를 여는 줄(```` ```mermaid ````)을 가리킨다.
