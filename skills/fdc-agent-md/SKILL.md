@@ -223,7 +223,7 @@ AKG 는 저장할 때 두 때의 오류를 다 본다(10절). 그래서 올리�
 
 | 노드 | 모양 | id 는 무엇 | id 표기 | 글 |
 | --- | --- | --- | --- | --- |
-| 입력 | `id([글])` | SQL 바인드 변수 이름(`:id` 의 `id`) | `[A-Za-z][A-Za-z0-9_]*`, `_` | 카드 물음이자 서랍 제목. 짧은 이름으로 쓴다 |
+| 입력 | `id([글])` | SQL 바인드 변수 이름(`:id` 의 `id`) | `[A-Za-z][A-Za-z0-9_]*`, `_` | `이름 · 힌트 · 힌트` 꼴. 첫 토막은 짧은 이름이다. 카드 제목이자 서랍 제목이다. 힌트 토막은 필요할 때 붙인다(아래) |
 | 조회 | `id[글]` | SQL 항목 `### id — 제목` 의 id. 다른 md 의 조회 id 도 된다 | `_` | 사람용 제목 |
 | 변환 | `id{{글}}` | 같은 md 의 map 항목 `### id — 제목` 의 id(7.1절) | `_` | 사람용 제목 |
 | 플로우 | `id[[글]]` | 등록된 md 이름 또는 subgraph id | md 이름은 `-`, subgraph id 는 `_` | 사람용 제목 |
@@ -234,6 +234,12 @@ AKG 는 저장할 때 두 때의 오류를 다 본다(10절). 그래서 올리�
 - 처음 적은 모양이 그 노드의 모양이다. **같은 id 는 한 모양으로 적는다.** 다른 모양으로 또 적으면 `SHAPE_CONFLICT` 다.
   한 번 모양을 적은 id 는 그 뒤에 id 만 써도 된다.
 - 어느 줄에도 모양을 적지 않은 id 는 조회로 본다.
+- 입력 노드 글에 힌트를 가운뎃점 ` · ` 으로 이어 쓴다: `param_name([센서명 · 파라미터명 · 예 V_PRESSURE_K_MAX])`(BE #195).
+  1. 첫 토막이 이름이다. 서랍 제목 · `FlowNode.title` · 카드 라벨에 이름만 보인다.
+  2. 나머지 토막은 `FlowNode.hint` 와 카드 description 으로 간다.
+  3. 키워드 추출 LLM 은 글 전부(토막 전부)를 키 설명으로 받는다.
+  4. 토막 앞뒤 공백은 뗀다. 빈 토막은 버린다.
+  5. 글 검사(반각 괄호 금지 등)는 글 전부에 건다. 힌트도 괄호 없이 쓴다.
 - 변환 노드는 map 항목을, 조회 노드는 SQL 항목을 가리킨다. 엇갈리면 `MAP_SHAPE` 다.
 - md 이름 규칙은 3절에 있다.
 - 다른 md 의 조회를 조회 노드로 쓰면 그 조회가 이 에이전트의 요청에 더해진다.
@@ -344,6 +350,8 @@ SQL 항목의 `:var` 마다 출처가 하나 있어야 한다. 출처는 그 조
   `UNSUPPORTED_EQP_FLOW` 다. 변환이 조회 열 `eqp_id` 를 왼쪽 이름 없이 그대로 넘겨도 같다.
   변환이 왼쪽 이름으로 놓은 `eqp_id`(`eqp_id = $eqp[0].eqp_id`)는 받는다. 그 값이 뒤 조회의 `:eqp_id` 다.
 - 설비 · 라인 · 기간은 공통 md `eqp-scope[[설비 범위]]` 를 caller 로 세워 받는다.
+- 라인 · 공정(area) · 설비는 질문 글에서 룰이 먼저 뽑는다. 룰은 라인 · 설비 목록과 글자로 맞춘다.
+  룰 값이 LLM 값을 덮는다. 입력 노드 글의 힌트는 LLM 추출이 쓴다(5절).
 
 목록에서 하나를 고르게 하려면:
 
@@ -1031,7 +1039,7 @@ flowchart TD
     param_list[파라미터 목록]
     eqp-scope --> param_list
   end
-  param_index([파라미터 번호])
+  param_index([파라미터 번호 · 숫자 · 예 12])
   interlock_history[인터락 이력]
   param_pick --> interlock_history
   param_index --> interlock_history
@@ -1051,6 +1059,7 @@ select act_time, interlock_id from INTERLOCK_HIST where eqp_id = :eqp_id and par
 ````
 
 - `param_list` 의 `:eqp_id` 는 `eqp-scope` 의 입력 `eqp_id` 가 채운다.
+- 입력 `param_index` 의 글은 힌트 꼴이다(5절). 화면에는 `파라미터 번호` 만 보인다. `숫자 · 예 12` 는 hint 다.
 - `interlock_history` 의 `:param_index` 는 입력 `param_index` 가 채운다.
   또는 `param_pick` 의 끝 조회 `param_list` 의 열이 채운다.
 - `:eqp_id` · `:start_time` · `:end_time` 은 `param_pick` 이 앞에 세운 `eqp-scope` 가 채운다.
