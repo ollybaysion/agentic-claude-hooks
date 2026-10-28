@@ -1,7 +1,7 @@
 ---
 name: analysis-flow
 argument-hint: "[업무 설명 | 지금까지 | 스펙.json] [--shape lane|flow] [--style KEY]"
-description: "데이터 분석 과정(출처 · 쿼리 · 단계)을 물어 모아 svg-diagram 으로 흐름도를 그린다. 분석 흐름 · 데이터 어디서 어떻게 얻었나 그려 달라면 발동."
+description: "데이터 분석 과정(출처 · 쿼리 · 단계)을 물어 모아 svg-diagram 으로 흐름도를 그린다. 원하면 단계 표와 그림을 AKG 에 문서 한 장으로 올린다. 분석 흐름 · 데이터 어디서 어떻게 얻었나 그려 달라면 발동."
 ---
 
 # analysis-flow
@@ -113,7 +113,90 @@ description: "데이터 분석 과정(출처 · 쿼리 · 단계)을 물어 모�
    - 미리보기를 열어 넘침 · 겹침 · 선이 상자를 지나는지 본다. 어긋나면 스펙의 칸
      배치나 글 길이를 고치고 다시 그린다.
    - 검사: `rg -n '<script|https?://|fill="#|style="' <주제>.flow.html` 이 0건이다.
-6. **보고한다.** 스펙 · 단계 표 · HTML · SVG 경로, 단계 수, 물어서 채운 칸.
+6. **AKG 에 올릴지 묻는다.** 아래 "AKG 에 올리기" 절대로 한다.
+7. **보고한다.** 스펙 · 단계 표 · HTML · SVG 경로, 단계 수, 물어서 채운 칸.
+   AKG 에 올렸으면 `<type>/<id>` 와 rev 도 적는다.
+
+## AKG 에 올리기
+
+단계 표와 그림을 AKG 문서 한 장으로 올린다. 올리기는 `akg push` 가 한다.
+서버 주소 · 토큰 준비는 [`akg-push`](../akg-push/SKILL.md) 1절이다.
+
+역할 경계: 이 절은 분석 기록 한 장을 새 문서로 올린다. 문서 수정 · 슬롯 제안 · 표 카탈로그는
+`akg-push` 가 맡고, 에이전트 md(`domain-skill`)는 [`fdc-agent-md`](../fdc-agent-md/SKILL.md) 가 맡는다.
+
+### 묻기
+
+한 번에 질문 하나, 선택지만 제시한다.
+
+1. 올릴지 묻는다. 선택지는 "올리지 않음"(기본) · "올림" 이다. "올리지 않음" 이면 절차 7로 간다.
+2. 타입을 묻는다. 선택지는 `unclassified`(기본) · "다른 타입 이름" 이다.
+   다른 타입은 사내에서 새로 둔 타입이다(예: `validation`). 이름을 받는다.
+3. 문서 id 를 정한다. 기본은 `<주제>` 다. id 꼴은 `^[a-z][a-z0-9-]*$` 다:
+   영문 소문자로 시작하고 소문자 · 숫자 · `-` 만 쓴다. `<주제>` 가 이 꼴이 아니면 id 를 묻는다.
+
+### 올릴 md
+
+산출물 폴더에 `<주제>.akg.md` 를 만든다. 본문은 단계 표 파일 전체다. 끝에 `## 그림` 절과
+SVG 원문 펜스를 붙인다. AKG 의 자산 올리기(`POST /api/assets`)는 admin 권한이다. 그래서 그림은
+본문 펜스로 싣는다. AKG 는 md 본문을 글자 그대로 저장한다.
+
+```bash
+{ cat <주제>.steps.md
+  printf '\n## 그림\n\n```svg\n'
+  cat <주제>.flow.svg
+  printf '\n```\n'
+} > <주제>.akg.md
+```
+
+### 명령
+
+`<type>` 은 "묻기" 2의 타입, `<id>` 는 3의 id 다.
+
+1. 같은 id 의 문서가 있는지 본다.
+
+   ```bash
+   curl -sS -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $AKG_TOKEN" \
+     "$AKG_SERVER/api/docs/<type>/<id>"
+   ```
+
+   - `404` 면 새 문서다. 2로 간다.
+   - `200` 이면 그 id 는 이미 있다. 선택지 "그 문서를 고침" · "다른 id" 를 묻는다.
+     `akg push` 는 `--create` 가 붙어도 있는 문서를 고친다. 그래서 이 확인을 먼저 한다.
+2. 파일 모양을 검사한다: `akg push <type>/<id> <주제>.akg.md --create --dry-run`.
+   출력은 `dry-run ok: <type>/<id> (md) — 쓰지 않았습니다` 다.
+3. 실제 명령을 사용자에게 보여 주고 동의를 받는다.
+4. 올린다. 예시 주제 `eqp-drift` 를 `unclassified` 로 올리는 명령이다.
+
+   ```bash
+   akg push unclassified/eqp-drift eqp-drift.akg.md --create --note "분석 기록: 설비 EQP01 센서 이탈"
+   ```
+
+5. 응답을 읽는다. 새 문서면 stdout 이 다음 두 줄이다.
+
+   ```text
+   pushed unclassified/eqp-drift (rev <rev>) — 새 문서
+   미러는 다음 akg sync 에서 갱신됩니다
+   ```
+
+   다른 타입이면 `unclassified/eqp-drift` 자리에 `<type>/<id>` 가 온다.
+   `.md` 로 만든 새 문서는 비활성(inactive)이다. 켜기는 admin 이 AKG 화면에서 한다.
+
+### 실패 때
+
+CLI 는 실패하면 stderr 에 이유를 적고 1 로 끝난다. 서버 거부는
+`akg push failed: push: 새 문서 실패: HTTP <코드> (<오류>)` 줄과 `akg push   - <세부>` 줄들이다.
+
+| stderr | 뜻 | 할 일 |
+| --- | --- | --- |
+| `akg: no token — …` · `akg: no server URL — …` | 토큰 · 서버 주소가 없다 | [`setup`](../setup/SKILL.md) 5절로 간다 |
+| `HTTP 401 (unauthorized)` | 토큰이 틀렸거나 만료됐다 | `akg-push` 1절 표의 받는 곳에서 토큰을 다시 받는다 |
+| `HTTP 400 (unknown_type)` | AKG 에 그 타입이 없다 | 타입을 다시 묻는다. 선택지에 `unclassified` 를 둔다 |
+| `HTTP 400 (validation_failed)` | 그 타입의 스키마가 md 본문(`{ name, markdown }`)을 받지 않는다 | `akg push   - …` 줄을 사용자에게 그대로 보여 준다. 선택지 "`unclassified` 로 올림" · "그만둠" 을 묻는다 |
+| `HTTP 409 (type_archived)` | 닫힌 타입이다 | 서버 글을 그대로 보여 준다. 타입을 다시 묻는다 |
+| `방금 생겼습니다 — sync 뒤 다시` | 그 사이에 같은 id 문서가 생겼다 | "명령" 1로 돌아간다 |
+
+그 밖의 오류는 `akg-push` 4절 표를 본다.
 
 ## 규칙
 
