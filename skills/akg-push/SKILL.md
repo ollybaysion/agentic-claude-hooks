@@ -19,7 +19,8 @@ FDC 에이전트 md(`domain-skill`)는 [`fdc-agent-md`](../fdc-agent-md/SKILL.md
 
 - AKG 레포: [ollybaysion/agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance),
   로컬 체크아웃 `~/work/fdc-agent/agent-knowledge-governance`.
-- CLI: `akg`(= `<체크아웃>/bin/akg.mjs`). `akg push` 는 AKG `feat/agent-write` PR 이 더한다.
+- CLI: `akg`(= `<체크아웃>/bin/akg.mjs`). 명령은 `sync` · `propose` · `catalog-push` · `push` 넷이다.
+  `akg` 를 인자 없이 부르면 쓰는 법이 나온다.
 
 ## 1. 준비 — 프로그램이 AKG 에 바로 붙는 법
 
