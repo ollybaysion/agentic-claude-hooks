@@ -17,9 +17,12 @@ FDC 에이전트 md 의 **플로우 펜스**를 쓰는 쪽이다. 플로우 펜�
 근거 파일(BE 레포 [ollybaysion/fdc-agent-be-spring](https://github.com/ollybaysion/fdc-agent-be-spring),
 로컬 체크아웃 `~/work/fdc-agent/fdc-agent-be`):
 
-- `docs/skill-md.md` 의 "조회 흐름" 절: 노드 · 간선 · 검사 · 공통 md.
+- `docs/skill-md.md` 의 "조회 흐름" 절: 노드 · 간선 · subgraph · 검사 · 검사 도구 · 공통 md.
 - `src/main/java/fdc/agent/knowledge/tools/flow/FlowGrammar.java`: 줄 정규식 전부.
-- `FlowCompiler.java`: 노드 종류 정하기. `FlowRules.java`: 뜻 검사. `FlowError.java`: 오류 코드.
+- `FlowCompiler.java`: 노드 종류 정하기 · subgraph 묶기. `FlowRules.java`: 뜻 검사. `FlowError.java`: 오류 코드.
+- `CheckFlow.java` · `scripts/check-flow`: 7절의 검사 도구.
+
+BE 의 코드 이름 · 메시지는 "흐름" 이라고 적는다. 이 스킬의 "플로우" 와 같은 것이다.
 
 ## 1. 언제 쓰나 · 다른 스킬과 나누기
 
@@ -39,8 +42,15 @@ akg-mermaid 의 일반 규칙과 BE 문법이 부딪치면 이 스킬은 BE 문�
 4. 펜스 첫 줄은 `flowchart TD` 다. 가로로 그리려면 `flowchart LR` 이다.
 
 `:var` 를 쓰는 SQL 항목이 있으면 펜스가 있어야 한다. 펜스가 없으면 BE 가 등록을 거부한다.
-펜스에 플로우 오류가 있으면 BE 가 그 md 의 등록을 거부한다.
-그래서 올리기 전에 7절의 `scripts/check-flow` 를 꼭 돌린다.
+
+플로우 오류가 있는 md 는 BE 가 등록을 거부한다. 거부는 두 때에 일어난다.
+
+| 때 | 오류 | BE 가 하는 일 |
+| --- | --- | --- |
+| md 를 읽을 때 | 펜스 하나로 아는 오류: 줄 꼴 · `SHAPE_CONFLICT` · `SUBGRAPH_*` 꼴 · 펜스 둘 | 그 md 를 등록하지 않는다. 사유는 오류마다 `N 번째 줄 코드 글` 이다. 번들 md 는 기동 때, AKG md 는 문서마다 "수용 불가 — 제외" 로 빠진다 |
+| 적재 때 | 등록된 md 를 같이 봐야 아는 뜻 검사 오류: 8절 표의 `UNKNOWN_ID` 부터 `MD_CYCLE` 까지 | 그 md 를 목록에서 뺀다. 뺀 md 를 가리키던 md 도 다시 검사해 오류면 뺀다. BE 는 warn 과 trace `조회 흐름 오류 (적재)` 한 줄을 남기고 남은 md 로 돈다 |
+
+그래서 올리기 전에 7절의 `scripts/check-flow` 를 꼭 돌린다. check-flow 는 두 때의 검사를 다 돈다.
 
 ## 3. 노드 셋 + subgraph
 
@@ -54,10 +64,13 @@ akg-mermaid 의 일반 규칙과 BE 문법이 부딪치면 이 스킬은 BE 문�
 | subgraph | `subgraph id [글]` … `end` | 이 펜스 안 플로우 하나의 이름 | `[a-z][a-z0-9_]*`, `_` | 사람용 제목. 꼭 적는다 |
 
 - 모양은 노드 줄에 적는다. 간선 줄의 끝에 같이 적어도 된다: `eqp-scope[[설비 범위]] --> param_list[파라미터 목록]`.
-- **같은 id 는 한 모양으로 적는다.** 한 번 모양을 적은 id 는 그 뒤에 id 만 써도 된다.
+  한 간선 줄에는 caller 끝 · callee 끝 둘 다 모양을 적을 수 있다.
+- 처음 적은 모양이 그 노드의 모양이다. **같은 id 는 한 모양으로 적는다.** 다른 모양으로 또 적으면 `SHAPE_CONFLICT` 다.
+  한 번 모양을 적은 id 는 그 뒤에 id 만 써도 된다.
 - 어느 줄에도 모양을 적지 않은 id 는 조회로 본다.
 - md 이름의 `-` 는 글자 사이에 하나씩 둔다. 첫 `-` 앞 낱말은 mermaid 낱말 밖에서 고른다
-  (`end` · `style` · `class` · `click` · `subgraph` · `direction` · `graph` · `flowchart` 는 머리에 쓸 수 없다).
+  (`end` · `style` · `class` · `classDef` · `click` · `linkStyle` · `subgraph` · `direction` · `graph` · `flowchart` 는
+  머리에 쓸 수 없다. 대소문자는 가리지 않는다).
 - 다른 md 의 조회를 조회 노드로 쓰면 그 조회가 이 에이전트의 요청에 더해진다.
 - 공통 입력(라인 · 설비 · 기간)은 공통 md `eqp-scope` 가 적는다. 에이전트 md 는
   `eqp-scope[[설비 범위]]` 를 caller 로 세운다.
@@ -99,14 +112,15 @@ subgraph:
 - `&` 는 쓰지 않는다. 화살표는 `-->` 와 `-.->` 둘이다.
 - 간선 끝에 모양을 같이 적을 수 있다. 그 id 의 다른 줄과 같은 모양으로 적는다.
 
-조건 라벨은 넷이다.
+조건 라벨은 넷이다. 라벨 글은 큰따옴표로 싼다: `a -->|"col in ('a', 'b')"| b`.
+mermaid 는 큰따옴표 안의 괄호를 글로 읽는다. BE 는 큰따옴표를 벗기고 안쪽을 조건으로 읽는다.
 
 | 라벨 | 맞는 행 |
 | --- | --- |
-| `\|col = 'v'\|` | `col` 값이 `v` 인 행 |
-| `\|col != 'v'\|` | `col` 값이 `v` 가 아닌 행. 빈 칸도 맞는다 |
-| `\|col in ('a', 'b')\|` | `col` 값이 목록에 있는 행 |
-| `\|else\|` | 그 caller 의 다른 조건에 맞지 않은 행. caller 마다 하나 |
+| `\|"col = 'v'"\|` | `col` 값이 `v` 인 행 |
+| `\|"col != 'v'"\|` | `col` 값이 `v` 가 아닌 행. 빈 칸도 맞는다 |
+| `\|"col in ('a', 'b')"\|` | `col` 값이 목록에 있는 행 |
+| `\|"else"\|` | 그 caller 의 다른 조건에 맞지 않은 행. caller 마다 하나 |
 
 - `col` 은 caller 조회의 select 열이다. 대소문자는 가리지 않는다.
 - 값은 작은따옴표로 싼다. 앞뒤 공백을 벗긴 글자 그대로 견준다.
@@ -116,10 +130,10 @@ akg-mermaid 와 부딪치는 곳(2026-10-28, BE 정규식과 check.mjs 로 확�
 
 | 쓴 것 | BE | AKG 그림 | 이 스킬의 꼴 |
 | --- | --- | --- | --- |
-| 라벨을 큰따옴표로 쌈 `a["글"]` | 큰따옴표가 글에 남는다. 입력 노드는 `NODE_SYNTAX` | 그려진다 | 큰따옴표 없이 `a[글]` |
-| 라벨 안 반각 괄호 `a([번호(숫자)])` | 입력 노드는 `NODE_SYNTAX`. 조회 · 플로우 노드는 받는다 | Parse error | 전각 괄호 `a([번호（숫자）])` 또는 괄호를 뺀 글 |
+| 노드 글을 큰따옴표로 쌈 `a["글"]` | 큰따옴표가 글에 남는다 | 그려진다 | 큰따옴표 없이 `a[글]` |
+| 노드 글 안 반각 괄호 `a([번호(숫자)])` | 입력 노드는 `NODE_SYNTAX`. 조회 · 플로우 노드는 받는다 | Parse error | 전각 괄호 `a([번호（숫자）])` 또는 괄호를 뺀 글 |
 | `id[[글]]` | 플로우 노드 | 그려진다(subroutine 모양). check.mjs 는 `[[ ]]` 주의를 낸다 | 그대로 쓴다. 이 주의는 플로우 노드 줄이면 넘긴다 |
-| 조건 `\|col in ('a', 'b')\|` | 받는다 | Parse error(라벨 안 괄호) | BE 꼴 그대로 쓴다. AKG 화면에는 그림 대신 오류가 보인다 |
+| 조건 라벨 `\|"col in ('a', 'b')"\|` | 큰따옴표를 벗겨 조건으로 읽는다 | 그려진다 | 조건 라벨은 늘 큰따옴표로 싼다 |
 | 노드 8 개 · 화살표 10 개 상한 | 상한 없음 | 넓으면 칸에 맞춰 준다 | SQL 항목이 정한 만큼 쓴다. 공통 부분은 subgraph 로 묶는다 |
 
 `·` 는 큰따옴표 없이 그대로 쓴다. BE 와 AKG 둘 다 받는다.
@@ -145,7 +159,8 @@ SQL 항목의 `:var` 마다 출처가 하나 있어야 한다. 출처는 그 조
 1. 목록 조회를 caller 로, 고른 값을 쓰는 조회를 callee 로 잇는다(조회 → 조회 간선).
 2. callee 의 `:var` 와 같은 이름의 열을 목록 조회의 select 에 둔다.
 3. BE 는 목록 표의 행 수로 정한다. 1 행이면 그 값으로 돈다. 2 행이면 행마다 돈다.
-   3 행 이상이면 행 고르기 카드를 낸다. 고른 행으로 다음 조회가 돈다.
+   3 행 이상이면 행 고르기 카드를 낸다. 고른 행이 목록 조회의 결과가 된다.
+   그 행으로 callee 조회가 돈다. 목록 조회는 다시 돌지 않는다.
 4. 사람이 값을 바로 적을 수도 있게 하려면 같은 이름의 입력 노드도 callee 로 잇는다.
 
 선택 입력: `-.->` 로 이은 입력이 비면 그 조회는 건너뛴다. SQL 은 평범한 `col = :x` 로 쓴다.
@@ -158,30 +173,60 @@ SQL 항목의 `:var` 마다 출처가 하나 있어야 한다. 출처는 그 조
 4. 펜스 첫 줄 `flowchart TD` 를 쓴다.
 5. 노드마다 모양과 글을 적는다. 노드 줄에 적거나 간선 줄 끝에 같이 적는다.
 6. 간선 줄을 쓴다. 같은 id 는 줄마다 같은 모양으로 적는다.
-7. 조건이 있는 조회 → 조회 · 조회 → 플로우 간선에 조건 라벨을 단다.
+7. 조건이 있는 조회 → 조회 · 조회 → 플로우 간선에 조건 라벨을 단다. 라벨 글은 큰따옴표로 싼다.
 8. 여러 조회가 같이 쓰는 앞부분은 subgraph 로 묶는다. 다른 md 도 쓰면 subgraph 를 그 md 에서 `[[ ]]` 로 가리킨다.
-9. 7절의 검사 둘을 돌린다. check-flow 오류가 있는 md 는 BE 가 등록을 거부한다.
+9. 7절의 검사 둘을 돌린다. check-flow 오류가 있는 md 는 BE 가 등록을 거부한다(2절).
 10. 오류가 없으면 [`akg-push`](../akg-push/SKILL.md) 로 올린다.
 
 ## 7. 검사
 
 ### BE 규칙: scripts/check-flow
 
-BE 체크아웃의 `scripts/check-flow` 가 펜스를 검사한다.
-검사 규칙은 BE 와 같은 `FlowGrammar` · `FlowCompiler` · `FlowRules` 다.
-BE 체크아웃 경로는 `FDC_BE` 로 준다. 기본은 `~/work/fdc-agent/fdc-agent-be` 다.
+BE 체크아웃의 `scripts/check-flow` 가 md 를 BE 가 등록할 때와 같은 검사에 넣는다.
+md 읽기(`SkillMarkdownTool`) · `FlowGrammar` · `FlowCompiler` · `FlowRules` · 적재 때의 거부 차례를 그대로 돈다.
+스크립트는 자기가 든 BE 체크아웃의 `gradlew` 로 gradle task `checkFlow` 를 돌린다. 첫 실행은 BE 를 빌드한다.
 
 ```bash
-FDC_BE="${FDC_BE:-$HOME/work/fdc-agent/fdc-agent-be}"
+FDC_BE="${FDC_BE:-$HOME/work/fdc-agent/fdc-agent-be}"   # BE 체크아웃
 JAVA_HOME=~/tools/jdk-21.0.11+10 "$FDC_BE/scripts/check-flow" 에이전트.md [같이 쓰는 md …]
 ```
 
-- 파일 이름(확장자 뺌)이 md 이름이다. 플로우 노드가 가리키는 md(`eqp-scope.md` 등)를 같이 넘긴다.
-- 출력은 오류마다 한 줄이다: `파일:줄 코드 글`. 줄은 md 파일의 줄이다. 뜻 검사의 오류는 줄이 0 이다.
-- 오류가 없는 파일은 `OK` 줄 하나다.
-- 끝 코드 0 은 모두 OK, 1 은 오류 있음, 2 는 준비 문제(파일 · JDK)다.
+- 인자는 md 파일 경로다. 하나 이상 넘긴다. `FDC_BE` 는 스크립트를 찾는 데에만 쓴다.
+- 파일 이름(확장자 뺌)이 md 이름이다. 넘긴 md 들의 조회 id · subgraph id 가 검사의 사실이다.
+- 공통 md `eqp-scope` 는 늘 들어 있다. 다른 md 나 다른 md 의 subgraph 를 가리키면 그 md 파일을 같이 넘긴다.
+  넘기지 않으면 `UNKNOWN_ID` 가 나온다.
+- 출력 줄의 파일 이름은 지금 폴더 기준 경로다.
 
-scripts/check-flow 는 BE subgraph PR 이 main 에 머지된 뒤 BE main 에 있다.
+출력 예(`interlock-pick.md` 는 9절 좋은 표본 하나다):
+
+```text
+$ scripts/check-flow interlock-pick.md shape-bad.md unknown-bad.md
+OK interlock-pick.md
+shape-bad.md:21 SHAPE_CONFLICT 노드 param_index 의 모양이 둘이다 — 7 번째 줄은 입력 id([글]), 이 줄은 조회 id[글]
+unknown-bad.md:13 UNKNOWN_ID 노드 eqp-scope: 조회가 아니다 — md 를 흐름 노드로 쓰려면 `eqp-scope[[글]]` 로 적는다
+unknown-bad.md:13 UNSOURCED_VAR param_list 의 :eqp_id 를 채울 입력이 없다
+```
+
+| 줄 | 뜻 |
+| --- | --- |
+| `OK 파일` | 그 파일에 오류가 없다 |
+| `파일:줄 코드 글` | 오류 하나. 코드는 8절 표의 이름이다 |
+| `파일:1 MD 글` | 펜스 밖 md 읽기 거부다. 흔히 `:var` 를 쓰는 SQL 항목이 있는데 펜스가 없다 |
+| `파일:줄 경고 SUBGRAPH_ID_CLASH 글` | 다른 md 에 같은 subgraph id 가 있다. BE 는 먼저 넘긴 md 의 것을 쓴다. 오류로 세지 않는다. AKG 는 저장 때 거부한다 |
+
+- 줄은 md 파일의 줄이다. 펜스 하나로 아는 오류는 그 줄을 가리킨다.
+  md 를 가로지르는 뜻 검사의 오류는 펜스를 여는 줄(```` ```mermaid ````)을 가리킨다.
+- 글 안의 `N 번째 줄` 은 펜스 안 줄 번호다. 펜스 첫 줄 `flowchart TD` 가 1 이다.
+- 경고가 있으면 BE 로그 한 줄(`WARN … QueryFlowTool -- …`)도 같이 나온다.
+- 한 파일에 펜스 문법 오류가 있으면 그 파일의 뜻 검사는 돌지 않는다. 문법 오류를 고친 뒤 다시 돌린다.
+
+끝 코드:
+
+| 코드 | 뜻 |
+| --- | --- |
+| 0 | 오류가 없다. 경고 줄은 있을 수 있다 |
+| 1 | 오류가 하나 이상 있다. 출력 줄 없이 1 이면 넘긴 파일 경로가 틀렸다. `ERROR: JAVA_HOME …` 과 1 이면 `JAVA_HOME` 을 JDK 21 로 준다 |
+| 2 | 인자가 없다(`쓰는 법:` 줄) |
 
 ### AKG 그림: check.mjs
 
@@ -206,9 +251,9 @@ check-flow 가 내는 코드다. 이름은 BE `FlowError.Code` 그대로다.
 | `AMPERSAND` | `a & b --> c` | 간선을 줄마다 하나씩 쓴다 |
 | `CHAIN` | `a --> b --> c` | `a --> b` · `b --> c` 두 줄로 나눈다 |
 | `ARROW` | `---` · `==>` · `--o` 같은 화살표 | `-->` 또는 `-.->` 로 쓴다 |
-| `EDGE_SYNTAX` | 간선 줄 꼴이 틀렸다 | `a --> b` · `a -->\|조건\| b` · `a -.-> b` 로 쓴다. 끝에 모양을 붙여도 된다 |
-| `NODE_SYNTAX` | 노드 줄 꼴이 틀렸다. 흔히 입력 노드 글에 괄호 · 큰따옴표가 있다 | `id([글])` · `id[글]` · `id[[글]]` 로 쓴다. 괄호는 전각으로 |
-| `CONDITION_SYNTAX` | 조건 라벨이 네 꼴 밖이다 | `col = 'v'` · `col != 'v'` · `col in ('a', 'b')` · `else` |
+| `EDGE_SYNTAX` | 간선 줄 꼴이 틀렸다 | `a --> b` · `a -->\|"조건"\| b` · `a -.-> b` 로 쓴다. 끝마다 모양을 붙여도 된다 |
+| `NODE_SYNTAX` | 노드 꼴이 틀렸다(노드 줄 · 간선 줄 끝). 흔히 입력 노드 글에 반각 괄호가 있다 | `id([글])` · `id[글]` · `id[[글]]` 로 쓴다. 괄호는 전각으로 |
+| `CONDITION_SYNTAX` | 조건 라벨이 네 꼴 밖이다 | `"col = 'v'"` · `"col != 'v'"` · `"col in ('a', 'b')"` · `"else"` |
 | `INPUT_ID` | 입력 id 가 바인드 이름 꼴이 아니다(`-` 가 들었다) | `_` 로 쓴다: `param_index` |
 | `SHAPE_CONFLICT` | 같은 id 를 다른 모양으로 두 번 적었다(노드 줄 · 간선 줄 어디서든) | 모양 하나로 맞춘다 |
 | `UNKNOWN_ID` | 조회 노드가 SQL 항목도 등록된 조회도 아니다. 또는 플로우 노드가 등록된 md 도 subgraph 도 아니다. md 이름을 `[[ ]]` 없이 쓴 경우도 이것이다 | id 를 `### id` 와 맞춘다. md 는 `md이름[[글]]` 로 쓴다 |
@@ -322,6 +367,36 @@ select act_time, interlock_id from INTERLOCK_HIST where eqp_id = :eqp_id and par
 ````
 
 md 이름은 `-`(`param-pick`), subgraph id 는 `_`(`param_pick`)다. 표기로 둘이 갈린다.
+
+### 좋은 표본 셋: 간선 줄 모양 · 조건 라벨
+
+간선 줄 끝에 모양을 같이 적는다. 홀드 상세는 인터락 종류가 `HOLD` · `STOP` 인 행으로만 돈다.
+
+````markdown
+## 데이터
+
+```mermaid
+flowchart TD
+  eqp-scope[[설비 범위]] --> interlock_list[인터락 목록]
+  interlock_list -->|"interlock_type in ('HOLD', 'STOP')"| hold_detail[홀드 상세]
+  eqp-scope --> hold_detail
+```
+
+### interlock_list — 인터락 목록
+
+```sql
+select interlock_id, interlock_type, act_time from INTERLOCK_HIST where eqp_id = :eqp_id and act_time between :start_time and :end_time
+```
+
+### hold_detail — 홀드 상세
+
+```sql
+select interlock_id, hold_reason from HOLD_DETAIL where eqp_id = :eqp_id and interlock_id = :interlock_id
+```
+````
+
+- `hold_detail` 의 `:interlock_id` 는 caller `interlock_list` 의 열이 채운다. `:eqp_id` 는 `eqp-scope` 가 채운다.
+- 조건 열 `interlock_type` 은 `interlock_list` 의 select 에 있다.
 
 ### 흔한 실수와 고친 꼴
 
