@@ -52,6 +52,7 @@ BE 의 코드 이름 · 메시지는 "흐름" 이라고 적는다. 이 스킬의
 | 에이전트 md 를 쓰고 · 옮기고 · 검사하고 · AKG 에 등록한다 | 이 스킬 |
 | AKG md 의 설명 그림(실행하지 않는 그림)을 쓴다 | [`akg-mermaid`](../akg-mermaid/SKILL.md) |
 | 조회 항목에 그래프(`chart` 펜스)를 붙인다 | [`fdc-chart`](../fdc-chart/SKILL.md) |
+| 질문을 보내 틀린 답의 기록을 읽고 어긋난 조회 · 인자를 짚는다 | [`fdc-answer-debug`](../fdc-answer-debug/SKILL.md) |
 | AKG 에 붙는 토큰 · `akg` CLI 전반(슬롯 제안 · 표 카탈로그 포함) | [`akg-push`](../akg-push/SKILL.md) |
 
 akg-mermaid 의 일반 규칙과 BE 문법이 부딪치면 이 스킬은 BE 문법을 따른다. 부딪치는 곳은 6절 끝에 있다.
