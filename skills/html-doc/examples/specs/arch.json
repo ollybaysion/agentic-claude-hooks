@@ -1,0 +1,111 @@
+{
+  "kind": "gridmap",
+  "id": "fig-arch",
+  "caption": "아키텍처. 위 틀은 사내 서버, 아래는 각자의 로컬, 틀을 넘는 선은 HTTPS. 번호는 흐름 셋.",
+  "boxes": [
+    {
+      "id": "store",
+      "col": 0,
+      "row": 0,
+      "title": "store/",
+      "lines": [
+        "git 레포",
+        "서버만 쓴다"
+      ]
+    },
+    {
+      "id": "api",
+      "col": 1,
+      "row": 0,
+      "title": "REST API",
+      "lines": [
+        "+ 대시보드"
+      ]
+    },
+    {
+      "id": "users",
+      "col": 2,
+      "row": 0,
+      "title": "users.json",
+      "lines": [
+        "토큰 해시",
+        "git 밖 유일한 상태"
+      ]
+    },
+    {
+      "id": "cli",
+      "col": 0,
+      "row": 1,
+      "title": "akg CLI",
+      "lines": [
+        "sync · propose",
+        "catalog-push"
+      ]
+    },
+    {
+      "id": "mirror",
+      "col": 1,
+      "row": 1,
+      "title": "미러",
+      "lines": [
+        "~/.claude/akg/"
+      ]
+    },
+    {
+      "id": "prov",
+      "col": 2,
+      "row": 1,
+      "kind": "lead",
+      "title": "keyword-docs",
+      "lines": [
+        "프로바이더"
+      ]
+    }
+  ],
+  "frames": [
+    {
+      "cols": [
+        0,
+        2
+      ],
+      "rows": [
+        0,
+        0
+      ],
+      "title": "사내 서버"
+    }
+  ],
+  "edges": [
+    {
+      "from": "api",
+      "to": "store",
+      "label": "3 승격"
+    },
+    {
+      "from": "cli",
+      "to": "api",
+      "kind": "both",
+      "out": "n",
+      "in": "s",
+      "label": "2 쓰기"
+    },
+    {
+      "from": "cli",
+      "to": "mirror",
+      "label": "sync"
+    },
+    {
+      "from": "mirror",
+      "to": "prov",
+      "label": "1 읽기 · A"
+    },
+    {
+      "from": "prov",
+      "to": "api",
+      "kind": "accent",
+      "out": "n",
+      "in": "s",
+      "label": "B 모드"
+    }
+  ]
+}

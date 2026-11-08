@@ -60,7 +60,7 @@ description: "설명용 그림을 스펙(JSON)→생성기→SVG 로 만든다. 
    ```
 
 5. 붙인다. 셋 중 하나:
-   - **토큰을 쓰는 HTML 문서 안**: 스타일 `doc`(문서의 `--ink · --line · --accent ·
+   - **토큰을 쓰는 HTML 문서 안**(예: [`html-doc`](../html-doc/SKILL.md) — `--css` 에 `--solid` 를 더해 점선 0): 스타일 `doc`(문서의 `--ink · --line · --accent ·
      --sans …` 토큰을 따라 라이트 · 다크가 같이 바뀐다) 또는 원하는 스타일. 페이지
      `<style>` 끝에 `--css` 출력을 **한 번** 넣고, SVG 조각을 `<figure>` 안에 넣는다.
 

@@ -1,0 +1,67 @@
+{
+  "kind": "gridmap",
+  "id": "fig-state",
+  "caption": "슬롯 값의 상태 넷. confirmed 로 가는 길은 승격 하나다.",
+  "boxes": [
+    {
+      "id": "scaffold",
+      "col": 0,
+      "row": 0,
+      "title": "scaffold",
+      "lines": [
+        "빈 자리"
+      ]
+    },
+    {
+      "id": "inferred",
+      "col": 1,
+      "row": 0,
+      "title": "inferred",
+      "lines": [
+        "추정"
+      ]
+    },
+    {
+      "id": "confirmed",
+      "col": 2,
+      "row": 0,
+      "kind": "lead",
+      "title": "confirmed",
+      "lines": [
+        "확인됨"
+      ]
+    },
+    {
+      "id": "deprecated",
+      "col": 2,
+      "row": 1,
+      "title": "deprecated",
+      "lines": [
+        "신뢰를 거둠"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "scaffold",
+      "to": "inferred"
+    },
+    {
+      "from": "inferred",
+      "to": "confirmed",
+      "kind": "accent",
+      "label": "승격 promote"
+    },
+    {
+      "from": "confirmed",
+      "to": "deprecated",
+      "label": "거둠"
+    },
+    {
+      "from": "deprecated",
+      "to": "inferred",
+      "kind": "back",
+      "label": "되살리면"
+    }
+  ]
+}
