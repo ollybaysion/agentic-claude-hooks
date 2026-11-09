@@ -672,9 +672,20 @@ function styleBlock(s) {
   return `/* svg-diagram 스타일: ${s.key} — ${s.name} */\n${out}\n${s.rules.replace(/\.d /g, `.d${sel} `)}\n`;
 }
 
-// 페이지 <style> 에 한 번 넣는 CSS. keys: 그 페이지가 쓰는 스타일 key 들.
-export const cssFor = (keys) =>
-  DIAGRAM_CSS + keys.map((k) => styleBlock(byKey(k))).join("\n");
+// 실선만(solid): 점선 선언을 걷고, 점선이 맡던 구분(바깥 상자 · 프레임 · 조건 · 응답 · 생명선)은 옅은 색이 맡는다.
+// 점선을 쓰지 않는 문서(html-doc v3)가 --solid 로 부른다.
+const SOLID_CSS = `/* svg-diagram --solid: 점선 대신 옅은 색 */
+.d .ext, .d .frame { stroke: var(--muted); }
+.d .edge.cond, .d .edge.ret { stroke: var(--muted); }
+.d .life { stroke: var(--line); }
+`;
+const undash = (css) => css.replace(/\s*stroke-dasharray:[^;}]*;?/g, "");
+
+// 페이지 <style> 에 한 번 넣는 CSS. keys: 그 페이지가 쓰는 스타일 key 들. solid: 점선 0.
+export const cssFor = (keys, { solid = false } = {}) => {
+  const css = DIAGRAM_CSS + keys.map((k) => styleBlock(byKey(k))).join("\n");
+  return solid ? undash(css) + SOLID_CSS : css;
+};
 
 // 미리보기(--html)에서 doc 스타일이 참조하는 문서 토큰의 기본값(편집 지면 팔레트). 실제 문서에서는 그 문서의 값이 쓰인다
 export const DOC_FALLBACK_CSS = `:root { --bg: #EEF0F1; --surface: #F9FAFA; --sunken: #E5E9EA; --ink: #14181B; --ink-2: #47535B; --ink-3: #6E7C85; --line: #D2D8DB; --line-soft: #E2E6E8; --accent: #A8451A; --accent-bg: rgba(168, 69, 26, 0.09); --blue: #3F6180; --blue-bg: rgba(63, 97, 128, 0.10); --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }

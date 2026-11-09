@@ -1,0 +1,60 @@
+{
+  "kind": "gridmap",
+  "id": "fig-tree",
+  "caption": "지식 하나. 문서 아래에 팩트와 슬롯, 등급(tier)은 슬롯에만.",
+  "boxes": [
+    {
+      "id": "doc",
+      "col": 1,
+      "row": 0,
+      "kind": "lead",
+      "title": "문서",
+      "lines": [
+        "관리 단위"
+      ]
+    },
+    {
+      "id": "fact",
+      "col": 0,
+      "row": 1,
+      "title": "팩트",
+      "lines": [
+        "기계 지식",
+        "등급 없음"
+      ]
+    },
+    {
+      "id": "slot",
+      "col": 2,
+      "row": 1,
+      "title": "슬롯",
+      "lines": [
+        "사람 지식의 자리"
+      ]
+    },
+    {
+      "id": "tier",
+      "col": 2,
+      "row": 2,
+      "kind": "gate",
+      "title": "tier",
+      "lines": [
+        "등급 · 슬롯에만"
+      ]
+    }
+  ],
+  "edges": [
+    {
+      "from": "doc",
+      "to": "fact"
+    },
+    {
+      "from": "doc",
+      "to": "slot"
+    },
+    {
+      "from": "slot",
+      "to": "tier"
+    }
+  ]
+}

@@ -4,7 +4,7 @@
 //   node gen.mjs <스펙.json> [--style KEY] [--id 접두] [--out 파일.svg]   SVG 조각(기본: stdout). 페이지에 붙여 넣는다
 //   node gen.mjs <스펙.json> --style KEY --html 파일.html                미리보기 페이지(자기완결). 열어서 넘침 · 겹침을 본다
 //   node gen.mjs <스펙.json> --style KEY --svg 파일.svg                  독립 .svg(스타일 CSS 내장). README · 이미지용
-//   node gen.mjs --css --style KEY[,KEY…]                                 페이지 <style> 에 한 번 넣는 CSS
+//   node gen.mjs --css --style KEY[,KEY…] [--solid]                       페이지 <style> 에 한 번 넣는 CSS(--solid: 점선 0)
 //   node gen.mjs --list                                                   생성기 · 스타일 목록
 import { readFileSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
@@ -55,7 +55,7 @@ if (has("css")) {
   keys.forEach((k) => {
     if (!byKey(k)) die(`스타일 "${k}" 이 없다.\n` + styleList());
   });
-  process.stdout.write(cssFor(keys));
+  process.stdout.write(cssFor(keys, { solid: has("solid") }));
   process.exit(0);
 }
 
@@ -103,7 +103,7 @@ if (has("html")) {
 <style>
 ${st.inherit ? DOC_FALLBACK_CSS + "\n" : ""}body { margin: 0; padding: 24px; background: var(--bg); color: var(--fg); font-family: var(--font-diagram); }
 figure { margin: 0; max-width: 1240px; } figcaption { margin-top: 10px; font-size: 14px; color: var(--muted); }
-${cssFor([st.key])}</style>
+${cssFor([st.key], { solid: has("solid") })}</style>
 </head>
 <body class="s-${st.key}">
 <figure>

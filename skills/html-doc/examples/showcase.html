@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>에이전트가 읽는 지식</title>
+<style>
+/* html-doc v3 — 블로그 글 꼴. 토큰 · 글자 크기 · 부품은 design.md 표와 짝이다. */
+:root {
+  --bg: #ffffff; --surface: #ffffff; --sunken: #f1f6f5; --warm: #fdf6e6;
+  --ink: #17202a; --ink-2: #4b5560; --ink-3: #66717b;
+  --line: #e3e8ea; --line-soft: #eef2f3;
+  --accent: #0f766e; --accent-bg: #d7efeb; --on-accent: #ffffff;
+  --blue: #2f6690; --blue-bg: #e3eef6;
+  --coral: #c4553e; --on-coral: #ffffff;
+  --code-bg: #142028; --code-ink: #dce8ea; --code-k: #7fd8c9; --code-s: #f7c873; --code-c: #8a9ea4;
+  --sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Malgun Gothic", sans-serif;
+  --serif: "Noto Serif CJK KR", "AppleMyungjo", "Nanum Myeongjo", "Batang", serif;
+  --mono: ui-monospace, "D2Coding", "Noto Sans Mono CJK KR", SFMono-Regular, Menlo, Consolas, monospace;
+  --measure: 680px; --wide: 920px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #11161a; --surface: #11161a; --sunken: #172126; --warm: #221f17;
+    --ink: #eef3f3; --ink-2: #b9c3c7; --ink-3: #8a979c;
+    --line: #263238; --line-soft: #1c262b;
+    --accent: #5cc9b8; --accent-bg: #173a36; --on-accent: #0c1d1b;
+    --blue: #8db8d8; --blue-bg: #172a36;
+    --coral: #e57a62; --on-coral: #1a0f0c;
+    --code-bg: #0b1014; --code-ink: #dce8ea; --code-k: #7fd8c9; --code-s: #f7c873; --code-c: #7e9298;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #11161a; --surface: #11161a; --sunken: #172126; --warm: #221f17;
+  --ink: #eef3f3; --ink-2: #b9c3c7; --ink-3: #8a979c;
+  --line: #263238; --line-soft: #1c262b;
+  --accent: #5cc9b8; --accent-bg: #173a36; --on-accent: #0c1d1b;
+  --blue: #8db8d8; --blue-bg: #172a36;
+  --coral: #e57a62; --on-coral: #1a0f0c;
+  --code-bg: #0b1014; --code-ink: #dce8ea; --code-k: #7fd8c9; --code-s: #f7c873; --code-c: #7e9298;
+  color-scheme: dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
+
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink-2); font-family: var(--sans); font-size: 17px; line-height: 1.8; word-break: keep-all; overflow-wrap: break-word; }
+a { color: var(--accent); text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+b, strong { color: var(--ink); font-weight: 700; }
+code, pre { font-family: var(--mono); font-variant-ligatures: none; }
+:not(pre) > code { font-size: .85em; color: var(--ink); background: var(--sunken); border-radius: 4px; padding: 1px 5px; }
+.wrap { max-width: calc(var(--wide) + 32px); margin: 0 auto; padding: 0 16px; }
+
+/* 머리: 좌표 줄 → 제목 → 부제 → 메타 */
+.head { padding-top: 64px; }
+.coord { display: flex; align-items: center; gap: 14px; font-size: 12px; line-height: 1.6; letter-spacing: .06em; font-weight: 700; color: var(--ink-3); }
+.coord a { color: inherit; text-decoration: none; }
+.coord a:hover { color: var(--ink); }
+.coord [aria-current] { color: var(--ink); }
+.coord .rule { flex: 1 1 40px; min-width: 24px; height: 1px; background: var(--line); }
+.coord .rel { display: flex; flex-wrap: wrap; gap: 4px 14px; letter-spacing: 0; font-weight: 400; }
+.coord .rel a { color: var(--accent); }
+.coord .rel small { font-size: 11px; color: var(--ink-3); }
+h1 { font-family: var(--serif); font-weight: 600; font-size: 72px; line-height: 1.18; letter-spacing: -.025em; color: var(--ink); margin: 30px 0 18px; text-wrap: balance; }
+.sub { font-size: 19px; color: var(--ink-2); margin: 0 0 16px; }
+.meta { margin: 0; font-size: 12px; letter-spacing: .06em; font-weight: 700; color: var(--ink-3); }
+.meta span + span::before { content: "·"; margin: 0 8px; }
+
+/* 차례: 1100 px 이상은 왼쪽 고정, 아래는 머리 밑 접이 */
+.toc-k { font-size: 12px; letter-spacing: .06em; font-weight: 700; color: var(--ink-3); margin: 0 0 10px 8px; }
+.toc-list { list-style: none; margin: 0; padding: 0; }
+.toc-list li { margin: 0 0 2px; }
+.toc-list a { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 10px; align-items: start; padding: 7px 8px; border-radius: 10px; text-decoration: none; font-size: 14px; line-height: 1.45; color: var(--ink-2); }
+.toc-list .no { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 11px; background: var(--accent-bg); color: var(--accent); font-weight: 700; font-size: 12px; line-height: 1; }
+.toc-list a:hover { background: var(--sunken); color: var(--ink); }
+.toc-next { margin: 10px 0 0; padding: 10px 0 0; border-top: 1px solid var(--line); }
+.toc-next a { display: flex; justify-content: space-between; gap: 8px; padding: 4px 8px; border-radius: 8px; font-size: 12px; line-height: 1.5; color: var(--ink-3); text-decoration: none; }
+.toc-next a:hover { background: var(--sunken); color: var(--ink); }
+body:has(#s1:target) .toc-list a[href="#s1"], body:has(#s2:target) .toc-list a[href="#s2"],
+body:has(#s3:target) .toc-list a[href="#s3"], body:has(#s4:target) .toc-list a[href="#s4"],
+body:has(#s5:target) .toc-list a[href="#s5"], body:has(#s6:target) .toc-list a[href="#s6"],
+body:has(#s7:target) .toc-list a[href="#s7"], body:has(#s8:target) .toc-list a[href="#s8"],
+body:has(#s9:target) .toc-list a[href="#s9"], body:has(#next:target) .toc-next a { background: var(--accent-bg); color: var(--ink); font-weight: 700; }
+.toc { display: none; }
+.toc-m { margin: 28px 0 0; background: var(--sunken); border-radius: 16px; padding: 4px 12px; }
+.toc-m summary { cursor: pointer; padding: 10px 8px; font-size: 12px; letter-spacing: .06em; font-weight: 700; color: var(--ink-3); }
+.toc-m[open] summary { color: var(--ink); }
+.toc-m .toc-list { padding: 0 0 6px; }
+.toc-m .toc-next { margin-bottom: 10px; }
+
+/* 본문 기둥: 절의 자식은 글 폭(measure), .wide 는 넓은 폭 */
+main { padding: 0 16px 140px; }
+section, nav[id] { scroll-margin-top: 24px; }
+h2 { font-family: var(--serif); font-weight: 600; font-size: 32px; line-height: 1.35; color: var(--ink); margin: 80px 0 22px; text-wrap: balance; }
+h3 { font-size: 19px; line-height: 1.5; color: var(--ink); margin: 40px 0 12px; }
+p { margin: 0 0 22px; }
+.lead { font-size: 19px; line-height: 1.75; color: var(--ink); font-weight: 500; }
+ul, ol { margin: 0 0 22px; padding-left: 22px; }
+li { margin-bottom: 10px; }
+
+/* 그림 카드: 패널 + 번호 배지 설명 */
+figure { margin-block: 40px 44px; }
+.panel { background: var(--sunken); border-radius: 16px; padding: 20px; overflow-x: auto; }
+.panel svg { display: block; margin: 0 auto; }
+figcaption { display: flex; align-items: baseline; gap: 10px; font-size: 13px; line-height: 1.6; color: var(--ink-3); margin-top: 12px; }
+figcaption .no { flex: 0 0 auto; display: inline-grid; place-items: center; min-width: 26px; height: 26px; border-radius: 13px; background: var(--accent); color: var(--on-accent); font-weight: 700; font-size: 12px; padding: 0 8px; }
+
+/* 표: .table-scroll 이 가로 넘침을 맡는다 */
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 16px; }
+table { width: 100%; border-collapse: collapse; font-size: 15px; line-height: 1.6; }
+th { background: var(--sunken); text-align: left; font-size: 12px; letter-spacing: .06em; color: var(--ink-3); padding: 12px 20px; }
+td { padding: 14px 20px; border-top: 1px solid var(--line); vertical-align: top; }
+td.id { font-family: var(--mono); color: var(--ink); }
+.pill { display: inline-block; min-width: 44px; text-align: center; border-radius: 999px; background: var(--accent-bg); color: var(--accent); font-weight: 700; padding: 1px 10px; }
+
+/* 큰 인용 상자 */
+.pull { margin-block: 36px 44px; }
+.pull blockquote { margin: 0 0 10px; background: var(--sunken); border-radius: 4px 22px 22px 22px; padding: 22px 26px; }
+.pull blockquote p { font-family: var(--serif); font-weight: 600; font-size: 30px; line-height: 1.45; color: var(--ink); margin: 0; }
+.pull .pull-code { display: inline-block; margin: 0; background: var(--code-bg); border-radius: 22px; padding: 8px 20px; }
+.pull .pull-code code { background: none; color: var(--code-s); font-size: 16px; padding: 0; }
+
+/* 코드 블록 */
+pre.code { background: var(--code-bg); color: var(--code-ink); border-radius: 16px; padding: 22px 26px; font-size: 13.5px; line-height: 1.75; overflow-x: auto; margin-block: 28px; }
+pre.code .k { color: var(--code-k); } pre.code .s { color: var(--code-s); } pre.code .c { color: var(--code-c); }
+
+/* 번호 흐름 */
+.flows { list-style: none; padding: 0; counter-reset: f; }
+.flows li { counter-increment: f; position: relative; padding-left: 48px; margin-bottom: 16px; }
+.flows li::before { content: counter(f); position: absolute; left: 0; top: 2px; width: 30px; height: 30px; border-radius: 50%; background: var(--coral); color: var(--on-coral); font-weight: 700; font-size: 15px; display: grid; place-items: center; line-height: 1; }
+
+/* 결정 카드 */
+.dec { list-style: none; padding: 0; counter-reset: d; }
+.dec li { counter-increment: d; position: relative; padding: 18px 0 18px 64px; border-top: 1px solid var(--line); margin: 0; }
+.dec li::before { content: counter(d); position: absolute; left: 0; top: 18px; width: 42px; height: 42px; border-radius: 12px; background: var(--accent-bg); color: var(--accent); font-family: var(--serif); font-weight: 700; font-size: 22px; display: grid; place-items: center; line-height: 1; }
+.dec li b { display: block; font-size: 18px; margin-bottom: 2px; }
+
+/* 체크 목록: li.done = 정함, 빈 칸 = 남음 */
+.note { background: var(--warm); border-radius: 16px; padding: 14px 24px; }
+.checks { list-style: none; padding: 0; margin: 0; }
+.checks li { position: relative; padding: 10px 0 10px 36px; margin: 0; border-bottom: 1px solid var(--line); }
+.checks li:last-child { border-bottom: 0; }
+.checks li::before { content: ""; position: absolute; left: 0; top: 15px; width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--ink-3); }
+.checks li.done::before { background: var(--accent); border-color: var(--accent); }
+.checks li.done::after { content: ""; position: absolute; left: 7px; top: 18px; width: 6px; height: 11px; border: solid var(--on-accent); border-width: 0 2px 2px 0; transform: rotate(45deg); }
+.checks .tag { font-size: 12px; font-weight: 700; color: var(--accent); margin-right: 8px; }
+
+/* 다음에 읽을 글 */
+.next { margin-top: 96px; border-top: 1px solid var(--line); padding-top: 28px; }
+.next h2 { font-family: var(--sans); font-size: 12px; line-height: 1.6; letter-spacing: .06em; color: var(--ink-3); margin: 0 0 14px; }
+.next ul { list-style: none; padding: 0; margin: 0; }
+.next li { margin: 0; border-bottom: 1px solid var(--line); }
+.next a { display: flex; justify-content: space-between; gap: 12px; padding: 14px 0; text-decoration: none; font-weight: 700; font-size: 18px; }
+.next a span { color: var(--ink-3); font-weight: 400; }
+
+/* md 렌더 모드의 파생물 표기 */
+footer.derived { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); font-size: 13px; color: var(--ink-3); }
+
+/* 기둥 폭: 절의 자식은 가운데 기둥. 부품은 위아래 여백(margin-block)만 정한다 */
+main section > *, main > nav.next, main > footer { max-width: var(--measure); margin-left: auto; margin-right: auto; }
+main section > .wide { max-width: var(--wide); }
+
+@media (min-width: 1100px) {
+  .toc-mw { display: none; }
+  .layout { display: flex; align-items: flex-start; }
+  .toc { display: block; flex: 0 0 200px; margin: 44px 0 0 16px; position: sticky; top: 24px; max-height: calc(100vh - 48px); overflow-y: auto; }
+  /* 본문 기둥은 화면 가운데에 둔다. 차례 자리가 모자라면 오른쪽으로 민다. */
+  .content { flex: 0 1 calc(var(--wide) + 32px); min-width: 0; margin: 0 16px 0 max(8px, calc(50% - 692px)); }
+}
+
+@media (max-width: 760px) {
+  body { font-size: 16px; }
+  .head { padding-top: 36px; }
+  .coord { flex-wrap: wrap; }
+  .coord .rule { display: none; }
+  h1 { font-size: 52px; }
+  h2 { font-size: 26px; margin-top: 64px; }
+  .panel { padding: 12px; }
+  .panel svg { min-width: 640px; }
+  .pull blockquote p { font-size: 22px; }
+  .dec li { padding-left: 56px; }
+}
+
+@media print {
+  .toc, .toc-mw { display: none; }
+  .layout { display: block; }
+  body { font-size: 11pt; }
+  h1 { font-size: 30pt; }
+  h2 { font-size: 16pt; margin-top: 24pt; }
+  main { padding-bottom: 0; }
+  .panel, pre.code, .table-scroll { overflow-x: visible; }
+  figure, .pull, .dec li { break-inside: avoid; }
+  a { color: inherit; }
+}
+
+/* svg-diagram: `node <svg-diagram>/gen.mjs --css --style doc --solid` 출력을 이 줄 아래에 한 번 넣는다 */
+/* svg-diagram: SVG 안에는 좌표와 class 만, 색 · 선 · 글꼴은 전부 여기 */
+.d { display: block; max-width: 100%; height: auto; font-family: var(--font-diagram); font-size: var(--fs); }
+.d text { fill: var(--fg); }
+.d .box, .d .lane { fill: var(--box); stroke: var(--stroke); stroke-width: var(--sw); }
+.d .lane.alt { fill: var(--bg); }
+.d .lead { fill: var(--accent-soft); stroke: var(--accent); stroke-width: var(--sw); }
+.d .gate { fill: var(--blue-soft); stroke: var(--blue); stroke-width: var(--sw); }
+.d .io { fill: var(--io-soft); stroke: var(--stroke); stroke-width: var(--sw); }
+.d .ext { fill: var(--ext-soft); stroke: var(--muted); stroke-width: var(--sw); }
+.d .exit { fill: var(--bg); stroke: var(--stroke); stroke-width: var(--sw); }
+.d .bar { fill: var(--bar); } .d .bar.lead { fill: var(--accent); } .d .bar.gate { fill: var(--bar); }
+.d .frame { fill: none; stroke: var(--fg); }
+.d .tag { fill: var(--tag); }
+.d .t-tag { font-family: var(--font-mono); font-size: var(--fs-tag); fill: var(--tag-fg); letter-spacing: .04em; }
+.d .t-frame { font-family: var(--font-mono); font-size: var(--fs-tag); fill: var(--muted); letter-spacing: .04em; }
+.d .t-title { font-size: var(--fs-title); font-weight: 700; }
+.d .t-title.on-bar, .d .t-lane.on-bar { fill: var(--on-bar); }
+.d .t-k { font-family: var(--font-mono); font-size: var(--fs-k); fill: var(--fg); opacity: .72; }
+.d .t-v { font-size: var(--fs-v); }
+.d .t-v.code { font-family: var(--font-mono); }
+.d .t-lane { font-size: var(--fs-title); font-weight: 700; fill: var(--fg); }
+.d .t-label { font-size: var(--fs-label); fill: var(--fg); paint-order: stroke; stroke: var(--surface); stroke-width: 3px; stroke-linejoin: round; }
+.d .sep { stroke: var(--line); }
+.d .life { stroke: var(--fg); stroke-width: 1; }
+.d .edge { fill: none; stroke: var(--fg); stroke-width: var(--ew); stroke-linecap: var(--cap); stroke-linejoin: round; }
+.d .edge.msg { stroke-width: calc(var(--ew) * 1.25); }
+.d .edge.msg.ret { }
+.d .edge.back { stroke: var(--blue); }
+.d .edge.cond, .d .edge.ret { }
+.d .edge.accent { stroke: var(--accent); }
+.d .arr { fill: var(--fg); stroke: var(--fg); } .d .arr-b { fill: var(--blue); stroke: var(--blue); } .d .arr-a { fill: var(--accent); stroke: var(--accent); }
+.d path.grid { stroke: var(--grid); fill: none; stroke-width: .7; }
+.d circle.grid { fill: var(--grid); stroke: none; }
+/* svg-diagram 스타일: doc — 문서 따라감 */
+.s-doc { --font-diagram: var(--sans); --font-mono: var(--mono); --sw: 1; --ew: 1.4; --cap: butt; --fs: 16px; --fs-title: 20px; --fs-v: 16px; --fs-k: 14.4px; --fs-label: 15.2px; --fs-tag: 13.6px; --fg: var(--ink); --muted: var(--ink-3); --stroke: var(--ink); --ink2: var(--ink-2); --accent-soft: var(--accent-bg); --blue-soft: var(--blue-bg); --io-soft: var(--sunken); --ext-soft: var(--sunken); --box: var(--surface); --tag: var(--ink); --tag-fg: var(--surface); --bar: var(--ink); --on-bar: var(--surface); --grid: var(--line-soft); }
+.d.s-doc .t-title.on-lead { fill: var(--accent); } .d.s-doc .lead { stroke-width: 1.4; }
+.d.s-doc .arr, .d.s-doc .arr-b, .d.s-doc .arr-a { fill: none; stroke-width: 1.2; }
+/* svg-diagram --solid: 점선 대신 옅은 색 */
+.d .ext, .d .frame { stroke: var(--muted); }
+.d .edge.cond, .d .edge.ret { stroke: var(--muted); }
+.d .life { stroke: var(--line); }
+</style>
+</head>
+<body>
+<header class="wrap head">
+  <nav class="coord" aria-label="문서 좌표">
+    <span class="path"><span>fdc-agent</span> › <span>AKG</span> › <span aria-current="page">설계 문서</span></span>
+    <span class="rule" aria-hidden="true"></span>
+    <span class="rel"><small>관련</small><a href="#next">JSON 스펙 v0.10.0</a><a href="#next">수집기 설계 v0.2</a><a href="#next">수집 시나리오 v0.1</a></span>
+  </nav>
+  <h1 id="top">에이전트가 읽는 지식, 한&nbsp;곳에서 맞다고 정한다</h1>
+  <p class="sub">agent-knowledge-governance 설계 · v0.4.7&nbsp;초안</p>
+  <p class="meta"><span>2026-07-17</span><span>읽는 데 6 분</span></p>
+</header>
+
+<div class="wrap toc-mw">
+  <details class="toc-m">
+    <summary>차례 · 6 절</summary>
+    <ol class="toc-list">
+      <li><a href="#s1"><span class="no">1</span><span>지금 무엇이 곤란한가</span></a></li>
+      <li><a href="#s2"><span class="no">2</span><span>한 문장으로</span></a></li>
+      <li><a href="#s3"><span class="no">3</span><span>전체 그림</span></a></li>
+      <li><a href="#s4"><span class="no">4</span><span>지식 하나는 무엇으로 되어 있나</span></a></li>
+      <li><a href="#s5"><span class="no">5</span><span>정한 것 일곱</span></a></li>
+      <li><a href="#s6"><span class="no">6</span><span>아직 정하지 않은 것</span></a></li>
+    </ol>
+    <p class="toc-next"><a href="#next">다음에 읽을 글<span aria-hidden="true">→</span></a></p>
+  </details>
+</div>
+
+<div class="layout">
+  <nav class="toc" aria-label="차례">
+    <p class="toc-k">차례</p>
+    <ol class="toc-list">
+      <li><a href="#s1"><span class="no">1</span><span>지금 무엇이 곤란한가</span></a></li>
+      <li><a href="#s2"><span class="no">2</span><span>한 문장으로</span></a></li>
+      <li><a href="#s3"><span class="no">3</span><span>전체 그림</span></a></li>
+      <li><a href="#s4"><span class="no">4</span><span>지식 하나는 무엇으로 되어 있나</span></a></li>
+      <li><a href="#s5"><span class="no">5</span><span>정한 것 일곱</span></a></li>
+      <li><a href="#s6"><span class="no">6</span><span>아직 정하지 않은 것</span></a></li>
+    </ol>
+    <p class="toc-next"><a href="#next">다음에 읽을 글<span aria-hidden="true">→</span></a></p>
+  </nav>
+  <div class="content">
+    <main>
+      <section id="s1">
+        <h2>지금 무엇이 곤란한가</h2>
+        <p class="lead">에이전트는 프롬프트에 맞는 지식 문서를 받아서 답한다. 그 문서는 지금 claude-hooks 레포 안에 md 로 있다.</p>
+        <p>곤란한 점은 셋이다.</p>
+        <ul>
+          <li><b>혼자만 고친다.</b> 문서는 한 사람의 로컬에 있다. 다른 사람은 보지도 고치지도 못한다.</li>
+          <li><b>"맞다"의 표시가 약하다.</b> 확인 안 된 문장은 앞에 <code>추정)</code> 을 붙인다. 글자 하나가 틀리면 표시가 사라진다.</li>
+          <li><b>한글 키워드는 안 걸린다.</b> 키워드 토크나이저가 영문 · 숫자만 읽는다.</li>
+        </ul>
+        <figure>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>인스턴스</th><th>우선순위</th><th>용도</th></tr></thead>
+              <tbody>
+                <tr><td class="id">msg-format</td><td><span class="pill">65</span></td><td>설비 커맨드 메시지 포맷</td></tr>
+                <tr><td class="id">db-schema</td><td><span class="pill">60</span></td><td>테이블 스키마</td></tr>
+                <tr><td class="id">domain-docs</td><td><span class="pill">55</span></td><td>도메인 용어</td></tr>
+                <tr><td class="id">keyword-docs</td><td><span class="pill">50</span></td><td>범용</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <figcaption><span class="no">1</span><span>주입 엔진 하나, 인스턴스 넷</span></figcaption>
+        </figure>
+      </section>
+
+      <section id="s2">
+        <h2>한 문장으로</h2>
+        <p>지식을 쓰고 · 검토하고 · 승격하는 일은 새 서버로 옮긴다. 에이전트에게 지식을 넣는 일(주입)은 claude-hooks 에 남긴다.</p>
+        <div class="pull">
+          <blockquote><p>문서의 원본은 JSON&nbsp;이다. md&nbsp;는 JSON&nbsp;에서 찍어 낸 사본이다.</p></blockquote>
+          <p class="pull-code"><code>render(json) === md</code></p>
+        </div>
+      </section>
+
+      <section id="s3">
+        <h2>전체 그림</h2>
+        <figure class="wide">
+          <div class="panel">
+            <svg class="d s-doc" width="850" viewBox="0 0 850 323" role="img" aria-label="아키텍처. 위 틀은 사내 서버, 아래는 각자의 로컬, 틀을 넘는 선은 HTTPS. 번호는 흐름 셋."><defs><marker id="fig-arch-arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-arch-arr-b" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-b" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-arch-arr-a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-a" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker></defs><rect class="frame" x="22" y="22" width="806" height="148" rx="2"/><text class="t-frame" x="32" y="43">사내 서버</text><path class="edge " d="M332 100 L278 100 L278 111 L224 111" marker-end="url(#fig-arch-arr)"/><path class="edge both" d="M131 199 L131 165.5 L394 165.5 L394 132" marker-end="url(#fig-arch-arr)" marker-start="url(#fig-arch-arr)"/><path class="edge " d="M224 242 L278 242 L278 231 L332 231" marker-end="url(#fig-arch-arr)"/><path class="edge " d="M518 231 L626 231" marker-end="url(#fig-arch-arr)"/><path class="edge accent" d="M719 199 L719 165.5 L456 165.5 L456 132" marker-end="url(#fig-arch-arr-a)"/><g class="n" transform="translate(38 68)"><rect class="box" width="186" height="86" rx="2"/><text class="t-title " x="93" y="24" text-anchor="middle">store/</text><text class="t-v" x="93" y="49" text-anchor="middle">git 레포</text><text class="t-v" x="93" y="71" text-anchor="middle">서버만 쓴다</text></g><g class="n" transform="translate(332 68)"><rect class="box" width="186" height="64" rx="2"/><text class="t-title " x="93" y="24" text-anchor="middle">REST API</text><text class="t-v" x="93" y="49" text-anchor="middle">+ 대시보드</text></g><g class="n" transform="translate(626 68)"><rect class="box" width="186" height="86" rx="2"/><text class="t-title " x="93" y="24" text-anchor="middle">users.json</text><text class="t-v" x="93" y="49" text-anchor="middle">토큰 해시</text><text class="t-v" x="93" y="71" text-anchor="middle">git 밖 유일한 상태</text></g><g class="n" transform="translate(38 199)"><rect class="box" width="186" height="86" rx="2"/><text class="t-title " x="93" y="24" text-anchor="middle">akg CLI</text><text class="t-v" x="93" y="49" text-anchor="middle">sync · propose</text><text class="t-v" x="93" y="71" text-anchor="middle">catalog-push</text></g><g class="n" transform="translate(332 199)"><rect class="box" width="186" height="64" rx="2"/><text class="t-title " x="93" y="24" text-anchor="middle">미러</text><text class="t-v" x="93" y="49" text-anchor="middle">~/.claude/akg/</text></g><g class="n" transform="translate(626 199)"><rect class="lead" width="186" height="64" rx="2"/><text class="t-title on-lead" x="93" y="24" text-anchor="middle">keyword-docs</text><text class="t-v" x="93" y="49" text-anchor="middle">프로바이더</text></g><text class="t-label" x="305" y="93.2" text-anchor="middle">3 승격</text><text class="t-label" x="262.5" y="158.7" text-anchor="middle">2 쓰기</text><text class="t-label" x="251" y="235.2" text-anchor="middle">sync</text><text class="t-label" x="572" y="224.2" text-anchor="middle">1 읽기 · A</text><text class="t-label" x="587.5" y="158.7" text-anchor="middle">B 모드</text></svg>
+          </div>
+          <figcaption><span class="no">2</span><span>아키텍처. 위 틀은 사내 서버, 아래는 각자의 로컬. 틀을 넘는 선은 HTTPS</span></figcaption>
+        </figure>
+        <ul>
+          <li>서버: <code>store/</code>(git 레포, 서버만 쓴다) · <code>users.json</code>(토큰 해시, git 밖 유일한 상태) · REST API + 대시보드.</li>
+          <li>로컬: <code>akg</code> CLI(sync · propose · catalog-push) · 미러 <code>~/.claude/akg/</code> · keyword-docs 프로바이더.</li>
+          <li>프로바이더 A 모드 = 미러 md 를 넣는다. B 모드 = 서버에서 새 본을 당긴다. 실패하면 미러로 돌아간다.</li>
+        </ul>
+        <p>흐름은 셋이다.</p>
+        <ol class="flows">
+          <li><b>읽기.</b> 키워드는 늘 로컬 미러에서 찾는다. 서버가 죽어도 마지막 미러로 돈다.</li>
+          <li><b>쓰기.</b> 사람은 대시보드에서 고친다. 에이전트는 제안(proposal)을 보낸다. 모든 변경은 서버 API 한 곳을 지난다.</li>
+          <li><b>승격.</b> 검토 대기열에서 슬롯 하나씩 채택하고 승격한다.</li>
+        </ol>
+      </section>
+
+      <section id="s4">
+        <h2>지식 하나는 무엇으로 되어 있나</h2>
+        <figure class="wide">
+          <div class="panel">
+            <svg class="d s-doc" width="621" viewBox="0 0 621 348" role="img" aria-label="지식 하나. 문서 아래에 팩트와 슬롯, 등급(tier)은 슬롯에만."><defs><marker id="fig-tree-arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-tree-arr-b" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-b" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-tree-arr-a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-a" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker></defs><path class="edge " d="M229 54 L103.5 54 L103.5 131" marker-end="url(#fig-tree-arr)"/><path class="edge " d="M392 54 L517.5 54 L517.5 131" marker-end="url(#fig-tree-arr)"/><path class="edge " d="M517.5 195 L517.5 262" marker-end="url(#fig-tree-arr)"/><g class="n" transform="translate(229 22)"><rect class="lead" width="163" height="64" rx="2"/><text class="t-title on-lead" x="81.5" y="24" text-anchor="middle">문서</text><text class="t-v" x="81.5" y="49" text-anchor="middle">관리 단위</text></g><g class="n" transform="translate(22 131)"><rect class="box" width="163" height="86" rx="2"/><text class="t-title " x="81.5" y="24" text-anchor="middle">팩트</text><text class="t-v" x="81.5" y="49" text-anchor="middle">기계 지식</text><text class="t-v" x="81.5" y="71" text-anchor="middle">등급 없음</text></g><g class="n" transform="translate(436 131)"><rect class="box" width="163" height="64" rx="2"/><text class="t-title " x="81.5" y="24" text-anchor="middle">슬롯</text><text class="t-v" x="81.5" y="49" text-anchor="middle">사람 지식의 자리</text></g><g class="n" transform="translate(436 262)"><rect class="gate" width="163" height="64" rx="2"/><text class="t-title " x="81.5" y="24" text-anchor="middle">tier</text><text class="t-v" x="81.5" y="49" text-anchor="middle">등급 · 슬롯에만</text></g></svg>
+          </div>
+          <figcaption><span class="no">3</span><span>지식 하나. 문서 아래에 팩트와 슬롯, 등급은 슬롯에만</span></figcaption>
+        </figure>
+        <ul>
+          <li><b>문서</b> = 관리 단위. 테이블 하나 · 커맨드 하나 · 용어 하나.</li>
+          <li><b>팩트</b> = 기계 지식. DB · 코드와 대조하면 참 · 거짓이 나온다. 등급이 없다.</li>
+          <li><b>슬롯</b> = 사람 지식의 자리. 사람이 검토해야 맞다고 한다. 등급은 슬롯에만 있다.</li>
+        </ul>
+        <figure class="wide">
+          <div class="panel">
+            <svg class="d s-doc" width="770" viewBox="0 0 770 217" role="img" aria-label="슬롯 값의 상태 넷. confirmed 로 가는 길은 승격 하나다."><defs><marker id="fig-state-arr" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-state-arr-b" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-b" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker><marker id="fig-state-arr-a" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="11" markerHeight="11" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path class="arr-a" d="M1.5,1.5 L8.5,5 L1.5,8.5"/></marker></defs><path class="edge " d="M182 54 L305 54" marker-end="url(#fig-state-arr)"/><path class="edge accent" d="M465 54 L588 54" marker-end="url(#fig-state-arr-a)"/><path class="edge " d="M668 86 L668 131" marker-end="url(#fig-state-arr)"/><path class="edge back" d="M588 163 L385 163 L385 86" marker-end="url(#fig-state-arr-b)"/><g class="n" transform="translate(22 22)"><rect class="box" width="160" height="64" rx="2"/><text class="t-title " x="80" y="24" text-anchor="middle">scaffold</text><text class="t-v" x="80" y="49" text-anchor="middle">빈 자리</text></g><g class="n" transform="translate(305 22)"><rect class="box" width="160" height="64" rx="2"/><text class="t-title " x="80" y="24" text-anchor="middle">inferred</text><text class="t-v" x="80" y="49" text-anchor="middle">추정</text></g><g class="n" transform="translate(588 22)"><rect class="lead" width="160" height="64" rx="2"/><text class="t-title on-lead" x="80" y="24" text-anchor="middle">confirmed</text><text class="t-v" x="80" y="49" text-anchor="middle">확인됨</text></g><g class="n" transform="translate(588 131)"><rect class="box" width="160" height="64" rx="2"/><text class="t-title " x="80" y="24" text-anchor="middle">deprecated</text><text class="t-v" x="80" y="49" text-anchor="middle">신뢰를 거둠</text></g><text class="t-label" x="526.5" y="47.2" text-anchor="middle">승격 promote</text><text class="t-label" x="674" y="113.8">거둠</text><text class="t-label" x="486.5" y="156.2" text-anchor="middle">되살리면</text></svg>
+          </div>
+          <figcaption><span class="no">4</span><span>슬롯 값의 상태 넷</span></figcaption>
+        </figure>
+        <p>scaffold → inferred → confirmed. confirmed 로 가는 길은 승격(promote) 하나다. deprecated 는 신뢰를 거둔 상태다. 되살리면 inferred 로 간다.</p>
+        <pre class="code">{ <span class="k">"text"</span>: <span class="s">"센서 사용 여부('Y'=활성)"</span>,
+  <span class="k">"tier"</span>: <span class="s">"inferred"</span>,
+  <span class="k">"evidence"</span>: [<span class="s">"fdc-app/src/schema-map.ts:72"</span>],
+  <span class="k">"by"</span>: <span class="s">"agent:propose-codebase"</span>,
+  <span class="k">"at"</span>: <span class="s">"2026-07-17T05:00:00Z"</span> }</pre>
+      </section>
+
+      <section id="s5">
+        <h2>정한 것 일곱</h2>
+        <ol class="dec">
+          <li><b>코퍼스는 옮기고, 주입기는 남긴다.</b> claude-hooks 는 한 줄도 안 고친다. 설정 넉 줄로 미러를 가리킨다.</li>
+          <li><b>저장소는 git 레포가 전부다.</b> 운영 DB 가 없다. 변경 하나 = 커밋 하나. 쓰기 큐가 하나라 머지 충돌이 없다.</li>
+          <li><b>원본은 타입별 JSON 이다.</b> 모르는 키는 거부한다. md 는 렌더 결과다.</li>
+          <li><b>신뢰 등급은 필드다.</b> <code>추정)</code> 접두사 대신 <code>tier</code> 칸을 쓴다.</li>
+          <li><b>키워드는 문서가 가진다.</b> 인덱스는 서버가 쓰기 때 다시 만든다.</li>
+          <li><b>승격은 사람만 한다.</b> 역할은 viewer · editor · approver 셋이다. 에이전트 토큰에는 승격 권한이 없다. 토큰이 없으면 서버가 뜨지 않는다.</li>
+          <li><b>서버는 새로 만든다.</b> 관측 서버를 키우지 않는다. Fastify 하나, DB 없음.</li>
+        </ol>
+        <pre class="code wide"><span class="c">// ~/.claude/context.json — 1 번의 설정 넉 줄</span>
+{ <span class="k">"providers"</span>: { <span class="k">"db-schema"</span>:  { "params": { "index": <span class="s">"~/.claude/akg/db-schema/index.json"</span> } },
+                 <span class="k">"msg-format"</span>: { "params": { "index": <span class="s">"~/.claude/akg/msg-format/index.json"</span> } },
+                 <span class="k">"domain-docs"</span>:{ "params": { "index": <span class="s">"~/.claude/akg/domain/index.json"</span> } } } }</pre>
+      </section>
+
+      <section id="s6">
+        <h2>아직 정하지 않은 것</h2>
+        <div class="note">
+          <ul class="checks">
+            <li class="done"><span class="tag">정함</span>레포 이름 = agent-knowledge-governance(akg).</li>
+            <li class="done"><span class="tag">정함</span>domain-skill 스펙 v2 는 akg 가 낸다. 남은 것은 시점이다.</li>
+            <li>호스팅: 사내 서버 사양 · HTTPS 프록시 · SSO 유무.</li>
+            <li>범용 keyword-docs 를 서버에 넣을지, 로컬에 둘지.</li>
+            <li>관측 대시보드의 문서 탭을 언제 걷을지.</li>
+            <li>옛 문서의 <code>## 마이그레이션 주의</code> 내용을 옮길지 버릴지.</li>
+            <li>주입 기본 모드를 A 로 할지 B 로 할지. B 의 타임아웃 400 ms 가 맞는지.</li>
+            <li>확인된(confirmed) 문서만 넣는 것을 기본으로 할지.</li>
+          </ul>
+        </div>
+      </section>
+
+      <nav class="next" id="next" aria-label="다음에 읽을 글">
+        <h2>다음에 읽을 글</h2>
+        <ul>
+          <li><a href="#top">JSON 스펙 v0.10.0<span aria-hidden="true">→</span></a></li>
+          <li><a href="#top">수집기 설계 v0.2<span aria-hidden="true">→</span></a></li>
+          <li><a href="#top">수집 시나리오 v0.1<span aria-hidden="true">→</span></a></li>
+        </ul>
+      </nav>
+    </main>
+  </div>
+</div>
+</body>
+</html>
