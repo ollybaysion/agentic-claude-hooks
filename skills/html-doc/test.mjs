@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// html-doc v3 검사기(check.mjs) 테스트.
+// html-doc v4 검사기(check.mjs) 테스트.
 // Run: node skills/html-doc/test.mjs
 //
 // 오프라인 테스트다. 통과하는 최소 문서를 규칙마다 하나씩 망가뜨려 checkHtml 을 본다.

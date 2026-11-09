@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// html-doc v3 산출물 검사기 — 만든 HTML 이 스킬의 철칙을 지키는지 정적으로 본다.
+// html-doc v4 산출물 검사기 — 만든 HTML 이 스킬의 철칙을 지키는지 정적으로 본다.
 // Run: node skills/html-doc/check.mjs <file.html> [--derived] [--mockup [--min-opts N]]
 //
 // 오류(exit 1): 자기완결(리소스 로드 0) · 골격(DOCTYPE · lang · title) · 테마(다크 토큰 두 자리) ·
