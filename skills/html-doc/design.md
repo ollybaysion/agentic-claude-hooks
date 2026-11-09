@@ -235,6 +235,66 @@ px · rem 값을 나눠 본다. `clamp()` 처럼 읽지 못하는 값은 경고�
 </footer>
 ```
 
+## 시안 부품 (mockup 패턴)
+
+시안 모드만 쓰는 부품이다. CSS 는 [patterns/mockup.html](patterns/mockup.html) 의 `mockup 패턴 CSS` 블록에
+있다. 이 블록은 `--wide` 를 1240 px 로 늘린다. 안 절(`section.opt`)의 자식은 모두 넓은 폭을 쓴다.
+차례의 `:target` 강조는 `o1` ~ `o12` 까지 있다.
+
+### 축 줄 — `p.axis` (`mockup-axis` 가 본다)
+
+머리의 메타 밑에 둔다. `data-axis-from` 은 `user`(사용자 말에서) 나 `author`(내가 고른 축)다.
+
+```html
+<p class="axis" data-axis-from="user"><span class="k">축</span>새 메모의 템플릿을 어디서 고르나.
+  <small>축은 사용자 말 "…"(11-10 01:10)에서.</small></p>
+```
+
+### 안 카드 — `section.opt#oN` (`mockup-opts` · `mockup-ref` 가 본다)
+
+큰 번호는 96 px(본문의 5.6 배)다. 레퍼런스 줄은 제품 링크를 담는다. 직접 지은 안은 `p.ref.own` 이다.
+`p.need` 는 새 기능이 있어야 그려지는 안에만 둔다.
+
+```html
+<section class="opt" id="o3">
+  <div class="opt-head">
+    <span class="opt-no">3</span>
+    <h2>오른쪽 템플릿 패널</h2>
+    <p class="one">편집기 오른쪽에 템플릿 패널을 연다.</p>
+    <p class="ref"><span class="k">레퍼런스</span><a href="https://…">제품 · 화면</a> — 한 줄</p>
+    <p class="need"><span class="k">새 기능</span>템플릿 미리보기 기능이 있어야 한다(없음)</p>
+  </div>
+  <p class="states"><span>S1 고르기 직전</span><i>→</i><span>S2 고른 뒤</span></p>
+  <div class="shots">…장면…</div>
+</section>
+```
+
+### 화면 틀 — `.scr > .v` (`mockup-frame` · `mockup-zoom` · `mockup-app-tokens` 가 본다)
+
+`.v` 는 1440 × 900 px 다. `.scr` 가 `container-type: inline-size` 이고, `.v` 를
+`scale(tan(atan2(100cqw, 1440px)))` 로 줄인다. `a.zopen` 이 틀을 `:target` 으로 만들어 100% 로 덮는다.
+`a.zclose` 는 figure 로 돌아간다. 틀 안 색은 앱 토큰(`--a-…`, 라이트 고정)만 쓴다.
+
+```html
+<figure class="shot" id="o3-s1">
+  <div class="scr" id="o3-s1-z">
+    <div class="v"><div class="app">…1440 × 900 앱 화면…</div></div>
+    <a class="zopen" href="#o3-s1-z" aria-label="안 3 S1 100% 로 보기"></a>
+    <a class="zclose" href="#o3-s1">닫기 · 100% 1440 × 900</a>
+  </div>
+  <figcaption><b>S1</b>새 메모를 시작해 템플릿을 고르기 직전</figcaption>
+</figure>
+```
+
+### 장면 줄 — `p.states` + `.shots` (`mockup-scenes` 가 본다)
+
+상태 축 한 줄 밑에 장면 그림을 둔다. 넓은 화면은 두 열, 760 px 이하는 한 열이다. 그림 하나만 두는 자리
+(지금 화면)는 `.shots.one` 이다. 모든 안의 장면 수는 같다.
+
+### 비교표 · 레퍼런스 — `table.cmp` · `ol.refs` (`mockup-compare` 가 본다)
+
+비교표는 `.table-scroll` 안에 둔다. 맨 위 줄(`tr.now`)이 지금 화면이다. `td.no` 는 안 번호, `td.n` 은 수다.
+
 ## 패턴
 
 여러 부품을 묶은 뼈대는 `patterns/` 에 견본 문서로 둔다. 견본 파일이 복사 원본이다.
@@ -244,5 +304,9 @@ CSS 와 마크업에 `START … END` 표시가 있다.
 | --- | --- | --- |
 | versus | 정확히 두 대상을 맞세운다. 두 카드가 같은 dl 라벨을 같은 순서로 쓴다 | [patterns/versus.html](patterns/versus.html) |
 | triptych | 대안 세 안(`pick` 하나) 또는 대표 수치 셋(`h3.num`) | [patterns/triptych.html](patterns/triptych.html) |
+| mockup | 시안 모드의 페이지 전부. 축 줄 · 안 카드 · 화면 틀 · 장면 줄 · 비교표 · 레퍼런스 | [patterns/mockup.html](patterns/mockup.html) |
+
+mockup 견본에는 CSS 블록이 둘 있다. `mockup 패턴 CSS` 는 그대로 붙인다. `앱 화면 CSS` 는 견본 앱(Memo)이라
+대상 앱의 토큰 · class 로 바꾼다. 마크업은 `CONTENT:START` 부터 `END` 까지가 복사 원본이다.
 
 흐름 · 순서 · 구조 그림은 svg-diagram 이 그린다. [SKILL.md](SKILL.md) 의 그림 결정표를 본다.

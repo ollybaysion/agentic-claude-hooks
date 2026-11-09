@@ -4,6 +4,7 @@
 //
 // 오프라인 테스트다. 통과하는 최소 문서를 규칙마다 하나씩 망가뜨려 checkHtml 을 본다.
 // 끝으로 template.html(자리표시를 채우면) · examples/showcase.html · patterns/*.html 이 통과하는지 본다.
+// 시안 모드(--mockup)는 통과하는 시안 문서를 규칙마다 망가뜨리고, 시안 견본 · 완성 예를 본다.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -200,8 +201,88 @@ test("examples/showcase.html: 완성 예가 통과한다", () => {
 
 test("patterns/*.html: 패턴 견본이 모두 통과한다", () => {
   const files = readdirSync(join(HERE, "patterns")).filter((f) => f.endsWith(".html"));
-  assert.ok(files.length >= 2, "패턴 견본이 사라졌다");
+  assert.ok(files.length >= 3, "패턴 견본이 사라졌다");
   for (const f of files) {
     assert.deepEqual(checkHtml(readFileSync(join(HERE, "patterns", f), "utf8")).errors, [], f);
   }
+});
+
+// ───── 시안 모드(--mockup) ─────
+
+const MOCK_CSS = `
+:root { --a-canvas: #f4f5f7; --a-ink: #1c1f24; }
+.scr { container-type: inline-size; aspect-ratio: 1440 / 900; }
+.scr .v { position: absolute; width: 1440px; height: 900px; transform: scale(tan(atan2(100cqw, 1440px))); }
+`;
+const scene = (id) =>
+  `<figure class="shot" id="${id}"><div class="scr" id="${id}-z"><div class="v"><div class="app" style="background: var(--a-canvas)">화면</div></div>` +
+  `<a class="zopen" href="#${id}-z" aria-label="100% 로 보기"></a><a class="zclose" href="#${id}">닫기</a></div><figcaption>장면</figcaption></figure>`;
+const opt = (no, { ref = `<p class="ref"><a href="https://example.com/x">제품</a> — 한 줄</p>`, scenes = 2 } = {}) =>
+  `<section class="opt" id="o${no}"><div class="opt-head"><span class="opt-no">${no}</span><h2>안 ${no}</h2>${ref}</div>` +
+  `<div class="shots">${Array.from({ length: scenes }, (_, i) => scene(`o${no}-s${i + 1}`)).join("")}</div></section>`;
+
+function validMockup({ n = 8, axis = '<p class="axis" data-axis-from="user">축 한 줄</p>', opts, cmp = true } = {}) {
+  const body = (opts ?? Array.from({ length: n }, (_, i) => opt(i + 1)).join("\n")) +
+    (cmp ? '\n<section id="s2"><h2>비교표</h2><div class="table-scroll"><table class="cmp"><tr><td>1</td></tr></table></div></section>' : "");
+  return validDoc({ head: HEAD.replace("</header>", `${axis}\n</header>`) })
+    .replace("</style>", `${MOCK_CSS}</style>`)
+    .replace("</main>", `${body}\n</main>`);
+}
+const mrules = (html, opts = {}) => rules(html, { mockup: true, ...opts });
+
+test("시안 통과 예: 안 8 · 장면 2 · 비교표 · 앱 토큰, --mockup 이 없으면 시안 검사는 돌지 않는다", () => {
+  assert.deepEqual(mrules(validMockup()), []);
+  assert.deepEqual(rules(validDoc()), []);
+  assert.deepEqual(mrules(validMockup({ n: 1 }), { minOpts: 1 }), []);
+});
+
+test("시안: 축 줄과 축의 출처", () => {
+  assert.ok(mrules(validMockup({ axis: "" })).includes("mockup-axis"));
+  assert.ok(mrules(validMockup({ axis: '<p class="axis">축</p>' })).includes("mockup-axis"));
+  assert.ok(!mrules(validMockup({ axis: '<p class="axis" data-axis-from="author">축</p>' })).includes("mockup-axis"));
+});
+
+test("시안: 안 수 하한(기본 8, --min-opts)", () => {
+  assert.ok(mrules(validMockup({ n: 7 })).includes("mockup-opts"));
+  assert.ok(!mrules(validMockup({ n: 7 }), { minOpts: 7 }).includes("mockup-opts"));
+});
+
+test("시안: 안마다 레퍼런스 줄 — 링크가 있거나 직접 지은 안", () => {
+  const rest = Array.from({ length: 7 }, (_, i) => opt(i + 2)).join("");
+  assert.ok(mrules(validMockup({ opts: opt(1, { ref: "" }) + rest })).includes("mockup-ref"));
+  assert.ok(mrules(validMockup({ opts: opt(1, { ref: '<p class="ref">제품 이름만</p>' }) + rest })).includes("mockup-ref"));
+  assert.ok(!mrules(validMockup({ opts: opt(1, { ref: '<p class="ref own">직접 지은 안</p>' }) + rest })).includes("mockup-ref"));
+});
+
+test("시안: 안마다 장면 수가 같다 · 비교표가 있다", () => {
+  const rest = Array.from({ length: 7 }, (_, i) => opt(i + 2)).join("");
+  assert.ok(mrules(validMockup({ opts: opt(1, { scenes: 3 }) + rest })).includes("mockup-scenes"));
+  assert.ok(mrules(validMockup({ opts: opt(1, { scenes: 0 }) + rest })).includes("mockup-scenes"));
+  assert.ok(mrules(validMockup({ cmp: false })).includes("mockup-compare"));
+});
+
+test("시안: 화면 틀 .v 는 px 크기, 100% 보기는 여는 · 닫는 링크", () => {
+  const pct = validMockup().replace("width: 1440px; height: 900px;", "width: 100%; height: 100%;");
+  assert.ok(mrules(pct).includes("mockup-frame"));
+  const noClose = validMockup().replace('<a class="zclose" href="#o1-s1">닫기</a>', "");
+  assert.ok(mrules(noClose).includes("mockup-zoom"));
+  const noOpen = validMockup().replace('<a class="zopen" href="#o1-s1-z" aria-label="100% 로 보기"></a>', "");
+  assert.ok(mrules(noOpen).includes("mockup-zoom"));
+});
+
+test("시안: 앱 토큰은 라이트 고정, 화면 틀 안 인라인 style 은 --a-… 만", () => {
+  const dark = validMockup().replace(':root[data-theme="dark"] { --bg: #000; --ink: #eee; }', ':root[data-theme="dark"] { --bg: #000; --ink: #eee; --a-canvas: #111; }');
+  assert.ok(mrules(dark).includes("mockup-app-tokens"));
+  const pageTok = validMockup().replace('style="background: var(--a-canvas)"', 'style="background: var(--ink)"');
+  assert.ok(mrules(pageTok).includes("mockup-app-tokens"));
+  const noTok = validMockup().replace(":root { --a-canvas: #f4f5f7; --a-ink: #1c1f24; }", "");
+  assert.ok(mrules(noTok).includes("mockup-app-tokens"));
+});
+
+test("patterns/mockup.html · examples/mockup.html: 시안 견본(안 3)과 완성 예(안 8)가 --mockup 을 통과한다", () => {
+  const pattern = readFileSync(join(HERE, "patterns", "mockup.html"), "utf8");
+  assert.deepEqual(checkHtml(pattern, { mockup: true, minOpts: 3 }).errors, []);
+  const { errors, warnings } = checkHtml(readFileSync(join(HERE, "examples", "mockup.html"), "utf8"), { mockup: true });
+  assert.deepEqual(errors, []);
+  assert.deepEqual(warnings, []);
 });

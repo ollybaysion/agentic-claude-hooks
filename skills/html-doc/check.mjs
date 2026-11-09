@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // html-doc v3 산출물 검사기 — 만든 HTML 이 스킬의 철칙을 지키는지 정적으로 본다.
-// Run: node skills/html-doc/check.mjs <file.html> [--derived]
+// Run: node skills/html-doc/check.mjs <file.html> [--derived] [--mockup [--min-opts N]]
 //
 // 오류(exit 1): 자기완결(리소스 로드 0) · 골격(DOCTYPE · lang · title) · 테마(다크 토큰 두 자리) ·
 // 인쇄 CSS · script 0 · 머리 넷의 순서 · 차례 · 앵커 · id 겹침 · section id · 표의 .table-scroll ·
-// 점선 0 · 인라인 색 · {{...}} 잔재 · 제목/본문 글자 비 4 이상 · (--derived) 파생물 표기.
+// 점선 0 · 인라인 색 · {{...}} 잔재 · 제목/본문 글자 비 4 이상 · (--derived) 파생물 표기 ·
+// (--mockup) 축 줄 · 안 수 · 안마다 레퍼런스 · 안마다 같은 장면 수 · 비교표 · 화면 틀 px · 100% 보기 · 앱 토큰.
 // 경고(exit 0): 제목/본문 글자 크기를 정적 CSS 에서 읽지 못함.
 //
 // <a href="https://..."> 는 통과한다 — 이동 링크는 리소스 로드가 아니다.
@@ -17,6 +18,7 @@ const RESOURCE_TAGS =
   /<(script|link|img|iframe|audio|video|source|embed|object|track|use|image)\b[^>]*>/gi;
 const ATTR_RE = /\b(src|href|srcset|poster|data)\s*=\s*("([^"]*)"|'([^']*)'|([^\s>]+))/gi;
 const TYPE_RATIO = 4;
+const MIN_OPTS = 8; // 시안 첫 판의 안 수 하한. 2 판은 --min-opts 1
 
 const attrValueOk = (value) => {
   const v = value.trim();
@@ -89,7 +91,94 @@ function fontSizePx(rules, tag) {
   return null;
 }
 
-export function checkHtml(html, { derived = false } = {}) {
+// class 속성에 그 낱말이 있나
+const hasClass = (attrs, cls) => {
+  const m = attrs.match(/\bclass\s*=\s*"([^"]*)"/i);
+  return !!m && m[1].split(/\s+/).includes(cls);
+};
+
+// <tag class="… cls …"> 요소마다 { attrs, inner } 를 낸다. 같은 tag 의 여닫기를 세어 짝을 찾는다.
+function elementsByClass(markup, tag, cls) {
+  const out = [];
+  const open = new RegExp(`<${tag}\\b([^>]*)>`, "gi");
+  let m;
+  while ((m = open.exec(markup)) !== null) {
+    if (!hasClass(m[1], cls)) continue;
+    const any = new RegExp(`<(/?)${tag}\\b[^>]*>`, "gi");
+    any.lastIndex = open.lastIndex;
+    let depth = 1;
+    let t;
+    while (depth > 0 && (t = any.exec(markup)) !== null) depth += t[1] ? -1 : 1;
+    const end = depth === 0 ? t.index : markup.length;
+    out.push({ attrs: m[1], inner: markup.slice(open.lastIndex, end) });
+  }
+  return out;
+}
+const countClass = (html, cls) =>
+  [...html.matchAll(/\bclass\s*=\s*"([^"]*)"/gi)].filter((m) => m[1].split(/\s+/).includes(cls)).length;
+
+// 시안 모드 검사. 화면 틀은 .scr(틀) > .v(앱 화면, 실제 px) 다.
+function checkMockup(markup, rules, err, minOpts) {
+  const axis = markup.match(/<p\b[^>]*>/gi)?.find((t) => hasClass(t, "axis"));
+  if (!axis) err("mockup-axis", '축 줄 <p class="axis" data-axis-from="user|author"> 가 없다 — 이 안들이 무엇에 대한 것인지 한 줄');
+  else if (!/\bdata-axis-from\s*=\s*"(user|author)"/i.test(axis)) {
+    err("mockup-axis", '축 줄에 data-axis-from="user" (사용자 말에서) 나 "author" (내가 고른 축) 가 없다');
+  }
+
+  const opts = elementsByClass(markup, "section", "opt");
+  if (opts.length < minOpts) err("mockup-opts", `안이 ${opts.length} 개다 — 첫 판은 ${minOpts} 개 이상(2 판은 --min-opts 1)`);
+  const sceneCounts = [];
+  opts.forEach((o, i) => {
+    const name = o.attrs.match(/\bid\s*=\s*"([^"]+)"/i)?.[1] ?? `${i + 1} 번째 안`;
+    const refs = elementsByClass(o.inner, "p", "ref");
+    if (!refs.length) err("mockup-ref", `${name}: 레퍼런스 줄 <p class="ref"> 가 없다 — 제품에 없는 안은 <p class="ref own">`);
+    else if (!refs.some((r) => hasClass(r.attrs, "own") || /<a\b[^>]*\bhref\s*=\s*"https?:\/\//i.test(r.inner))) {
+      err("mockup-ref", `${name}: 레퍼런스 줄에 제품 링크(<a href="https://…">)가 없다 — 직접 지은 안이면 class="ref own"`);
+    }
+    sceneCounts.push([name, countClass(o.inner, "scr")]);
+  });
+  const counts = new Set(sceneCounts.map(([, n]) => n));
+  if (sceneCounts.some(([, n]) => n === 0)) {
+    err("mockup-scenes", `장면(.scr)이 없는 안: ${sceneCounts.filter(([, n]) => !n).map(([k]) => k).join(" ")}`);
+  } else if (counts.size > 1) {
+    err("mockup-scenes", `안마다 장면 수가 다르다 — ${sceneCounts.map(([k, n]) => `${k} ${n}`).join(" · ")}`);
+  }
+
+  if (!(markup.match(/<table\b[^>]*>/gi) ?? []).some((t) => hasClass(t, "cmp"))) {
+    err("mockup-compare", '비교표 <table class="cmp"> 가 없다 — 열은 축에서 나온다');
+  }
+
+  // 화면 틀: .v 의 안쪽 크기는 실제 px 로 박는다. 축소는 CSS(scale) 가 맡는다
+  const vRule = rules.find((r) => !r.at && /\.v\b/.test(r.prelude) &&
+    /(^|[;\s])width\s*:\s*\d+px/i.test(r.body) && /(^|[;\s])height\s*:\s*\d+px/i.test(r.body));
+  if (!vRule) err("mockup-frame", "화면 틀 .v 의 width · height 가 px 로 박혀 있지 않다(예: 1440px · 900px)");
+  const scrs = elementsByClass(markup, "div", "scr");
+  for (const s of scrs) {
+    const id = s.attrs.match(/\bid\s*=\s*"([^"]+)"/i)?.[1];
+    if (!countClass(s.inner, "v")) err("mockup-frame", `화면 틀 .scr${id ? `#${id}` : ""} 안에 앱 화면 .v 가 없다`);
+    if (!id) { err("mockup-zoom", "id 없는 화면 틀 .scr — 100% 보기(:target)가 닿지 않는다"); continue; }
+    const idRe = id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const opener = new RegExp(`<a\\b[^>]*\\bhref\\s*=\\s*"#${idRe}"`, "i").test(markup);
+    const closer = (s.inner.match(/<a\b[^>]*>/gi) ?? []).some((a) => hasClass(a, "zclose") && /\bhref\s*=\s*"#[^"]+"/i.test(a));
+    if (!opener || !closer) err("mockup-zoom", `화면 틀 #${id}: 여는 링크(href="#${id}")와 닫는 링크(a.zclose)가 둘 다 있어야 한다`);
+  }
+
+  // 앱 토큰: 화면 틀 안은 대상 앱의 토큰(--a-…)만 쓰고 라이트로 고정한다
+  if (!rules.some((r) => !r.at && /--a-[\w-]+\s*:/.test(r.body))) {
+    err("mockup-app-tokens", "앱 토큰(--a-…) 블록이 없다 — 화면 틀 안의 색은 대상 앱의 토큰으로 쓴다");
+  }
+  const darkApp = rules.filter((r) => (r.at && /prefers-color-scheme:\s*dark/i.test(r.at)) || /\[data-theme="dark"\]/.test(r.prelude))
+    .flatMap((r) => [...r.body.matchAll(/(--a-[\w-]+)\s*:/g)].map((m) => m[1]));
+  if (darkApp.length) err("mockup-app-tokens", `앱 토큰은 라이트 고정이다 — 다크 자리에서 다시 정했다: ${[...new Set(darkApp)].join(" ")}`);
+  for (const v of elementsByClass(markup, "div", "v")) {
+    for (const sa of v.inner.matchAll(/\bstyle\s*=\s*("([^"]*)"|'([^']*)')/gi)) {
+      const bad = [...(sa[2] ?? sa[3] ?? "").matchAll(/var\(\s*(--[\w-]+)/g)].map((m) => m[1]).filter((p) => !p.startsWith("--a-"));
+      if (bad.length) err("mockup-app-tokens", `화면 틀 안 인라인 style 이 페이지 토큰을 쓴다(${bad.join(" ")}) — --a-… 앱 토큰만`);
+    }
+  }
+}
+
+export function checkHtml(html, { derived = false, mockup = false, minOpts = MIN_OPTS } = {}) {
   const errors = [];
   const warnings = [];
   const err = (rule, msg) => errors.push({ rule, msg });
@@ -231,21 +320,28 @@ export function checkHtml(html, { derived = false } = {}) {
     err("derived-footer", 'md 렌더 산출물에는 <footer class="derived" data-derived-from="<원본 경로>"> 가 있어야 한다');
   }
 
+  // 시안 모드(--mockup)
+  if (mockup) checkMockup(markup, rules, err, minOpts);
+
   return { ok: errors.length === 0, errors, warnings };
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   const args = process.argv.slice(2);
   const derived = args.includes("--derived");
-  const file = args.find((a) => !a.startsWith("--"));
-  if (!file) {
-    console.error("usage: node check.mjs <file.html> [--derived]");
+  const mockup = args.includes("--mockup");
+  const mi = args.indexOf("--min-opts");
+  const minOpts = mi >= 0 ? Number(args[mi + 1]) : MIN_OPTS;
+  const file = args.find((a, i) => !a.startsWith("--") && !(mi >= 0 && i === mi + 1));
+  if (!file || !Number.isInteger(minOpts) || minOpts < 1) {
+    console.error("usage: node check.mjs <file.html> [--derived] [--mockup [--min-opts N]]");
     process.exit(1);
   }
-  const { ok, errors, warnings } = checkHtml(readFileSync(file, "utf8"), { derived });
+  const { ok, errors, warnings } = checkHtml(readFileSync(file, "utf8"), { derived, mockup, minOpts });
   for (const w of warnings) console.error(`  경고 [${w.rule}] ${w.msg}`);
   if (ok) {
-    console.log(`OK: ${file} — html-doc 철칙 통과${derived ? " (derived)" : ""}`);
+    const mode = [derived && "derived", mockup && `mockup, 안 ${minOpts} 개 이상`].filter(Boolean).join(" · ");
+    console.log(`OK: ${file} — html-doc 철칙 통과${mode ? ` (${mode})` : ""}`);
   } else {
     console.error(`FAIL: ${file} — ${errors.length} 건`);
     for (const e of errors) console.error(`  [${e.rule}] ${e.msg}`);
