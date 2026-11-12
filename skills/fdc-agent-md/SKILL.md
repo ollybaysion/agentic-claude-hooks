@@ -9,6 +9,8 @@ description: >-
   변환 노드의 Java 식 · 설비 범위 $eqp, 입력 노드 선택지(선택:)로 가르는 분기, 바인드 변수(:var) 출처,
   BE 검사 scripts/check-flow · 변환 scripts/convert-ask-to-flow · AKG 그림 검사 check.mjs,
   AKG 등록(role · status · akg push · API)과 거부 글 읽는 법을 담는다.
+  조회 노드가 starter 문서의 항목 id 를 적는 starter 항목 참조(범위 줄 · 필요 항목 needs · check-flow --starter=)도 담는다.
+  starter 문서 쓰기는 fdc-starter-md, starter 와 겹치는 옛 조회 옮기기는 fdc-md-migrate 가 맡는다.
 ---
 
 # fdc-agent-md
@@ -28,12 +30,14 @@ FDC 에이전트 md 한 장을 처음부터 AKG 등록까지 맡는다.
     `FlowMaps`(map 항목 검사) · `MapExprParser`(변환 식 문법).
   - `src/main/java/fdc/agent/common/domain/MapExpr.java`: 변환 식 셈 규칙. 변환 표본은 `src/test/resources/map-node/`.
   - `scripts/check-flow` · `scripts/convert-ask-to-flow` · `scripts/reload.sh`.
+  - `src/main/java/fdc/agent/knowledge/KnowledgeService.java` 의 `waitedBy`: 필요 항목(`needs`). 표본은 `src/test/resources/starter-ref/`(BE #252).
 - AKG 레포 [ollybaysion/agent-knowledge-governance](https://github.com/ollybaysion/agent-knowledge-governance)
   (로컬 체크아웃 `~/work/fdc-agent/agent-knowledge-governance`):
   - `schemas/domain-skill/v1.schema.json`(body `{ name, markdown }`) · `src/envelope.mjs`(봉투 칸 · role).
   - `server/routes/docs.mjs`(저장 · 켜기 · role 검사) · `src/flow/agent-md.mjs`(BE 와 같은 플로우 검사) ·
     `src/flow/flow-maps.mjs` · `src/flow/map-expr.mjs`(map 항목 · 변환 식 문법).
   - `bin/akg.mjs`(`akg push`) · `docs/consuming.md`.
+  - `src/flow/agent-md.mjs` 의 `readStarter` · `server/data-ids.mjs` 의 `agentRegistry`: starter 항목을 등재 조회로 센다(AKG #116).
 
 BE 의 코드 이름 · 메시지는 "흐름" 이라고 적는다. 이 스킬의 "플로우" 와 같은 것이다.
 
@@ -41,9 +45,9 @@ BE 의 코드 이름 · 메시지는 "흐름" 이라고 적는다. 이 스킬의
 
 | 할 일 | 따라갈 절 |
 | --- | --- |
-| 새 에이전트 md 만들기 | 2 준비 → 3 틀(빈 틀 표본 복사) → 4~7.1 데이터 절 · 플로우 · 변환 노드 → 8 쓰는 순서 → 9 검사 → 10 AKG 등록 |
+| 새 에이전트 md 만들기 | 2 준비 → 3 틀(빈 틀 표본 복사) → 4~7.2 데이터 절 · 플로우 · 변환 노드 · starter 항목 참조 → 8 쓰는 순서 → 9 검사 → 10 AKG 등록 |
 | 옛 md 옮기기(ASK 항목 · `@묶음`) | 2 준비 → 11 옮기기 절차 → 9 검사 → 10 AKG 등록 |
-| 고치고 검증하기 | 9 검사 → 12 오류 코드 · 거부 글 → 4~7.1 에서 규칙 확인 → 10 AKG 수정 |
+| 고치고 검증하기 | 9 검사 → 12 오류 코드 · 거부 글 → 4~7.2 에서 규칙 확인 → 10 AKG 수정 |
 
 다른 스킬과 나누기:
 
@@ -54,6 +58,8 @@ BE 의 코드 이름 · 메시지는 "흐름" 이라고 적는다. 이 스킬의
 | 조회 항목에 그래프(`chart` 펜스)를 붙인다 | [`fdc-chart`](../fdc-chart/SKILL.md) |
 | 질문을 보내 틀린 답의 기록을 읽고 어긋난 조회 · 인자를 짚는다 | [`fdc-answer-debug`](../fdc-answer-debug/SKILL.md) |
 | AKG 에 붙는 토큰 · `akg` CLI 전반(슬롯 제안 · 표 카탈로그 포함) | [`akg-push`](../akg-push/SKILL.md) |
+| starter 문서(AKG 타입 `starter`)를 쓰고 · 검사하고 · 올린다 | [`fdc-starter-md`](../fdc-starter-md/SKILL.md) |
+| 여러 에이전트 md 에 흩어진 같은 조회를 starter 항목 참조로 옮긴다 | [`fdc-md-migrate`](../fdc-md-migrate/SKILL.md) |
 
 akg-mermaid 의 일반 규칙과 BE 문법이 부딪치면 이 스킬은 BE 문법을 따른다. 부딪치는 곳은 6절 끝에 있다.
 
@@ -116,6 +122,16 @@ md 한 장이 에이전트 하나다. 절은 아래 순서로 쓴다. 이름 끝
 4. 본문은 펜스 하나와 산문이다. 산문은 그 항목의 설명이다. map 항목에는 map 펜스 하나만 둔다(`MAP_FENCE`).
 5. 항목 안의 `####` 는 그 항목의 본문이다.
 6. 사람에게 받을 값은 플로우 펜스의 입력 노드 `id([글])` 로 적는다. ```` ```ask ```` 펜스 · `@묶음` 은 거부된다(12절).
+
+### 항목 제목 · 산문
+
+main md 의 SQL 항목은 첫 화면의 데이터 고르기에도 선다(`/starters` 의 `optional` 항목). 그래서 제목과 산문을 첫 화면에 맞춰 쓴다.
+
+1. 제목(`### id — 제목` 의 제목)은 줄에 홀로 선다. 짧은 이름으로 쓴다. 예: `Interlock 이력`.
+2. 산문은 항목 안에서 펜스 밖의 글이다. 항목 머리와 `sql` 펜스 사이에 둔다.
+3. 첫 화면에서 그 줄을 가리키면 산문이 설명으로 뜬다. BE `/starters` 의 `description` 이다.
+4. 산문은 한두 문장이다. 무슨 데이터인지 적는다. 한 행이 무엇인지 적는다. 예: `설비 한 대의 바탕 정보다. 한 행이 설비 한 대다.`
+5. 산문이 없으면 `description` 이 `null` 이다.
 
 ### md 이름
 
@@ -226,7 +242,7 @@ AKG 는 저장할 때 두 때의 오류를 다 본다(10절). 그래서 올리�
 | 노드 | 모양 | id 는 무엇 | id 표기 | 글 |
 | --- | --- | --- | --- | --- |
 | 입력 | `id([글])` | SQL 바인드 변수 이름(`:id` 의 `id`) | `[A-Za-z][A-Za-z0-9_]*`, `_` | `이름 · 힌트 · 선택: a, b` 꼴. 첫 토막은 짧은 이름이다. 카드 제목이자 서랍 제목이다. 힌트 토막 · `선택:` 토막은 필요할 때 붙인다(아래) |
-| 조회 | `id[글]` | SQL 항목 `### id — 제목` 의 id. 다른 md 의 조회 id 도 된다 | `_` | 사람용 제목 |
+| 조회 | `id[글]` | SQL 항목 `### id — 제목` 의 id. 다른 md 의 조회 id 와 starter 문서의 항목 id 도 된다(7.2절) | `_` | 사람용 제목 |
 | 변환 | `id{{글}}` | 같은 md 의 map 항목 `### id — 제목` 의 id(7.1절) | `_` | 사람용 제목 |
 | 플로우 | `id[[글]]` | 등록된 md 이름 또는 subgraph id | md 이름은 `-`, subgraph id 는 `_` | 사람용 제목 |
 | subgraph | `subgraph id [글]` … `end` | 이 펜스 안 플로우 하나의 이름 | `[a-z][a-z0-9_]*`, `_` | 사람용 제목. 꼭 적는다 |
@@ -256,6 +272,7 @@ AKG 는 저장할 때 두 때의 오류를 다 본다(10절). 그래서 올리�
 - 변환 노드는 map 항목을, 조회 노드는 SQL 항목을 가리킨다. 엇갈리면 `MAP_SHAPE` 다.
 - md 이름 규칙은 3절에 있다.
 - 다른 md 의 조회를 조회 노드로 쓰면 그 조회가 이 에이전트의 요청에 더해진다.
+- starter 문서의 항목 id 를 조회 노드로 쓰면 그 항목이 이 에이전트의 요청에 더해진다(7.2절).
 - 공통 입력(라인 · 설비 · 기간)은 공통 md `eqp-scope` 가 적는다. 에이전트 md 는
   `eqp-scope[[설비 범위]]` 를 caller 로 세운다.
 
@@ -395,6 +412,9 @@ SQL 항목의 `:var` 마다 출처가 하나 있어야 한다. 출처는 그 조
   `UNSUPPORTED_EQP_FLOW` 다. 변환이 조회 열 `eqp_id` 를 왼쪽 이름 없이 그대로 넘겨도 같다.
   변환이 왼쪽 이름으로 놓은 `eqp_id`(`eqp_id = $eqp[0].eqp_id`)는 받는다. 그 값이 뒤 조회의 `:eqp_id` 다.
 - 설비 · 라인 · 기간은 공통 md `eqp-scope[[설비 범위]]` 를 caller 로 세워 받는다.
+- 조회 노드가 starter 항목이나 다른 md 의 조회를 가리켜도 그 조회의 `:var` 는 이 md 의 흐름이 채운다.
+  starter 항목의 `:eqp_id` 는 범위 줄 둘(`eqp-scope[[설비 범위]]` · `eqp-scope --> 항목 id`)이 채운다.
+  빼면 `UNSOURCED_VAR eqp_info 의 :eqp_id 를 채울 입력이 없다` 다(7.2절).
 - 라인 · 공정(area) · 설비는 질문 글에서 룰이 먼저 뽑는다. 룰은 라인 · 설비 목록과 글자로 맞춘다.
   룰 값이 LLM 값을 덮는다. 입력 노드 글의 힌트는 LLM 추출이 쓴다(5절).
 
@@ -648,24 +668,143 @@ $eqp = 1
 idx = $eqp.index
 ```
 
+## 7.2 starter 항목 참조
+
+**starter 문서**는 AKG 타입 `starter` 의 md 다. 첫 화면에서 사람이 먼저 고를 바탕 데이터(설비 정보 등)를 든다.
+쓰는 법은 [`fdc-starter-md`](../fdc-starter-md/SKILL.md) 에 있다.
+에이전트 md 의 조회 노드는 starter 문서의 항목 id 를 적을 수 있다. 이것이 **starter 항목 참조**다. 그 조회는 starter 문서에 한 번만 있다.
+근거는 BE #252(`feat/starter-needs`, 계약 v1.65) · AKG #116(`feat/flow-starter-reference`)이다.
+
+### 언제 참조하나
+
+1. 쓰려는 조회와 같은 조회가 starter 문서에 있는지 본다. `akg list starter` 가 starter 문서를 한 줄씩 낸다.
+2. 있으면 자기 `## 데이터` 에 그 조회를 쓰지 않는다. 흐름 펜스의 조회 노드에 그 항목 id 를 적는다.
+3. 없으면 자기 md 에 SQL 항목을 쓴다.
+4. 여러 에이전트 md 가 같은 조회를 들고 있으면 [`fdc-md-migrate`](../fdc-md-migrate/SKILL.md) 로 starter 에 모은다.
+
+- 조회 id 는 `domain-skill` · `domain` · `starter` 세 타입에 걸쳐 하나다.
+  starter 항목과 같은 id 의 항목을 자기 md 에 두면 AKG 가 409 `data_id_conflict` 로 저장을 거부한다. check-flow 는 `DATA_ID_CLASH` 를 낸다(9절).
+- 참조한 항목의 바인드는 이 md 의 흐름이 채운다(7절). 설비 바인드면 범위 줄 둘을 꼭 둔다.
+
+### 확정 예
+
+BE 표본 `src/test/resources/starter-ref/` 의 두 파일 그대로다. AKG #116 도 같은 두 파일로 시험한다.
+
+`eqp-basics.md`(starter 문서):
+
+````markdown
+# 설비 바탕 데이터
+
+## 데이터
+
+### eqp_info — 설비 정보
+
+```sql
+select * from fdc_equipment where eqp_id = :eqp_id
+```
+````
+
+`interlock-check.md`(에이전트 md):
+
+````markdown
+# Interlock 점검
+
+## 한 줄 설명
+
+설비 모델의 Interlock 이력을 본다.
+
+## 데이터
+
+```mermaid
+flowchart TD
+  eqp-scope[[설비 범위]]
+  eqp-scope --> eqp_info
+  eqp_info --> interlock_data
+```
+
+### interlock_data — Interlock 이력
+
+모델별 Interlock 이력.
+
+```sql
+select * from fdc_interlock_event where model_id = :model_id and event_time between :start_time and :end_time
+```
+````
+
+- `eqp-scope[[설비 범위]]` · `eqp-scope --> eqp_info` 가 범위 줄 둘이다. `eqp_info` 의 `:eqp_id` 를 채운다.
+- `eqp_info --> interlock_data` 로 `interlock_data` 가 `eqp_info` 의 표를 기다린다. `:model_id` 는 그 표의 열이 채운다.
+- 이 표본의 `eqp_info` 는 `select *` 다. 그래서 검사는 `eqp_info` 의 열을 모른다. `interlock_data` 의 바인드를 모두 지나 보낸다.
+  열을 적은 starter 항목이면 `eqp-scope --> interlock_data` 도 둔다. 그 간선이 `:start_time` · `:end_time` 을 채운다([`fdc-starter-md`](../fdc-starter-md/SKILL.md) 4절).
+
+검사(2026-11-12, BE #252 체크아웃. 표본 폴더에서 돌렸다):
+
+```text
+$ "$FDC_BE/scripts/check-flow" --starter=eqp-basics.md interlock-check.md
+OK eqp-basics.md
+OK interlock-check.md
+$ "$FDC_BE/scripts/check-flow" interlock-check.md
+interlock-check.md:9 UNKNOWN_ID 노드 eqp_info: 이 md 의 SQL 항목도, 등재된 조회도 아니다
+interlock-check.md:9 UNSOURCED_VAR interlock_data 의 :model_id 를 채울 입력이 없다
+interlock-check.md:9 UNSOURCED_VAR interlock_data 의 :start_time 를 채울 입력이 없다
+interlock-check.md:9 UNSOURCED_VAR interlock_data 의 :end_time 를 채울 입력이 없다
+```
+
+범위 줄 둘을 빼면 `--starter=` 를 넘겨도 `UNSOURCED_VAR eqp_info 의 :eqp_id 를 채울 입력이 없다` 다.
+
+### 필요 항목
+
+**필요 항목**은 첫 화면에서 항목 하나를 고르면 함께 골라지는 항목이다. BE `/starters` 항목의 `needs` 로 나간다.
+BE 는 그 항목이 적힌 에이전트 md 의 흐름에서 정한다(`KnowledgeService.waitedBy`).
+그 항목으로 들어오는 간선을 거꾸로 따라간다. caller 마다 아래 표대로 한다.
+
+| caller | 필요 항목에 드나 | 더 따라가나 |
+| --- | --- | --- |
+| 조회(이 md 의 SQL 항목 · starter 항목 · 다른 md 의 조회) | 든다 | 그 조회로 들어오는 간선을 따라간다 |
+| 변환 | 들지 않는다 | 그 변환으로 들어오는 간선을 따라간다 |
+| 입력 | 들지 않는다 | 멈춘다 |
+| 플로우(이 md 의 subgraph) | 그 subgraph 의 끝 조회가 든다 | 끝 조회에서 따라간다 |
+| 플로우(다른 md, `eqp-scope` 도) | 그 md 의 끝 조회가 든다 | 그 md 의 흐름에서 따라간다 |
+
+- 그 항목이 subgraph 안에 있으면 그 subgraph 로 들어오는 조회 · 변환 caller 도 센다.
+- 조건 간선도 같다.
+- 첫 화면 목록에 있는 id 만 남는다. sub md(`eqp-scope` 등)의 조회와 꺼진 에이전트의 항목은 빠진다.
+- 도는 순서로 든다. 앞 조회가 앞이다. 같은 id 는 한 번 든다.
+- starter 항목(`group: common`)의 `needs` 는 늘 빈 목록이다.
+
+예(2026-11-12, [`fdc-md-migrate`](../fdc-md-migrate/SKILL.md) 9절의 예를 BE 에 올려 본 `needs`):
+
+| 흐름 | `needs` |
+| --- | --- |
+| `eqp-scope --> eqp_info` · `eqp_info --> interlock_data` | `interlock_data`: `["eqp_info"]` |
+| `eqp_model --> recipe_list` · `equip_info --> recipe_list`(둘 다 조회) | `recipe_list`: `["eqp_model","equip_info"]` |
+
+### 첫 화면
+
+첫 화면(사용자가 정한 규칙, FE 구현 전)에서 문서를 쓰는 사람에게 닿는 결과는 셋이다.
+
+- 항목의 제목은 줄에 홀로 선다(`/starters` 의 `title`).
+- 항목의 산문은 설명이 된다(`description`). 줄을 가리키면 뜬다. 쓰는 법은 3절 "항목 제목 · 산문" 이다.
+- 흐름의 조회 노드가 필요 항목을 정한다(`needs`).
+
 ## 8. 쓰는 순서
 
 1. 3절의 빈 틀 표본을 복사한다. 파일 이름을 md 이름으로 짓는다.
 2. `# 제목` · `## 한 줄 설명` · `## 언제 호출되는가?` · `## 도메인 지식` 을 쓴다.
-3. `## 데이터` 아래에 SQL 항목마다 `### id — 제목` 과 sql 펜스를 쓴다.
-4. SQL 항목마다 `:var` 를 적는다.
-5. SQL 항목마다 select 열을 적는다.
-6. `:var` 마다 7절에서 출처 하나를 고른다.
-7. 변환이 필요한 자리를 찾는다: 출처의 이름이 `:var` 와 다른 곳, 계산 값이 필요한 곳, 설비 사이에 값을 넘기는 곳.
+3. 쓰려는 조회마다 starter 문서에 같은 조회가 있는지 본다. 있으면 그 조회는 SQL 항목으로 쓰지 않는다. 흐름에 그 항목 id 를 적는다(7.2절).
+4. `## 데이터` 아래에 SQL 항목마다 `### id — 제목` 과 sql 펜스를 쓴다.
+5. SQL 항목마다 `:var` 를 적는다.
+6. SQL 항목마다 select 열을 적는다.
+7. `:var` 마다 7절에서 출처 하나를 고른다.
+8. 변환이 필요한 자리를 찾는다: 출처의 이름이 `:var` 와 다른 곳, 계산 값이 필요한 곳, 설비 사이에 값을 넘기는 곳.
    그 자리마다 map 항목 `### id — 제목` 과 map 펜스를 쓴다(7.1절).
-8. 플로우 펜스 첫 줄 `flowchart TD` 를 쓴다.
-9. 노드마다 모양과 글을 적는다. 노드 줄에 적거나 간선 줄 끝에 같이 적는다.
-10. 간선 줄을 쓴다. 같은 id 는 줄마다 같은 모양으로 적는다.
-11. 조건이 있는 caller(조회 · 변환 · 선택지 있는 입력)의 간선에 조건 라벨을 단다. 라벨 글은 큰따옴표로 싼다.
-12. 여러 조회가 같이 쓰는 앞부분은 subgraph 로 묶는다. 다른 md 도 쓰면 subgraph 를 그 md 에서 `[[ ]]` 로 가리킨다.
-13. 입력 노드의 예 값 · 뜻을 펜스 아래 본문 글로 적는다.
-14. 9절의 검사를 돌린다.
-15. 오류가 없으면 10절대로 AKG 에 올린다.
+9. 플로우 펜스 첫 줄 `flowchart TD` 를 쓴다.
+10. 노드마다 모양과 글을 적는다. 노드 줄에 적거나 간선 줄 끝에 같이 적는다.
+11. 간선 줄을 쓴다. 같은 id 는 줄마다 같은 모양으로 적는다.
+12. 조건이 있는 caller(조회 · 변환 · 선택지 있는 입력)의 간선에 조건 라벨을 단다. 라벨 글은 큰따옴표로 싼다.
+13. 여러 조회가 같이 쓰는 앞부분은 subgraph 로 묶는다. 다른 md 도 쓰면 subgraph 를 그 md 에서 `[[ ]]` 로 가리킨다.
+14. 입력 노드의 예 값 · 뜻을 펜스 아래 본문 글로 적는다.
+15. 9절의 검사를 돌린다.
+16. 오류가 없으면 10절대로 AKG 에 올린다.
 
 ## 9. 검사
 
@@ -676,10 +815,15 @@ md 읽기(`SkillMarkdownTool`) · `FlowGrammar` · `FlowCompiler` · `FlowRules`
 스크립트는 자기가 든 BE 체크아웃의 `gradlew` 로 gradle task `checkFlow` 를 돌린다. 첫 실행은 BE 를 빌드한다.
 
 ```bash
-JAVA_HOME=~/tools/jdk-21.0.11+10 "$FDC_BE/scripts/check-flow" 에이전트.md [같이 쓰는 md …]
+JAVA_HOME=~/tools/jdk-21.0.11+10 "$FDC_BE/scripts/check-flow" [--starter=starter문서.md …] 에이전트.md [같이 쓰는 md …]
 ```
 
 - 인자는 md 파일 경로다. 하나 이상 넘긴다. `FDC_BE` 는 스크립트를 찾는 데에만 쓴다.
+- starter 항목을 참조하면 그 starter 문서를 `--starter=파일.md` 로 넘긴다(BE #252 뒤의 체크아웃). 여러 번 줄 수 있다.
+  파일 이름(확장자 뺌)이 starter 문서 id 다. 넘기지 않으면 `UNKNOWN_ID 노드 eqp_info: 이 md 의 SQL 항목도, 등재된 조회도 아니다` 가 난다.
+  그 조회의 열로 채우던 바인드마다 `UNSOURCED_VAR` 줄도 난다(7.2절 확정 예).
+- starter 문서도 `OK 파일` 줄을 받는다. BE 가 그 문서를 읽지 않으면 `파일:1 MD 글` 이다([`fdc-starter-md`](../fdc-starter-md/SKILL.md) 6절).
+- 넘긴 파일 사이에 같은 데이터 항목 id 가 있으면 뒤 파일의 그 `###` 줄에 `DATA_ID_CLASH` 가 난다. starter 문서와 에이전트 md 사이면 에이전트 md 쪽이다.
 - 파일 이름(확장자 뺌)이 md 이름이다. 넘긴 md 들의 조회 id · subgraph id 가 검사의 사실이다.
 - 공통 md `eqp-scope` 는 늘 들어 있다. 다른 md 나 다른 md 의 subgraph 를 가리키면 그 md 파일을 같이 넘긴다.
   넘기지 않으면 `UNKNOWN_ID` 가 나온다.
@@ -703,6 +847,7 @@ two-data.md:1 MD two-data: ## 데이터 절은 하나다, 2 개다 — 18 · 38 
 | `파일:줄 코드 글` | 오류 하나. 코드는 12절 표의 이름이다 |
 | `파일:1 MD 글` | 펜스 밖 md 읽기 거부다. 글은 4절 · 12절의 거부 글이다 |
 | `파일:0 IO 글` | 그 파일을 읽지 못했다. 이 줄이 있으면 다른 파일의 줄도 나오지 않는다 |
+| `파일:줄 DATA_ID_CLASH 데이터 항목 id 가 앞 파일 에도 있다` | 넘긴 md · starter 문서 사이에 같은 항목 id 가 있다. AKG 는 저장 때 409 `data_id_conflict` 로 거부한다 |
 | `파일:줄 경고 SUBGRAPH_ID_CLASH 글` | 다른 md 에 같은 subgraph id 가 있다. BE 는 먼저 넘긴 md 의 것을 쓴다. check-flow 는 오류로 세지 않는다. AKG 는 저장 때 409 `data_id_conflict` 로 거부한다(10절) |
 
 - 줄은 md 파일의 줄이다. 펜스 하나로 아는 오류는 그 줄을 가리킨다.
@@ -723,24 +868,50 @@ two-data.md:1 MD two-data: ## 데이터 절은 하나다, 2 개다 — 18 · 38 
 ### JDK 가 없을 때: AKG 체크아웃의 node 한 줄
 
 AKG 의 `src/flow/agent-md.mjs` 는 check-flow 와 같은 검사를 node 로 돈다. AKG 저장 검사가 이 파일을 쓴다.
-`checkFiles` 가 check-flow 와 같은 줄 꼴(`OK 파일` · `파일:줄 코드 글` · `파일:1 MD 글`)을 낸다.
+아래 한 줄은 check-flow 와 같은 줄 꼴(`OK 파일` · `파일:줄 코드 글` · `파일:1 MD 글`)을 낸다. `--starter=파일.md` 도 받는다.
 2026-10-28 에 표본 여덟을 두 도구로 돌렸다. 한 곳만 달랐다:
 md 안의 같은 `### id` 둘은 check-flow 만 `MD … 조달 id 가 중복입니다` 로 잡는다.
 AKG 는 저장 때 `$.body.markdown: 데이터 항목 id 가 겹칩니다 — id` 로 잡는다.
 같은 날 BE 변환 표본 22 개(`src/test/resources/map-node/`)를 파일마다 두 도구로 돌렸다. 22 개 모두 같은 줄을 냈다.
+2026-11-12 에 이 한 줄을 starter 를 받게 고쳤다(AKG #116 의 `readStarter`). 고친 한 줄과 AKG `checkFiles` 를 BE 표본 43 번(파일마다 · 폴더마다) 견줬다. 모두 같은 줄을 냈다.
+`--starter=` 를 준 검사는 BE `starter-ref` 표본과 [`fdc-md-migrate`](../fdc-md-migrate/SKILL.md) 9절의 예로 check-flow 와 견줬다.
+다른 곳은 하나다: 이 한 줄은 `DATA_ID_CLASH` 를 내지 않는다. 그 겹침은 AKG 저장이 409 로 잡는다.
 
 ```bash
 node --input-type=module -e '
-const [, akg, ...paths] = process.argv;
+const [, akg, ...args] = process.argv;
 const { readFileSync } = await import("node:fs");
-const { checkFiles } = await import(akg + "/src/flow/agent-md.mjs");
-const r = checkFiles(paths.map((path) => ({ path, text: readFileSync(path, "utf8") })));
-console.log(r.lines.join("\n"));
-process.exit(r.ok ? 0 : 1);' "$AKG_DIR" 에이전트.md [같이 쓰는 md …]
+const m = await import(akg + "/src/flow/agent-md.mjs");
+const files = [], specs = [], owner = new Map();
+const bad = (f) => f.lines.some((l) => !l.includes(" 경고 "));
+for (const a of args) {
+  const starter = a.startsWith("--starter="), path = starter ? a.slice(10) : a;
+  const name = path.split("/").pop().replace(/\.md$/, "");
+  const r = (starter ? m.readStarter : m.readAgentMd)(name, readFileSync(path, "utf8"));
+  const f = { name, path, at: Math.max(r.fence?.line ?? 0, 1), lines: [] };
+  for (const e of r.flowErrors ?? []) f.lines.push(`${path}:${m.mdLine(e, r.fence?.line ?? 0)} ${e.code} ${e.message}`);
+  if (!f.lines.length) for (const e of r.chartErrors ?? []) f.lines.push(`${path}:${e.line} ${e.code} ${e.message}`);
+  if (!f.lines.length && r.rejection) f.lines.push(`${path}:1 MD ${r.rejection}`);
+  if (!f.lines.length) specs.push(r);
+  for (const w of r.warnings ?? []) f.lines.push(`${path}:${w.line} 경고 ${w.code} ${w.message}`);
+  files.push(f);
+}
+if (!specs.some((s) => s.name === m.COMMON)) specs.push(m.readAgentMd(m.COMMON, m.COMMON_MD));
+const of = (name) => files.filter((f) => f.name === name);
+for (const [name, errors] of m.flowRejections(specs))
+  for (const f of of(name)) for (const e of errors) f.lines.push(`${f.path}:${m.mdLine(e, f.at)} ${e.code} ${e.message}`);
+for (const s of specs)
+  for (const id of s.flow.subgraphIds()) {
+    if (!owner.has(id)) owner.set(id, s.name);
+    else for (const f of of(s.name)) f.lines.push(`${f.path}:${f.at} 경고 SUBGRAPH_ID_CLASH subgraph ${id} 가 md ${owner.get(id)} 에도 있다 — ${owner.get(id)} 의 것을 쓴다`);
+  }
+for (const f of files) console.log([...f.lines, ...(bad(f) ? [] : [`OK ${f.path}`])].join("\n"));
+process.exit(files.some(bad) ? 1 : 0);' "$AKG_DIR" [--starter=starter문서.md …] 에이전트.md [같이 쓰는 md …]
 ```
 
 - AKG 체크아웃은 origin/main 에 맞춘다. 파일이 없으면 `ERR_MODULE_NOT_FOUND` 다(AKG #85 앞의 체크아웃).
   변환 노드 줄이 `EDGE_SYNTAX` · `NODE_SYNTAX` 로 나오면 AKG #88 앞의 체크아웃이다. origin/main 으로 올린다.
+- `--starter=` 는 AKG #116 뒤의 체크아웃이 읽는다.
 - 끝 코드는 0(오류 없음) · 1(오류 있음)이다.
 
 ### AKG 그림: check.mjs
@@ -825,6 +996,46 @@ AKG 는 활성 문서를 저장할 때 BE 와 같은 검사를 돈다. 저장 �
   편집기는 오류마다 `N 줄 코드 글` 한 줄을 보인다. N 은 md 줄이다. 줄이 0 인 뜻 검사 오류는 `코드 글` 만 보인다.
   예: `18 줄 MAP_SOURCE 식의 이름 chamber_id 이 변환 노드 m 로 흘러들지 않는다`.
 - 거부 응답이 오면 12절 표로 고치고 다시 올린다.
+- AKG #116 뒤에는 starter 문서의 저장도 이 검사를 돈다. starter 항목을 지우거나 id 를 바꾸면 그 항목을 참조하던 md 가 `flowWarnings` 로 온다.
+  자기 흐름의 오류만 400 `flow_rejected` 다.
+
+### flowWarnings 읽기
+
+`akg push` 는 저장 응답의 `flowWarnings` 를 찍지 않는다(2026-11-12 AKG #116 체크아웃). 두 길로 읽는다.
+
+API 로 올려 응답을 본다:
+
+```bash
+jq -n --arg n "<이름>" --rawfile md <이름>.md '{name: $n, markdown: $md}' > body.json
+curl -sS -X PUT -H "Authorization: Bearer $AKG_TOKEN" -H "Content-Type: application/json" -H "If-Match: <rev>" \
+  --data @body.json "$AKG_SERVER/api/docs/domain-skill/<이름>" | jq -c '{rev, flowWarnings}'
+```
+
+2026-11-12 에 `alarm-check` 에서 항목 `equip_info` 를 지워 올린 응답이다. 다른 md `recipe-check` 가 그 id 를 흐름에 적고 있었다:
+
+```json
+{"rev":"fd58233…","flowWarnings":[{"md":"recipe-check","errors":[{"line":0,"code":"UNKNOWN_ID","message":"노드 equip_info: 이 md 의 SQL 항목도, 등재된 조회도 아니다"},{"line":0,"code":"UNSOURCED_VAR","message":"recipe_list 의 :line_id 를 채울 입력이 없다"}]}]}
+```
+
+- 저장은 끝났다. `md` 는 BE 가 다음 적재에서 뺄 md 다. `errors` 는 그 md 의 흐름 오류다. 꼴은 `flow_rejected` 의 `errors` 와 같다.
+- 그 md 를 바로 고쳐 올린다. 또는 지운 항목을 되살린다.
+
+올린 뒤 등재 검사를 돌린다. AKG 의 활성 md · starter 문서 전부(`GET /api/flow-facts`)를 BE 적재처럼 검사한다:
+
+```bash
+curl -sS -H "Authorization: Bearer $AKG_TOKEN" "$AKG_SERVER/api/flow-facts" | node --input-type=module -e '
+const m = await import(process.argv[1] + "/src/flow/agent-md.mjs");
+let raw = ""; for await (const c of process.stdin) raw += c;
+const specs = JSON.parse(raw).mds.map((d) => (d.type === m.STARTER ? m.readStarter : m.readAgentMd)(d.id, d.markdown)).filter((s) => s.rejection === null);
+const out = m.flowRejections(specs);
+for (const [md, errors] of out) for (const e of errors) console.log(`${md} ${e.code} ${e.message}`);
+if (!out.size) console.log(`OK 등재 ${specs.length}`);
+process.exit(out.size ? 1 : 0);' "$AKG_DIR"
+```
+
+- 출력은 깨진 md 마다 `md이름 코드 글` 줄이다. 없으면 `OK 등재 N` 한 줄이다. N 은 읽힌 활성 문서 수다.
+- 2026-11-12 에 위 응답 뒤에 돌렸다: `recipe-check UNKNOWN_ID 노드 equip_info: …` 두 줄이 났다. `recipe-check` 를 고쳐 올리자 `OK 등재 5` 였다.
+- `STARTER` · `readStarter` 는 AKG #116 뒤의 체크아웃에 있다.
 
 ### BE 에 반영
 
@@ -839,6 +1050,7 @@ reload 를 돌리지 않으면 BE 는 주기 재확인(`AKG_REFRESH_SECONDS`, �
 
 옛 꼴은 ASK 항목(```` ```ask ```` 펜스 · 펜스 없는 항목)과 `@묶음` 이다. BE · AKG 는 옛 꼴을 거부한다(12절).
 BE 의 `scripts/convert-ask-to-flow` 가 옛 꼴을 입력 노드 · 간선으로 옮긴다. 파일마다 옆에 `이름.new.md` 를 쓰고 원본은 그대로 둔다.
+starter 항목과 겹치는 조회를 옮기는 일은 [`fdc-md-migrate`](../fdc-md-migrate/SKILL.md) 가 맡는다. 이 절을 먼저 마친 뒤에 그 스킬로 간다.
 
 ### 옛 꼴 ↔ 새 꼴
 
@@ -1030,7 +1242,8 @@ check-flow 가 내는 코드다. 이름은 BE `FlowError.Code` 그대로다.
 | `INPUT_ID` | 입력 id 가 바인드 이름 꼴이 아니다(`-` 가 들었다) | `_` 로 쓴다: `param_index` |
 | `INPUT_OPTION` | 입력 노드의 선택지가 틀렸다: `선택:` 뒤가 비었다 · 같은 선택지가 둘 · 선택지에 `'` 가 든다 · `선택:` 토막이 둘 | `선택:` 토막 하나에 서로 다른 선택지를 쉼표로 적는다. `'` 는 빼고 쓴다 |
 | `SHAPE_CONFLICT` | 같은 id 를 다른 모양으로 두 번 적었다(노드 줄 · 간선 줄 어디서든) | 모양 하나로 맞춘다 |
-| `UNKNOWN_ID` | 조회 노드가 SQL 항목도 등록된 조회도 아니다. 또는 플로우 노드가 등록된 md 도 subgraph 도 아니다. md 이름을 `[[ ]]` 없이 쓴 경우도 이것이다 | id 를 `### id` 와 맞춘다. md 는 `md이름[[글]]` 로 쓴다. AKG 에서는 그 md 가 켜져 있는지 본다(10절) |
+| `UNKNOWN_ID` | 조회 노드가 SQL 항목도 등록된 조회도 아니다. 또는 플로우 노드가 등록된 md 도 subgraph 도 아니다. md 이름을 `[[ ]]` 없이 쓴 경우도 이것이다. starter 항목을 적었는데 check-flow 에 `--starter=` 를 넘기지 않아도 이것이다(`노드 eqp_info: 이 md 의 SQL 항목도, 등재된 조회도 아니다`) | id 를 `### id` 와 맞춘다. md 는 `md이름[[글]]` 로 쓴다. starter 항목이면 그 starter 문서를 `--starter=` 로 넘긴다(9절). AKG 에서는 그 md · starter 문서가 켜져 있는지 본다(10절) |
+| `DATA_ID_CLASH` | check-flow 에 넘긴 md · starter 문서 사이에 같은 데이터 항목 id 가 있다. 뒤 파일의 그 `###` 줄이다 | 한쪽 id 를 바꾼다. starter 항목과 같은 조회면 자기 항목을 지우고 그 id 를 흐름에 적는다(7.2절) |
 | `INPUT_IS_QUERY` | 입력 id 가 SQL 항목 id 와 같다 | 입력 id 를 바인드 이름으로 바꾼다 |
 | `QUERY_IS_MD` | 조회 id 와 md 이름이 같다 | 조회 id 를 `_` 이름으로 바꾼다 |
 | `SELF_FLOW` | 플로우 노드가 자기 md 를 가리킨다. 또는 subgraph 안에서 그 subgraph 를 플로우 노드로 적었다 | 그 노드를 지운다 |
