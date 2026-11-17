@@ -1,0 +1,328 @@
+{
+  "title": "shop-api 아키텍처 지도",
+  "titleMono": "shop-api",
+  "basis": "지어낸 예 · 기준 main <code>0000000</code> · 상자 하나가 모듈 하나 · 화살표 하나가 호출 하나 · 상자를 누르면 아래에 설명이 열립니다",
+  "intro": "호출은 다른 모듈의 공개 함수를 부르는 것만 셉니다.",
+  "key": { "x": 214, "y": 500 },
+  "legend": [
+    { "colors": ["blue"], "text": "주문 API · 주문 모듈 · 로그인" },
+    {
+      "colors": ["green", "orange", "purple"],
+      "text": "상품 · 결제 · 알림 모듈"
+    },
+    { "colors": ["teal", "pink", "slate"], "text": "그 밖의 API 경로" },
+    { "colors": ["amber"], "text": "서버 바깥 시스템" },
+    { "colors": ["plain"], "text": "사람" }
+  ],
+  "badges": [
+    {
+      "to": "auth",
+      "mark": "A",
+      "color": "blue",
+      "text": "이 상자가 Auth 를 부릅니다"
+    }
+  ],
+  "permute": [["x-pg", "x-mail"]],
+  "nodes": [
+    {
+      "id": "user",
+      "label": "손님",
+      "x": 24,
+      "y": 160,
+      "w": 136,
+      "h": 72,
+      "kind": "사람",
+      "one": "브라우저에서 주문하는 사람입니다."
+    },
+
+    {
+      "id": "api",
+      "label": "API",
+      "frame": true,
+      "x": 200,
+      "y": 120,
+      "w": 360,
+      "h": 328,
+      "kind": "틀",
+      "one": "서버가 받는 HTTP 경로입니다."
+    },
+    {
+      "id": "e-orders",
+      "label": "/api/orders",
+      "entry": true,
+      "color": "blue",
+      "x": 216,
+      "y": 168,
+      "w": 328,
+      "h": 48,
+      "kind": "API 경로 · 2 개",
+      "mono": true,
+      "one": "주문을 만들고 읽습니다.",
+      "paths": ["POST /api/orders", "GET /api/orders/{id}"],
+      "ref": "orders/OrderRoutes.kt:14-40",
+      "inner": {
+        "cap": "경로 → 핸들러",
+        "cols": [
+          ["경로", "in", "POST /api/orders", "GET /api/orders/{id}"],
+          ["핸들러", "svc", "@orders OrderRoutes|Orders.place · Orders.find"]
+        ]
+      }
+    },
+    {
+      "id": "e-catalog",
+      "label": "/api/catalog",
+      "entry": true,
+      "color": "teal",
+      "x": 216,
+      "y": 232,
+      "w": 328,
+      "h": 48,
+      "kind": "API 경로 · 1 개",
+      "mono": true,
+      "one": "상품 목록을 줍니다.",
+      "paths": ["GET /api/catalog"],
+      "ref": "catalog/CatalogRoutes.kt:9"
+    },
+    {
+      "id": "e-pay",
+      "label": "/api/pay",
+      "entry": true,
+      "color": "pink",
+      "x": 216,
+      "y": 296,
+      "w": 328,
+      "h": 48,
+      "kind": "API 경로 · 1 개",
+      "mono": true,
+      "one": "결제 대행사의 결과 알림을 받습니다.",
+      "paths": ["POST /api/pay/callback"],
+      "ref": "pay/PayRoutes.kt:11"
+    },
+    {
+      "id": "e-auth",
+      "label": "/auth/login",
+      "entry": true,
+      "color": "slate",
+      "x": 216,
+      "y": 360,
+      "w": 328,
+      "h": 48,
+      "kind": "API 경로 · 1 개",
+      "mono": true,
+      "one": "로그인 토큰을 줍니다.",
+      "paths": ["POST /auth/login"],
+      "ref": "auth/AuthRoutes.kt:8"
+    },
+
+    {
+      "id": "be",
+      "label": "서버",
+      "frame": true,
+      "x": 720,
+      "y": 120,
+      "w": 880,
+      "h": 560,
+      "kind": "틀",
+      "one": "모듈 다섯이 한 프로세스에서 돕니다."
+    },
+    {
+      "id": "orders",
+      "label": "Orders",
+      "color": "blue",
+      "x": 760,
+      "y": 168,
+      "w": 248,
+      "h": 96,
+      "kind": "모듈 · orders · 12 파일",
+      "one": "주문 하나를 만들고 상태를 옮깁니다.",
+      "does": [
+        "재고를 확인하고 결제를 요청합니다.",
+        "결제가 끝나면 주문을 저장하고 알림을 보냅니다."
+      ],
+      "ref": "orders/Orders.kt:22-118",
+      "inner": {
+        "cap": "안쪽 계층 · 함수 → 도구 → 바깥",
+        "cols": [
+          ["함수", "svc", "place|주문 만들기", "find|주문 읽기"],
+          ["도구", "tool", "PriceCalc|값 계산", "OrderRepo|주문 저장"],
+          ["바깥", "out", "@x-db DB"]
+        ]
+      }
+    },
+    {
+      "id": "catalog",
+      "label": "Catalog",
+      "color": "green",
+      "x": 760,
+      "y": 328,
+      "w": 248,
+      "h": 96,
+      "kind": "모듈 · catalog · 7 파일",
+      "one": "상품과 재고를 줍니다.",
+      "does": ["목록은 캐시에서 먼저 읽습니다."],
+      "ref": "catalog/Catalog.kt:15-64"
+    },
+    {
+      "id": "auth",
+      "label": "Auth",
+      "color": "blue",
+      "x": 760,
+      "y": 536,
+      "w": 248,
+      "h": 96,
+      "kind": "모듈 · auth · 5 파일",
+      "one": "로그인하고 토큰을 확인합니다.",
+      "ref": "auth/Auth.kt:10-71"
+    },
+    {
+      "id": "pay",
+      "label": "Pay",
+      "color": "orange",
+      "x": 1184,
+      "y": 168,
+      "w": 248,
+      "h": 96,
+      "kind": "모듈 · pay · 6 파일",
+      "one": "결제 대행사에 결제를 요청합니다.",
+      "ref": "pay/Pay.kt:18-80"
+    },
+    {
+      "id": "notify",
+      "label": "Notify",
+      "color": "purple",
+      "x": 1184,
+      "y": 328,
+      "w": 248,
+      "h": 96,
+      "kind": "모듈 · notify · 3 파일",
+      "one": "주문 · 결제 메일을 보냅니다.",
+      "ref": "notify/Notify.kt:8-40"
+    },
+
+    {
+      "id": "x-pg",
+      "label": "결제 대행",
+      "color": "amber",
+      "x": 1760,
+      "y": 176,
+      "w": 200,
+      "h": 72,
+      "kind": "바깥",
+      "one": "카드 결제를 처리하는 회사의 API 입니다."
+    },
+    {
+      "id": "x-mail",
+      "label": "메일 서버",
+      "color": "amber",
+      "x": 1760,
+      "y": 336,
+      "w": 200,
+      "h": 72,
+      "kind": "바깥",
+      "one": "SMTP 서버입니다."
+    },
+    {
+      "id": "x-db",
+      "label": "DB",
+      "color": "amber",
+      "x": 800,
+      "y": 760,
+      "w": 248,
+      "h": 72,
+      "kind": "바깥",
+      "one": "주문 · 상품 · 사용자 표가 있는 PostgreSQL 입니다."
+    },
+    {
+      "id": "x-cache",
+      "label": "캐시",
+      "color": "amber",
+      "x": 1184,
+      "y": 760,
+      "w": 248,
+      "h": 72,
+      "kind": "바깥",
+      "one": "상품 목록과 로그인 세션을 두는 Redis 입니다."
+    }
+  ],
+  "calls": [
+    ["user", "api"],
+    ["e-orders", "orders"],
+    ["e-orders", "auth"],
+    ["e-catalog", "catalog"],
+    ["e-pay", "pay"],
+    ["e-pay", "auth"],
+    ["e-auth", "auth"],
+    ["orders", "auth"],
+    ["orders", "catalog"],
+    ["orders", "pay"],
+    ["orders", "notify"],
+    ["orders", "x-db"],
+    ["catalog", "x-db"],
+    ["catalog", "x-cache"],
+    ["pay", "x-pg"],
+    ["pay", "notify"],
+    ["notify", "x-mail"],
+    ["auth", "x-db"],
+    ["auth", "x-cache"]
+  ],
+  "flows": {
+    "e-orders": {
+      "name": "POST /api/orders",
+      "cap": "번호 한 줄을 누르면 지도에 그 단계의 줄만 남습니다. 같은 번호는 한 단계에서 같이 일어나는 호출입니다.",
+      "steps": [
+        {
+          "t": "API → Orders",
+          "d": "주문 요청을 받습니다.",
+          "ref": "orders/OrderRoutes.kt:18 → Orders.place",
+          "e": [["e-orders", "orders"]]
+        },
+        {
+          "t": "Orders → Auth",
+          "d": "토큰에서 손님을 읽습니다.",
+          "ref": "orders/Orders.kt:31",
+          "e": [["orders", "auth"]]
+        },
+        {
+          "t": "Orders → Catalog → 캐시 · DB",
+          "d": "재고를 확인합니다.",
+          "ref": "orders/Orders.kt:38 · catalog/Catalog.kt:27-33",
+          "e": [
+            ["orders", "catalog"],
+            ["catalog", "x-cache"],
+            ["catalog", "x-db"]
+          ]
+        },
+        {
+          "t": "Orders → Pay → 결제 대행",
+          "d": "결제를 요청합니다.",
+          "ref": "orders/Orders.kt:52 · pay/Pay.kt:40",
+          "e": [
+            ["orders", "pay"],
+            ["pay", "x-pg"]
+          ]
+        },
+        {
+          "t": "Orders → DB",
+          "d": "주문을 저장합니다.",
+          "ref": "orders/Orders.kt:60",
+          "e": [["orders", "x-db"]]
+        },
+        {
+          "t": "Orders → Notify → 메일 서버",
+          "d": "주문 메일을 보냅니다.",
+          "ref": "orders/Orders.kt:66 · notify/Notify.kt:21",
+          "e": [
+            ["orders", "notify"],
+            ["notify", "x-mail"]
+          ]
+        },
+        {
+          "t": "API → 손님",
+          "d": "주문 번호를 돌려줍니다.",
+          "ref": "orders/OrderRoutes.kt:24",
+          "e": []
+        }
+      ]
+    }
+  }
+}
