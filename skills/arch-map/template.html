@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@TITLE@</title>
+<style>
+/* 레이아웃: 위는 한 줄 라벨만 있는 지도, 아래는 누른 상자의 설명과 그 상자의 안쪽 구조 그림. */
+:root {
+  --bg: #f2f4f6;
+  --paper: #ffffff;
+  --fg: #111821;
+  --fg-2: #46515e;
+  --fg-3: #6a7582;
+  --line: #d3d9e0;
+  --line-2: #aeb8c3;
+  --gate: #3546b0;
+  --gate-soft: #e3e6f8;
+  --graph: #a8441c;
+  --graph-soft: #f7e5dc;
+  --mat: #1d7354;
+  --mat-soft: #dcefe6;
+  --judge: #6a44b4;
+  --judge-soft: #ebe4f7;
+  --ext: #8a5a00;
+  --ext-soft: #f6ecd6;
+  --warn: #b0302a;
+  --warn-soft: #f8e0dd;
+  --f1: #12707c; --f1-soft: #d9eef0; --f2: #a3327a; --f2-soft: #f6e0ee;
+  --f3: #5f7310; --f3-soft: #edf1d4; --f4: #2b6aa8; --f4-soft: #dfeaf6;
+  --f5: #4d5b6b; --f5-soft: #e1e7ee; --f6: #c2476b; --f6-soft: #fae1e8;
+  --font: "IBM Plex Sans KR", "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1217; --paper: #141b22; --fg: #e3e9ef; --fg-2: #a9b4bf; --fg-3: #7f8b97;
+    --line: #26313c; --line-2: #3c4a57;
+    --gate: #93a1f2; --gate-soft: #1c2346; --graph: #ee9a72; --graph-soft: #3a2117;
+    --mat: #6fd0a6; --mat-soft: #12302a; --judge: #bba2f0; --judge-soft: #2a1f42;
+    --ext: #e6b85c; --ext-soft: #33270f; --warn: #f08e86; --warn-soft: #3b1a18;
+  --f1: #6cc9d4; --f1-soft: #10303a; --f2: #ee93c8; --f2-soft: #3a1a2f; --f3: #c3d66a; --f3-soft: #2a3110; --f4: #8fbdf0; --f4-soft: #16293f; --f5: #a9b8c8; --f5-soft: #222c36; --f6: #f29bb4; --f6-soft: #3d1a26;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1217; --paper: #141b22; --fg: #e3e9ef; --fg-2: #a9b4bf; --fg-3: #7f8b97;
+  --line: #26313c; --line-2: #3c4a57;
+  --gate: #93a1f2; --gate-soft: #1c2346; --graph: #ee9a72; --graph-soft: #3a2117;
+  --mat: #6fd0a6; --mat-soft: #12302a; --judge: #bba2f0; --judge-soft: #2a1f42;
+  --ext: #e6b85c; --ext-soft: #33270f; --warn: #f08e86; --warn-soft: #3b1a18;
+  --f1: #6cc9d4; --f1-soft: #10303a; --f2: #ee93c8; --f2-soft: #3a1a2f; --f3: #c3d66a; --f3-soft: #2a3110; --f4: #8fbdf0; --f4-soft: #16293f; --f5: #a9b8c8; --f5-soft: #222c36; --f6: #f29bb4; --f6-soft: #3d1a26;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.6;
+  padding-block: 32px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  -webkit-text-size-adjust: 100%;
+}
+header { display: grid; gap: 6px; margin: 0 0 20px; }
+h1 { font-size: 56px; line-height: 1.08; letter-spacing: -0.03em; font-weight: 700; margin: 0; text-wrap: balance; }
+h1 .m { font-family: var(--mono); font-weight: 600; letter-spacing: -0.04em; }
+.basis { margin: 0; font-size: 13px; color: var(--fg-2); font-variant-numeric: tabular-nums; }
+.basis code { font-family: var(--mono); font-size: 0.92em; }
+.url { margin: 0; font-family: var(--mono); font-size: 13px; color: var(--fg-2); overflow-wrap: anywhere; }
+
+.wrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+.fig { margin: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 16px; min-width: 0; max-width: 100%; overflow-x: auto; }
+.fig svg { display: block; width: 100%; max-width: @MAXW@px; height: auto; margin-inline: auto; }
+
+/* 설명 패널 */
+.panel { background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 24px; min-width: 0; scroll-margin-top: 16px; }
+.panel:focus { outline: none; }
+.p-head { display: flex; gap: 12px; align-items: flex-start; justify-content: space-between; }
+.p-kind { margin: 0 0 4px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--fg-3); }
+.p-title { margin: 0; font-size: 40px; line-height: 1.15; letter-spacing: -0.02em; font-weight: 700; overflow-wrap: anywhere; }
+.p-title.mono { font-family: var(--mono); font-weight: 600; letter-spacing: -0.03em; }
+.p-one { margin: 10px 0 0; font-size: 16px; color: var(--fg); max-width: 70ch; }
+.p-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 0 32px; align-items: start; }
+.p-grid > div { min-width: 0; }
+
+/* 안쪽 구조 그림: 기둥이 왼쪽에서 오른쪽으로 부르는 순서다. 좁으면 위에서 아래로 쌓인다. */
+.arch-cap { margin: 22px 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--fg-3); }
+.arch { display: flex; align-items: stretch; gap: 6px; }
+.a-col { flex: 1 1 0; min-width: 0; border: 1.5px solid var(--line-2); border-radius: 6px; background: var(--bg); padding: 10px; }
+.a-col h4 { margin: 0 0 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--fg-2); }
+.a-col ul, .a-col ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.a-col li { border: 1.5px solid var(--line-2); border-radius: 4px; background: var(--paper); padding: 5px 8px; overflow-wrap: anywhere; line-height: 1.35; }
+.a-col li b { display: block; font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.a-col li span { display: block; font-size: 12px; color: var(--fg-2); }
+.a-col ol { counter-reset: step; }
+.a-col ol li { counter-increment: step; }
+.a-col ol li b::before { content: counter(step) " "; color: var(--fg-3); font-weight: 400; }
+.a-col li.go { cursor: pointer; }
+.a-col li.go:hover, .a-col li.go:focus-visible { border-color: var(--fg); outline: none; }
+.a-col.k-svc { border-color: var(--gate); background: var(--gate-soft); }
+.a-col.k-svc li { border-color: var(--gate); }
+.a-col.k-graph { border-color: var(--graph); background: var(--graph-soft); }
+.a-col.k-graph li { border-color: var(--graph); }
+.a-col.k-tool { border-color: var(--mat); background: var(--mat-soft); }
+.a-col.k-tool li { border-color: var(--mat); }
+.a-col.k-port { border-color: var(--judge); background: var(--judge-soft); }
+.a-col.k-port li { border-color: var(--judge); }
+.a-col.k-out { border-color: var(--ext); background: var(--ext-soft); }
+.a-col.k-out li { border-color: var(--ext); }
+.a-arrow { flex: none; align-self: center; color: var(--fg-3); font-size: 18px; line-height: 1; }
+@media (max-width: 860px) {
+  .arch { flex-direction: column; }
+  .a-arrow { transform: rotate(90deg); }
+}
+.p-close { flex: none; width: 32px; height: 32px; border: 1px solid var(--line-2); border-radius: 6px; background: var(--paper); color: var(--fg-2); font: inherit; font-size: 16px; line-height: 1; cursor: pointer; }
+.p-close:hover { color: var(--fg); border-color: var(--fg-3); }
+.p-sec { margin: 18px 0 0; }
+.p-sec h3 { margin: 0 0 6px; font-size: 11px; font-weight: 600; letter-spacing: 0.06em; color: var(--fg-3); }
+.p-sec ul, .p-sec ol { margin: 0; padding-left: 18px; display: grid; gap: 6px; }
+.p-sec li { overflow-wrap: anywhere; }
+.p-paths { list-style: none; padding: 0 !important; }
+.p-paths li { font-family: var(--mono); font-size: 13px; }
+.panel code { font-family: var(--mono); font-size: 0.92em; overflow-wrap: anywhere; }
+.p-warn { margin: 0; padding: 10px 12px; border: 1px solid var(--warn); border-radius: 6px; background: var(--warn-soft); color: var(--fg); }
+.p-warn b { color: var(--warn); }
+.p-links { display: flex; flex-wrap: wrap; gap: 6px; }
+.p-links button { border: 1px solid var(--line-2); border-radius: 999px; background: var(--paper); color: var(--fg); font: inherit; font-size: 13px; padding: 3px 12px; cursor: pointer; }
+.p-links button:hover { border-color: var(--fg); }
+.p-ref { margin: 0; font-family: var(--mono); font-size: 12px; color: var(--fg-2); overflow-wrap: anywhere; }
+.p-empty h2 { margin: 0; font-size: 22px; line-height: 1.25; letter-spacing: -0.02em; text-wrap: balance; }
+.p-empty p { margin: 8px 0 0; color: var(--fg-2); }
+.legend { list-style: none; margin: 18px 0 0; padding: 0; display: grid; gap: 8px; }
+.legend li { display: flex; gap: 10px; align-items: center; }
+.sw { flex: none; width: 22px; height: 16px; border-radius: 3px; border: 1.5px solid var(--line-2); background: var(--paper); }
+.sw.gate { background: var(--gate-soft); border-color: var(--gate); }
+.sw.graph { background: var(--graph-soft); border-color: var(--graph); }
+.sw.mat { background: var(--mat-soft); border-color: var(--mat); }
+.sw.judge { background: var(--judge-soft); border-color: var(--judge); }
+.sw.ext { background: var(--ext-soft); border-color: var(--ext); }
+.sw.adm { background: var(--warn-soft); border-color: var(--warn); border-width: 2.5px; }
+button:focus-visible { outline: 2px solid var(--gate); outline-offset: 2px; }
+
+@media (max-width: 1500px) {
+  .fig { padding: 12px; }
+  .fig svg { width: 1800px; max-width: none; margin: 0; }
+  .panel { padding: 16px; }
+}
+@media (max-width: 560px) { h1 { font-size: 44px; } }
+
+/* 그림 */
+.s-box { fill: var(--paper); stroke: var(--line-2); stroke-width: 1.5; }
+.s-frame { fill: none; stroke: var(--line-2); stroke-width: 1.5; }
+.s-gate { fill: var(--gate-soft); stroke: var(--gate); stroke-width: 1.5; }
+.s-graph { fill: var(--graph-soft); stroke: var(--graph); stroke-width: 1.5; }
+.s-mat { fill: var(--mat-soft); stroke: var(--mat); stroke-width: 1.5; }
+.s-judge { fill: var(--judge-soft); stroke: var(--judge); stroke-width: 1.5; }
+.s-ext { fill: var(--ext-soft); stroke: var(--ext); stroke-width: 1.5; }
+.s-f1 { fill: var(--f1-soft); stroke: var(--f1); stroke-width: 2; }
+.s-f1b { fill: var(--paper); stroke: var(--f1); stroke-width: 2; }
+.sw.f1 { background: var(--f1-soft); border-color: var(--f1); }
+.s-f2 { fill: var(--f2-soft); stroke: var(--f2); stroke-width: 2; }
+.s-f2b { fill: var(--paper); stroke: var(--f2); stroke-width: 2; }
+.sw.f2 { background: var(--f2-soft); border-color: var(--f2); }
+.s-f3 { fill: var(--f3-soft); stroke: var(--f3); stroke-width: 2; }
+.s-f3b { fill: var(--paper); stroke: var(--f3); stroke-width: 2; }
+.sw.f3 { background: var(--f3-soft); border-color: var(--f3); }
+.s-f4 { fill: var(--f4-soft); stroke: var(--f4); stroke-width: 2; }
+.s-f4b { fill: var(--paper); stroke: var(--f4); stroke-width: 2; }
+.sw.f4 { background: var(--f4-soft); border-color: var(--f4); }
+.s-f5 { fill: var(--f5-soft); stroke: var(--f5); stroke-width: 2; }
+.s-f6 { fill: var(--f6-soft); stroke: var(--f6); stroke-width: 2; }
+.sw.f5 { background: var(--f5-soft); border-color: var(--f5); }
+.sw.f6 { background: var(--f6-soft); border-color: var(--f6); }
+.s-adm { fill: var(--warn-soft); stroke: var(--warn); stroke-width: 2.5; }
+.hit { fill: transparent; stroke: none; }
+.t { fill: var(--fg); font-family: var(--font); }
+.tn { font-size: 24px; font-weight: 700; }
+.tb { font-size: 30px; }
+.tm { font-family: var(--mono); font-size: 13px; font-weight: 600; }
+.tl { fill: var(--fg-3); font-size: 11px; font-weight: 600; letter-spacing: 0.06em; }
+.lb { fill: var(--fg-2); font-size: 12px; paint-order: stroke; stroke: var(--paper); stroke-width: 5px; stroke-linejoin: round; }
+.e { fill: none; stroke: var(--fg-2); stroke-width: 1.6; stroke-linejoin: round; }
+.eg.api .e { stroke: var(--fg-3); stroke-width: 1.1; }
+.dot { fill: var(--fg-3); }
+.bd { stroke: var(--paper); stroke-width: 1.5; }
+.bd-blue { fill: var(--gate); }
+.bd-orange { fill: var(--graph); }
+.bd-green { fill: var(--mat); }
+.bd-purple { fill: var(--judge); }
+.bd-amber { fill: var(--ext); }
+.bd-red { fill: var(--warn); }
+.bdt { fill: var(--paper); font-family: var(--mono); font-size: 11px; font-weight: 700; text-anchor: middle; }
+.eg.bg { pointer-events: none; }
+.kt { fill: var(--fg-2); font-size: 15px; }
+.kt b { font-weight: 700; }
+svg.has-sel .eg.bg.out .bd, svg.has-sel .eg.bg.in .bd { stroke: var(--fg); stroke-width: 2.5; }
+.bdg { flex: none; width: 18px; height: 18px; border-radius: 50%; color: var(--paper); font-family: var(--mono); font-size: 11px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.bdg.blue { background: var(--gate); }
+.bdg.orange { background: var(--graph); }
+.bdg.green { background: var(--mat); }
+.bdg.purple { background: var(--judge); }
+.bdg.amber { background: var(--ext); }
+.bdg.red { background: var(--warn); }
+.ah { fill: var(--fg-3); }
+.ah-out { fill: var(--graph); }
+.ah-in { fill: var(--gate); }
+.n { cursor: pointer; }
+.n:focus { outline: none; }
+.n:hover .shape, .n:focus-visible .shape { stroke-width: 3; }
+.n:focus-visible .shape { stroke: var(--fg); }
+.n.sel .shape { stroke: var(--fg); stroke-width: 3.5; }
+svg.has-sel .n { opacity: 0.4; }
+svg.has-sel .n.sel, svg.has-sel .n.near, svg.has-sel .n.keep { opacity: 1; }
+svg.has-sel .eg { opacity: 0.12; }
+svg.has-sel .eg.out, svg.has-sel .eg.in { opacity: 1; }
+svg.has-sel .eg.out .e { stroke: var(--graph); stroke-width: 2.5; }
+svg.has-sel .eg.out .dot { fill: var(--graph); }
+svg.has-sel .eg.in .e { stroke: var(--gate); stroke-width: 2.5; }
+svg.has-sel .eg.in .dot { fill: var(--gate); }
+.fnc { fill: var(--fg); stroke: var(--paper); stroke-width: 2; }
+.fnt { fill: var(--paper); font-family: var(--mono); font-size: 14px; font-weight: 700; text-anchor: middle; }
+.fn.off { opacity: 0.16; }
+svg.has-sel .eg.fl { opacity: 1; }
+svg.has-sel .eg.fl .e { stroke: var(--graph); stroke-width: 2.5; }
+svg.has-sel .eg.bg.fl .bd { stroke: var(--fg); stroke-width: 2.5; }
+.flow-cap { margin: 0 0 10px; color: var(--fg-2); }
+.flow + .flow-cap { margin: 12px 0 0; }
+.p-sec ol.flow { list-style: none; padding: 0; gap: 6px; }
+.flow li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 12px; align-items: center; border: 1px solid var(--line-2); border-radius: 6px; background: var(--paper); padding: 8px 12px; }
+.flow li[data-fs] { cursor: pointer; }
+.flow li[data-fs]:hover, .flow li[data-fs]:focus-visible { border-color: var(--fg); outline: none; }
+.flow li.on { border-color: var(--fg); border-width: 2px; padding: 7px 11px; background: var(--bg); }
+.flow .fno { width: 24px; height: 24px; border-radius: 50%; background: var(--fg); color: var(--paper); font-family: var(--mono); font-size: 12px; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; }
+.flow .ft { font-weight: 700; }
+.flow .fd, .flow .fr { grid-column: 2; }
+.flow .fd { color: var(--fg-2); }
+.flow .fr { font-family: var(--mono); font-size: 12px; color: var(--fg-3); }
+.key-out { color: var(--graph); font-weight: 700; }
+.key-in { color: var(--gate); font-weight: 700; }
+@media (prefers-reduced-motion: no-preference) {
+  .n, .eg { transition: opacity 0.15s; }
+}
+</style>
+
+<header>
+  <h1>@H1@</h1>
+  <p class="basis">@BASIS@</p>
+</header>
+
+<div class="wrap">
+  <figure class="fig">
+    <svg id="map" viewBox="0 0 @W@ @H@" role="group" aria-label="@ARIA@"></svg>
+  </figure>
+  <aside class="panel" id="panel" tabindex="-1" aria-live="polite"></aside>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // 아래 자료는 gen.mjs 가 스펙에서 써 넣는다. 손으로 고친 것은 다음 실행에 덮인다.
+  var NODES = [
+  ];
+  var EDGES = [
+  ];
+  var D = {
+  };
+  var A = {
+  };
+  var AC = {
+  };
+  var FLOWS = {
+  };
+  var BADGES = [
+  ];
+  var LEGEND = [
+  ];
+  var META = {
+  };
+  var fstep = null;
+
+  var svg = document.getElementById('map');
+  var panel = document.getElementById('panel');
+  var byId = {};
+  NODES.forEach(function (n) { byId[n.id] = n; });
+  var current = null;
+  var BC = {};
+  BADGES.forEach(function (b) { BC[b.mark] = b.color; });
+
+  function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;'); }
+
+  function nodeSvg(n) {
+    var d = D[n.id];
+    var aria = esc(d.title + '. ' + d.one);
+    var open = '<g class="n" data-id="' + n.id + '" tabindex="0" role="button" aria-label="' + aria + '">';
+    if (n.frame) {
+      return open +
+        '<rect class="shape ' + n.cls + '" x="' + n.x + '" y="' + n.y + '" width="' + n.w + '" height="' + n.h + '" rx="8" pointer-events="none"/>' +
+        '<rect class="hit" x="' + n.x + '" y="' + n.y + '" width="' + n.w + '" height="40"/>' +
+        '<text class="t tn" x="' + (n.x + 16) + '" y="' + (n.y + 30) + '">' + esc(n.label) + '</text></g>';
+    }
+    var cx = n.x + n.w / 2, cy = n.y + n.h / 2;
+    return open +
+      '<rect class="shape ' + n.cls + '" x="' + n.x + '" y="' + n.y + '" width="' + n.w + '" height="' + n.h + '" rx="' + (n.small ? 4 : 6) + '"/>' +
+      '<text class="t ' + (n.small ? 'tm' : n.big ? 'tn tb' : 'tn') + '" x="' + cx + '" y="' + (cy + (n.big ? 11 : 8)) + '" text-anchor="middle">' + esc(n.label) + '</text>' +
+      (n.mark ? '<g pointer-events="none">' + badgeSvg(n.x + 22, n.y + 22, n.mark, 12) + '</g>' : '') + '</g>';
+  }
+
+  function badgeSvg(x, y, t, r) {
+    return '<circle class="bd bd-' + (BC[t] || 'blue') + '" cx="' + x + '" cy="' + y + '" r="' + r + '"/><text class="bdt" x="' + x + '" y="' + (y + 4) + '">' + t + '</text>';
+  }
+
+  function numSvg(x, y, n) {
+    return '<circle class="fnc" cx="' + x + '" cy="' + y + '" r="12"/><text class="fnt" x="' + x + '" y="' + (y + 5) + '">' + n + '</text>';
+  }
+
+  function edgeSvg(e, i) {
+    if (e.badge) return '<g class="eg bg" data-a="' + e.a + '" data-b="' + e.b + '" data-i="' + i + '">' + badgeSvg(e.x, e.y, e.badge, 9) + '</g>';
+    var s = '<g class="eg' + (e.api ? ' api' : '') + '" data-a="' + e.a + '" data-b="' + e.b + '" data-i="' + i + '">' +
+      '<path class="e" d="' + e.d + '" marker-end="url(#ar)"/>';
+    if (e.dot) s += '<circle class="dot" cx="' + e.dot[0] + '" cy="' + e.dot[1] + '" r="3.5"/>';
+    return s + '</g>';
+  }
+
+  function draw() {
+    var out = '<defs>' +
+      '<marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah"/></marker>' +
+      '<marker id="aro" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-out"/></marker>' +
+      '<marker id="ari" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="ah-in"/></marker>' +
+      '</defs>';
+    NODES.filter(function (n) { return n.frame; }).forEach(function (n) { out += nodeSvg(n); });
+    EDGES.forEach(function (e, i) { if (!e.badge) out += edgeSvg(e, i); });
+    NODES.filter(function (n) { return !n.frame; }).forEach(function (n) { out += nodeSvg(n); });
+    EDGES.forEach(function (e, i) { if (e.badge) out += edgeSvg(e, i); });
+    if (META.key) {
+      var kx = META.key.x, ky = META.key.y, row = 0;
+      out += '<g class="key" pointer-events="none">';
+      BADGES.forEach(function (b) {
+        out += badgeSvg(kx, ky + row * 34, b.mark, 11) + '<text class="kt" x="' + (kx + 22) + '" y="' + (ky + row * 34 + 5) + '">' + esc(b.text) + '</text>';
+        row++;
+      });
+      var by = ky + row * 34;
+      out += '<path class="e" d="M' + (kx - 11) + ',' + by + ' L' + (kx - 5) + ',' + by + ' A5,5 0 0 1 ' + (kx + 5) + ',' + by + ' L' + (kx + 11) + ',' + by + ' M' + kx + ',' + (by - 11) + ' L' + kx + ',' + (by + 11) + '"/>' +
+        '<text class="kt" x="' + (kx + 22) + '" y="' + (by + 5) + '">서로 다른 줄이 넘는 자리</text>';
+      row++;
+      if (flowLabels()) out += numSvg(kx, ky + row * 34, 1) + '<text class="kt" x="' + (kx + 22) + '" y="' + (ky + row * 34 + 5) + '">' + esc(flowLabels()) + ' 을 누르면 붙는 호출 순서</text>';
+      out += '</g>';
+    }
+    out += '<g id="fl-layer" pointer-events="none"></g>';
+    svg.innerHTML = out;
+  }
+
+  function flowLabels() {
+    return Object.keys(FLOWS).map(function (k) { return byId[k].label; }).join(' · ');
+  }
+
+  function callees(id) {
+    return EDGES.filter(function (e) { return e.a === id; }).map(function (e) { return e.b; });
+  }
+  function callersOf(id) {
+    return EDGES.filter(function (e) { return e.b === id; }).map(function (e) { return e.a; });
+  }
+  function neighbors(id) {
+    return callees(id).concat(callersOf(id));
+  }
+
+  // 틀을 고르면 그 안의 상자도 또렷하게 둔다.
+  function inside(frameId, n) {
+    var f = byId[frameId];
+    return f.frame && n.id !== frameId && n.x >= f.x && n.y >= f.y && n.x + n.w <= f.x + f.w && n.y + n.h <= f.y + f.h;
+  }
+
+  function list(tag, items, cls) {
+    return '<' + tag + (cls ? ' class="' + cls + '"' : '') + '>' + items.map(function (t) { return '<li>' + t + '</li>'; }).join('') + '</' + tag + '>';
+  }
+
+  function archHtml(id) {
+    var cols = A[id];
+    if (!cols) return '';
+    var chain = AC[id] || '안쪽 구조';
+    var h = '<p class="arch-cap">' + chain + '</p><div class="arch">';
+    cols.forEach(function (c, i) {
+      var kinds = c[1].split(' ');
+      var tag = kinds.indexOf('ol') >= 0 ? 'ol' : 'ul';
+      if (i) h += '<div class="a-arrow" aria-hidden="true">→</div>';
+      h += '<section class="a-col k-' + kinds[0] + '"><h4>' + esc(c[0]) + '</h4><' + tag + '>';
+      c.slice(2).forEach(function (it) {
+        var go = null, m = /^@(\S+) (.*)$/.exec(it);
+        if (m) { go = m[1]; it = m[2]; }
+        var parts = it.split('|');
+        h += '<li' + (go ? ' class="go" data-go="' + go + '" tabindex="0" role="button"' : '') + '><b>' + esc(parts[0]) + '</b>' +
+          (parts[1] ? '<span>' + esc(parts[1]) + '</span>' : '') + '</li>';
+      });
+      h += '</' + tag + '></section>';
+    });
+    return h + '</div>';
+  }
+
+  function flowHtml(f) {
+    var h = '<div class="p-sec"><h3>플로우 순서 · ' + esc(f.name) + '</h3><p class="flow-cap">' + f.cap + '</p><ol class="flow">';
+    f.steps.forEach(function (s, i) {
+      var pick = s.e.length ? ' data-fs="' + (i + 1) + '" tabindex="0" role="button" aria-pressed="false"' : '';
+      h += '<li' + pick + '><span class="fno">' + (i + 1) + '</span><span class="ft">' + esc(s.t) + '</span>' +
+        '<span class="fd">' + s.d + '</span><span class="fr">' + esc(s.ref) + '</span></li>';
+    });
+    return h + '</ol>' + (f.more ? '<p class="flow-cap">' + f.more + '</p>' : '') + '</div>';
+  }
+
+  // 줄의 꼭짓점. 다리(A)는 끝점만 읽고, 한 줄로 이어진 점은 걷어 낸다.
+  function linePts(d) {
+    var raw = [], re = /([ML])\s*(-?[\d.]+),(-?[\d.]+)|A[^ML]*?(-?[\d.]+),(-?[\d.]+)\s*(?=[ML]|$)/g, t;
+    while ((t = re.exec(d))) raw.push(t[1] ? [+t[2], +t[3]] : [+t[4], +t[5]]);
+    return raw.filter(function (p, i) {
+      if (i === 0 || i === raw.length - 1) return true;
+      var a = raw[i - 1], c = raw[i + 1];
+      return !((a[0] === p[0] && p[0] === c[0]) || (a[1] === p[1] && p[1] === c[1]));
+    });
+  }
+
+  // 번호 하나의 자리. 표시(A · L)로 그린 호출은 표시 바로 아래, 줄은 가장 긴 토막의 가운데부터 찾는다.
+  // 이미 놓은 번호와 30px 넘게 떨어진 첫 자리를 고른다.
+  function numSpot(a, b, placed) {
+    var e = null;
+    EDGES.forEach(function (x) { if (x.a === a && x.b === b) e = x; });
+    if (!e) return null;
+    if (e.badge) return [e.x, e.y + 24];
+    var clear = function (p) { return placed.every(function (q) { return Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]) >= 30; }); };
+    var pts = linePts(e.d), cand = [];
+    for (var i = 0; i + 1 < pts.length; i++) {
+      var p = pts[i], q = pts[i + 1], len = Math.abs(q[0] - p[0]) + Math.abs(q[1] - p[1]);
+      if (len < 56) continue;
+      var ux = (q[0] - p[0]) / len, uy = (q[1] - p[1]) / len;
+      for (var s = 24; s <= len - 24; s += 8) cand.push({ p: [p[0] + ux * s, p[1] + uy * s], len: len, off: s < len / 2 ? len / 2 - s + 16 : s - len / 2, s: s });
+    }
+    cand.sort(function (m, n) { return n.len - m.len || m.off - n.off || n.s - m.s; });   // 같은 줄의 다음 번호는 화살표 쪽에 둔다
+    for (var c = 0; c < cand.length; c++) if (clear(cand[c].p)) return cand[c].p;
+    var m0 = pts[0], m1 = pts[1];
+    return [(m0[0] + m1[0]) / 2, (m0[1] + m1[1]) / 2];
+  }
+
+  // 플로우의 줄과 번호를 칠한다. fstep 이 있으면 그 단계만 남긴다.
+  function paintFlow() {
+    var f = current ? FLOWS[current] : null, on = {}, layer = document.getElementById('fl-layer'), nums = '';
+    var placed = [];
+    if (f) f.steps.forEach(function (s, i) {
+      var live = fstep === null || fstep === i + 1;
+      s.e.forEach(function (e) {
+        if (live) on[e[0] + '>' + e[1]] = 1;
+        var p = numSpot(e[0], e[1], placed);
+        if (!p) return;
+        placed.push(p);
+        nums += '<g class="fn' + (live ? '' : ' off') + '">' + numSvg(p[0], p[1], i + 1) + '</g>';
+      });
+    });
+    layer.innerHTML = nums;
+    Array.prototype.forEach.call(svg.querySelectorAll('.eg'), function (g) {
+      var a = g.getAttribute('data-a'), b = g.getAttribute('data-b');
+      var fl = !!on[a + '>' + b], out = a === current, inn = b === current;
+      g.classList.toggle('fl', fl);
+      var line = g.querySelector('.e');
+      if (line) line.setAttribute('marker-end', out || fl ? 'url(#aro)' : (inn ? 'url(#ari)' : 'url(#ar)'));
+    });
+    Array.prototype.forEach.call(panel.querySelectorAll('[data-fs]'), function (li) {
+      var sel = String(fstep) === li.getAttribute('data-fs');
+      li.classList.toggle('on', sel);
+      li.setAttribute('aria-pressed', sel ? 'true' : 'false');
+    });
+  }
+
+  function pickStep(n) {
+    fstep = fstep === n ? null : n;
+    paintFlow();
+  }
+
+  function emptyPanel() {
+    panel.className = 'panel';
+    var marks = BADGES.map(function (b) { return b.mark; }).join(' · ');
+    var h = '<div class="p-empty"><h2>상자를 누르면 설명이 여기 열립니다</h2>' +
+      '<p>지도는 호출 ' + META.calls + ' 개를 모두 그립니다. 화살표는 부르는 쪽에서 나와 불리는 쪽으로 들어갑니다. ' +
+      '호출마다 줄이 하나이고, 줄은 처음부터 끝까지 제 길로 갑니다. 가로 줄이 다른 줄을 넘는 자리는 다리 모양입니다.' +
+      (BADGES.length ? ' 여러 상자가 부르는 곳으로 가는 호출은 줄 대신 부르는 상자의 동그란 표시 ' + esc(marks) + ' 로 그립니다.' : '') +
+      (flowLabels() ? ' ' + esc(flowLabels()) + ' 상자를 누르면 줄에 호출 순서가 번호로 붙습니다.' : '') +
+      ' 상자를 누르면 나가는 줄은 주황, 들어오는 줄은 파랑으로 켜집니다.</p>' +
+      (META.intro ? '<p>' + META.intro + '</p>' : '') + '<ul class="legend">';
+    LEGEND.forEach(function (l) {
+      h += '<li>' + l.sw.map(function (c) { return '<span class="sw' + (c ? ' ' + c : '') + '"></span>'; }).join('') + esc(l.text) + '</li>';
+    });
+    BADGES.forEach(function (b) { h += '<li><span class="bdg ' + b.color + '">' + esc(b.mark) + '</span>' + esc(b.text) + '</li>'; });
+    panel.innerHTML = h + '</ul></div>';
+  }
+
+  function select(id, moveFocus) {
+    if (id !== current) fstep = null;
+    current = id;
+    var flow = id ? FLOWS[id] : null;
+    var groups = svg.querySelectorAll('.n');
+    var near = id ? neighbors(id) : [];
+    if (flow) flow.steps.forEach(function (s) { s.e.forEach(function (e) { near.push(e[0], e[1]); }); });
+    svg.classList.toggle('has-sel', !!id);
+    Array.prototype.forEach.call(groups, function (g) {
+      var gid = g.getAttribute('data-id');
+      g.classList.toggle('sel', gid === id);
+      g.classList.toggle('near', near.indexOf(gid) >= 0);
+      g.classList.toggle('keep', !!id && (inside(id, byId[gid]) || (byId[gid].frame && inside(gid, byId[id]))));
+      g.setAttribute('aria-pressed', gid === id ? 'true' : 'false');
+    });
+    Array.prototype.forEach.call(svg.querySelectorAll('.eg'), function (g) {
+      var out = !!id && g.getAttribute('data-a') === id;
+      var inn = !!id && g.getAttribute('data-b') === id;
+      g.classList.toggle('out', out);
+      g.classList.toggle('in', inn);
+      var line = g.querySelector('.e');
+      if (line) line.setAttribute('marker-end', out ? 'url(#aro)' : (inn ? 'url(#ari)' : 'url(#ar)'));
+    });
+    if (!id) { emptyPanel(); paintFlow(); return; }
+
+    var d = D[id];
+    var h = '<div class="p-head"><div><p class="p-kind">' + esc(d.kind) + '</p>' +
+      '<h2 class="p-title' + (d.mono ? ' mono' : '') + '">' + esc(d.title) + '</h2></div>' +
+      '<button type="button" class="p-close" id="p-close" aria-label="설명 닫기">×</button></div>' +
+      '<p class="p-one">' + d.one + '</p>';
+    h += archHtml(id);
+    if (flow) h += flowHtml(flow);
+    var left = '', right = '';
+    if (d.steps && !A[id]) left += '<div class="p-sec"><h3>순서</h3>' + list('ol', d.steps) + '</div>';
+    if (d.does) left += '<div class="p-sec"><h3>하는 일</h3>' + list('ul', d.does) + '</div>';
+    if (d.paths && !A[id]) right += '<div class="p-sec"><h3>경로</h3>' + list('ul', d.paths.map(esc), 'p-paths') + '</div>';
+    if (d.warn) right += '<div class="p-sec"><p class="p-warn">' + d.warn + '</p></div>';
+    if (d.ref) right += '<div class="p-sec"><h3>근거</h3><p class="p-ref">' + esc(d.ref) + '</p></div>';
+    h += '<div class="p-grid"><div>' + left + '</div><div>' + right + '</div></div>';
+    panel.className = 'panel open';
+    panel.innerHTML = h;
+    paintFlow();
+    if (moveFocus) panel.focus({ preventScroll: true });
+    // 패널 머리가 화면 아래에 있으면 지도 아랫부분과 함께 보이도록 내린다.
+    var y = panel.getBoundingClientRect().top;
+    if (y > window.innerHeight * 0.55 || y < 0) {
+      var calm = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      window.scrollBy({ top: y - window.innerHeight * 0.3, behavior: calm ? 'auto' : 'smooth' });
+    }
+  }
+
+  draw();
+  emptyPanel();
+
+  svg.addEventListener('click', function (ev) {
+    var g = ev.target.closest ? ev.target.closest('.n') : null;
+    if (!g) { select(null); return; }
+    var id = g.getAttribute('data-id');
+    select(id === current ? null : id);
+  });
+  svg.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    var g = ev.target.closest ? ev.target.closest('.n') : null;
+    if (!g) return;
+    ev.preventDefault();
+    select(g.getAttribute('data-id'), true);
+  });
+  panel.addEventListener('click', function (ev) {
+    var t = ev.target;
+    if (t.id === 'p-close') { closeAndReturn(); return; }
+    var fs = t.closest ? t.closest('[data-fs]') : null;
+    if (fs) { pickStep(Number(fs.getAttribute('data-fs'))); return; }
+    var el = t.closest ? t.closest('[data-go]') : null;
+    if (el) select(el.getAttribute('data-go'), true);
+  });
+  panel.addEventListener('keydown', function (ev) {
+    if (ev.key !== 'Enter' && ev.key !== ' ') return;
+    var fs = ev.target.closest ? ev.target.closest('[data-fs]') : null;
+    if (fs) { ev.preventDefault(); pickStep(Number(fs.getAttribute('data-fs'))); return; }
+    var el = ev.target.closest ? ev.target.closest('li[data-go]') : null;
+    if (!el) return;
+    ev.preventDefault();
+    select(el.getAttribute('data-go'), true);
+  });
+  document.addEventListener('keydown', function (ev) {
+    if (ev.key === 'Escape' && current) closeAndReturn();
+  });
+
+  function closeAndReturn() {
+    var was = current;
+    select(null);
+    var g = svg.querySelector('.n[data-id="' + was + '"]');
+    if (g && g.focus) g.focus({ preventScroll: true });
+  }
+})();
+</script>
+</html>
