@@ -8,7 +8,7 @@
     {
       "name": "claude-hooks",
       "description": "Bundle of personal Claude Code hooks and skills.",
-      "version": "0.61.0",
+      "version": "0.62.0",
       "source": "./"
     }
   ]
